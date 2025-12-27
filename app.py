@@ -443,21 +443,13 @@ if current_page == "アーティスト管理":
     finally:
         db.close()
 
-# ... (以降のタイムテーブル作成、アー写グリッド作成のロジックは変更なしでOKですが、
-# 念のためデータベースから画像パスを取得する箇所があれば get_image_url を使う必要があります。
-# 現状のコードを見る限り、他の画面では画像を表示するロジックは logic_grid.py 内で行われている可能性があります)
-# logic_grid.py 側でも database.get_image_url を使うように修正が必要かもしれませんが、
-# まずは app.py だけで動かしてみましょう。
-
 # ==========================================
 # 2. タイムテーブル作成画面 (変更なし)
 # ==========================================
 elif current_page == "タイムテーブル作成":
-    # (元のコードと同じ内容)
     st.title("⏱️ タイムテーブル作成")
     db = get_db()
     
-    # ... (中略: import_csv_callback など) ...
     def import_csv_callback():
         uploaded_csv = st.session_state.get("csv_upload_key")
         if not uploaded_csv:
