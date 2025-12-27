@@ -6,7 +6,7 @@ import io
 import time
 from datetime import datetime, timedelta, date
 
-# ★変更点1: database.pyから新しい関数をインポート
+# ★変更点: database.pyから新しい関数をインポート
 from database import (
     init_db, get_db, Artist, TimetableProject, FavoriteFont, 
     IMAGE_DIR, upload_image_to_supabase, get_image_url
@@ -369,15 +369,12 @@ if current_page == "アーティスト管理":
                         st.error("名前を入力してください")
                     else:
                         filename = None
-                        # ★変更点2: 画像アップロードをSupabase用に変更
+                        # 画像アップロードをSupabase用に変更
                         if uploaded_file:
                             safe_name = input_name.replace("/", "_").replace(" ", "_")
-                            # 拡張子を取得
                             ext = os.path.splitext(uploaded_file.name)[1]
-                            # ファイル名にタイムスタンプをつけて重複回避
                             filename = f"{safe_name}_{int(time.time())}{ext}"
                             
-                            # Supabaseにアップロード
                             res = upload_image_to_supabase(uploaded_file, filename)
                             if not res:
                                 st.error("画像のアップロードに失敗しました")
@@ -410,7 +407,7 @@ if current_page == "アーティスト管理":
             cols = st.columns(3)
             for idx, artist in enumerate(active_artists):
                 with cols[idx % 3]:
-                    # ★変更点3: 画像表示をSupabaseのURL取得に変更
+                    # 画像表示をSupabaseのURL取得に変更
                     if artist.image_filename:
                         image_url = get_image_url(artist.image_filename)
                         if image_url:
@@ -1334,10 +1331,8 @@ elif current_page == "アー写グリッド作成":
                 st.write("")
                 st.write("")
                 if st.button("🚀 グリッド画像を生成", type="primary"):
-                    # ロジック関数と順序データが存在するかチェック
                     if generate_grid_image and st.session_state.grid_order:
                         ordered_artists = []
-                        # 削除されていないアーティストデータを収集
                         for name in st.session_state.grid_order:
                             a_obj = db.query(Artist).filter(Artist.name == name, Artist.is_deleted == False).first()
                             if a_obj:
@@ -1346,7 +1341,6 @@ elif current_page == "アー写グリッド作成":
                         with st.spinner("生成中..."):
                             img = None
                             try:
-                                # グリッド画像生成実行
                                 img = generate_grid_image(
                                     ordered_artists, 
                                     IMAGE_DIR, 
@@ -1354,14 +1348,12 @@ elif current_page == "アー写グリッド作成":
                                     cols=st.session_state.grid_cols
                                 )
                             except TypeError:
-                                # 引数エラー時のフォールバック（列数指定なしで再試行）
                                 st.warning("logic_grid.py が列数指定に対応していない可能性があります。デフォルト設定で生成します。")
                                 try:
                                     img = generate_grid_image(ordered_artists, IMAGE_DIR, font_path=font_path)
                                 except Exception as e:
                                     st.error(f"生成エラー: {e}")
 
-                            # 画像が生成できていれば表示・DLボタン設置
                             if img:
                                 st.image(img, caption="プレビュー", use_container_width=True)
                                 buf = io.BytesIO()
