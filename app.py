@@ -349,7 +349,8 @@ else:
 # ==========================================
 if current_page == "アーティスト管理":
     st.title("🎤 アーティスト管理")
-    db = get_db()
+    # ★修正点: next()を使ってジェネレータからセッションを取り出す
+    db = next(get_db())
     
     try:
         with st.expander("➕ アーティストを登録・編集する", expanded=False):
@@ -372,9 +373,12 @@ if current_page == "アーティスト管理":
                         # 画像アップロードをSupabase用に変更
                         if uploaded_file:
                             safe_name = input_name.replace("/", "_").replace(" ", "_")
+                            # 拡張子を取得
                             ext = os.path.splitext(uploaded_file.name)[1]
+                            # ファイル名にタイムスタンプをつけて重複回避
                             filename = f"{safe_name}_{int(time.time())}{ext}"
                             
+                            # Supabaseにアップロード
                             res = upload_image_to_supabase(uploaded_file, filename)
                             if not res:
                                 st.error("画像のアップロードに失敗しました")
@@ -448,7 +452,8 @@ if current_page == "アーティスト管理":
 # ==========================================
 elif current_page == "タイムテーブル作成":
     st.title("⏱️ タイムテーブル作成")
-    db = get_db()
+    # ★修正点: next()を使ってジェネレータからセッションを取り出す
+    db = next(get_db())
     
     def import_csv_callback():
         uploaded_csv = st.session_state.get("csv_upload_key")
@@ -857,7 +862,7 @@ elif current_page == "タイムテーブル作成":
             
             if st.session_state.rebuild_table_flag:
                 rows = []
-                # ... (行データ作成ロジックはそのまま)
+                
                 if st.session_state.tt_has_pre_goods:
                     dur_minutes = get_duration_minutes(st.session_state.tt_open_time, st.session_state.tt_start_time)
                     st.session_state.tt_pre_goods_settings["GOODS_START_MANUAL"] = st.session_state.tt_open_time
@@ -921,7 +926,7 @@ elif current_page == "タイムテーブル作成":
                     if isinstance(st.session_state[current_editor_key], pd.DataFrame):
                         st.session_state.binding_df = st.session_state[current_editor_key]
 
-            # ★ここが変わりました：デフォルトのedited_dfを先に作っておく（エラー回避）
+            # デフォルトのデータフレーム作成（エラー回避用）
             edited_df = pd.DataFrame(columns=column_order)
 
             if not st.session_state.binding_df.empty:
@@ -1039,8 +1044,6 @@ elif current_page == "タイムテーブル作成":
                     st.session_state.request_calc = False
                     st.success("時間を計算して反映しました")
                     st.rerun()
-
-        # ここで else 節を使わないことでエラーを回避します
 
         calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
         
@@ -1166,9 +1169,9 @@ elif current_page == "タイムテーブル作成":
 # 3. アー写グリッド作成画面 (変更なし)
 # ==========================================
 elif current_page == "アー写グリッド作成":
-    # (元のコードと同じ内容)
     st.title("🖼️ アー写グリッド作成")
-    db = get_db()
+    # ★修正点: next()を使ってジェネレータからセッションを取り出す
+    db = next(get_db())
     
     try:
         projects = db.query(TimetableProject).all()
@@ -1333,11 +1336,10 @@ elif current_page == "アー写グリッド作成":
             with col_gen2:
                 st.write("")
                 st.write("")
+                # ボタンが押されたときの処理
                 if st.button("🚀 グリッド画像を生成", type="primary"):
-                    # ロジック関数と順序データが存在するかチェック
                     if generate_grid_image and st.session_state.grid_order:
                         ordered_artists = []
-                        # 削除されていないアーティストデータを収集
                         for name in st.session_state.grid_order:
                             a_obj = db.query(Artist).filter(Artist.name == name, Artist.is_deleted == False).first()
                             if a_obj:
@@ -1346,27 +1348,26 @@ elif current_page == "アー写グリッド作成":
                         with st.spinner("生成中..."):
                             img = None
                             try:
-                                # グリッド画像生成実行
+                                # 生成実行
                                 img = generate_grid_image(
                                     ordered_artists, 
                                     IMAGE_DIR, 
                                     font_path=font_path, 
                                     cols=st.session_state.grid_cols
                                 )
-                            except TypeError:
-                                # 引数エラー時のフォールバック（列数指定なしで再試行）
-                                st.warning("logic_grid.py が列数指定に対応していない可能性があります。デフォルト設定で生成します。")
+                            except Exception:
+                                # エラー時の再トライ（引数なし版）
                                 try:
                                     img = generate_grid_image(ordered_artists, IMAGE_DIR, font_path=font_path)
                                 except Exception as e:
                                     st.error(f"生成エラー: {e}")
 
-                            # 画像が生成できていれば表示・DLボタン設置
+                            # 画像表示とダウンロード
                             if img:
                                 st.image(img, caption="プレビュー", use_container_width=True)
                                 buf = io.BytesIO()
                                 img.save(buf, format="PNG")
-                                st.download_button("⬇️ 高画質画像をダウンロード", buf.getvalue(), "flyer_grid.png", "image/png")
+                                st.download_button("⬇️ 画像DL", buf.getvalue(), "grid.png", "image/png")
                     else:
                         st.error("ロジックファイルが見つからないか、データがありません")
     finally:
