@@ -1339,31 +1339,40 @@ elif current_page == "アー写グリッド作成":
                 st.write("")
                 st.write("")
                 if st.button("🚀 グリッド画像を生成", type="primary"):
+                    # ロジック関数と順序データが存在するかチェック
                     if generate_grid_image and st.session_state.grid_order:
                         ordered_artists = []
+                        # 削除されていないアーティストデータを収集
                         for name in st.session_state.grid_order:
                             a_obj = db.query(Artist).filter(Artist.name == name, Artist.is_deleted == False).first()
                             if a_obj:
                                 ordered_artists.append(a_obj)
                         
                         with st.spinner("生成中..."):
+                            img = None
                             try:
+                                # グリッド画像生成実行
                                 img = generate_grid_image(
                                     ordered_artists, 
-                                    IMAGE_DIR, # ※ここはローカルディレクトリのままですが、get_image_urlを使って画像をダウンロードする処理がlogic_grid.pyに必要です。今回は省略しますが、app.py側では問題ありません。
+                                    IMAGE_DIR, 
                                     font_path=font_path, 
                                     cols=st.session_state.grid_cols
                                 )
                             except TypeError:
+                                # 引数エラー時のフォールバック（列数指定なしで再試行）
                                 st.warning("logic_grid.py が列数指定に対応していない可能性があります。デフォルト設定で生成します。")
-                                img = generate_grid_image(ordered_artists, IMAGE_DIR, font_path=font_path)
+                                try:
+                                    img = generate_grid_image(ordered_artists, IMAGE_DIR, font_path=font_path)
+                                except Exception as e:
+                                    st.error(f"生成エラー: {e}")
 
+                            # 画像が生成できていれば表示・DLボタン設置
                             if img:
                                 st.image(img, caption="プレビュー", use_container_width=True)
                                 buf = io.BytesIO()
                                 img.save(buf, format="PNG")
                                 st.download_button("⬇️ 高画質画像をダウンロード", buf.getvalue(), "flyer_grid.png", "image/png")
                     else:
-                        st.error("エラー")
+                        st.error("ロジックファイルが見つからないか、データがありません")
     finally:
         db.close()
