@@ -1330,6 +1330,7 @@ elif current_page == "アー写グリッド作成":
             with col_gen2:
                 st.write("")
                 st.write("")
+                # ボタンが押されたときの処理
                 if st.button("🚀 グリッド画像を生成", type="primary"):
                     if generate_grid_image and st.session_state.grid_order:
                         ordered_artists = []
@@ -1341,25 +1342,25 @@ elif current_page == "アー写グリッド作成":
                         with st.spinner("生成中..."):
                             img = None
                             try:
+                                # 生成実行
                                 img = generate_grid_image(
                                     ordered_artists, 
                                     IMAGE_DIR, 
                                     font_path=font_path, 
                                     cols=st.session_state.grid_cols
                                 )
-                            except TypeError:
-                                st.warning("logic_grid.py が列数指定に対応していない可能性があります。デフォルト設定で生成します。")
+                            except Exception:
+                                # エラー時の再トライ（引数なし版）
                                 try:
                                     img = generate_grid_image(ordered_artists, IMAGE_DIR, font_path=font_path)
                                 except Exception as e:
                                     st.error(f"生成エラー: {e}")
 
+                            # 画像表示とダウンロード
                             if img:
                                 st.image(img, caption="プレビュー", use_container_width=True)
                                 buf = io.BytesIO()
                                 img.save(buf, format="PNG")
-                                st.download_button("⬇️ 高画質画像をダウンロード", buf.getvalue(), "flyer_grid.png", "image/png")
-                    else:
-                        st.error("ロジックファイルが見つからないか、データがありません")
+                                st.download_button("⬇️ 画像DL", buf.getvalue(), "grid.png", "image/png")
     finally:
         db.close()
