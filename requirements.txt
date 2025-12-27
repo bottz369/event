@@ -3,3 +3,4 @@ pandas
 reportlab
 Pillow
 streamlit-sortables
+sqlalchemy
