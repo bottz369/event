@@ -7,7 +7,10 @@ import time
 from datetime import datetime, timedelta, date
 
 # ★変更点1: database.pyから新しい関数をインポート
-from database import init_db, get_db, Artist, TimetableProject, FavoriteFont, IMAGE_DIR, upload_image_to_supabase, get_image_url
+from database import (
+    init_db, get_db, Artist, TimetableProject, FavoriteFont, 
+    IMAGE_DIR, upload_image_to_supabase, get_image_url
+)
 
 # PDF/画像処理ライブラリ
 from reportlab.lib.pagesizes import A4
