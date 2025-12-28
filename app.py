@@ -482,14 +482,17 @@ elif current_page == "タイムテーブル作成":
     st.title("⏱️ タイムテーブル作成")
     db = next(get_db())
     
-    # --- プロジェクト選択 ---
+    # --- プロジェクト選択 (即時反映) ---
     projects = db.query(TimetableProject).all()
+    # 日付が新しい順
     projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
     
     proj_map = {f"{p.event_date} {p.title}": p.id for p in projects}
     options = ["(選択してください)"] + list(proj_map.keys())
     
-    # 現在選択中のプロジェクトを維持するためのインデックス計算
+    if "tt_current_proj_id" not in st.session_state: st.session_state.tt_current_proj_id = None
+    
+    # メニュー遷移しても選択状態を維持するためのインデックス計算
     index = 0
     if st.session_state.tt_current_proj_id:
         current_label = next((k for k, v in proj_map.items() if v == st.session_state.tt_current_proj_id), None)
@@ -501,7 +504,7 @@ elif current_page == "タイムテーブル作成":
     if selected_label != "(選択してください)":
         selected_id = proj_map[selected_label]
         
-        # プロジェクト切り替え時のデータロード処理
+        # IDが変わった場合のみロード（または初回）
         if st.session_state.tt_current_proj_id != selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             if proj:
@@ -512,7 +515,7 @@ elif current_page == "タイムテーブル作成":
                 st.session_state.tt_start_time = proj.start_time or "10:30"
                 st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
                 
-                # タイムテーブルデータの復元
+                # データ展開
                 if proj.data_json:
                     data = json.loads(proj.data_json)
                     new_order = []
@@ -559,7 +562,7 @@ elif current_page == "タイムテーブル作成":
                 st.session_state.tt_current_proj_id = selected_id
                 st.rerun()
 
-    # --- CSVインポート機能 ---
+    # --- CSVインポート ---
     def import_csv_callback():
         uploaded = st.session_state.get("csv_upload_key")
         if not uploaded: return
@@ -573,7 +576,7 @@ elif current_page == "タイムテーブル作成":
             
             df_csv.columns = [c.strip() for c in df_csv.columns]
             
-            # 未登録アーティストの自動登録
+            # 自動登録ロジック
             temp_db = SessionLocal()
             try:
                 artists_to_check = []
@@ -597,7 +600,7 @@ elif current_page == "タイムテーブル作成":
             finally:
                 temp_db.close()
             
-            # データの読み込み
+            # 読み込み処理
             new_order = []
             new_artist_settings = {}
             new_row_settings = []
@@ -649,6 +652,7 @@ elif current_page == "タイムテーブル作成":
             st.session_state.tt_row_settings = new_row_settings
             st.session_state.rebuild_table_flag = True 
             st.session_state.tt_unsaved_changes = True
+            
             st.success("CSVを読み込みました")
         except Exception as e:
             st.error(f"読み込みエラー: {e}")
@@ -662,13 +666,13 @@ elif current_page == "タイムテーブル作成":
     if st.session_state.tt_current_proj_id:
         st.divider()
         
-        # ★修正箇所: プロジェクト情報は表示のみにする
+        # ★修正箇所: プロジェクト情報は表示のみにする（編集機能は削除）
         col_info1, col_info2 = st.columns([3, 1])
         with col_info1:
-            st.markdown(f"### 📅 {st.session_state.tt_event_date} : {st.session_state.tt_title}")
-            st.markdown(f"**📍 会場:** {st.session_state.tt_venue}")
+            st.subheader(f"📅 {st.session_state.tt_event_date} : {st.session_state.tt_title}")
+            st.write(f"**📍 会場:** {st.session_state.tt_venue}")
         with col_info2:
-            st.caption("※イベント情報の編集は「プロジェクト」メニューで行ってください")
+            st.info("ℹ️ 基本情報の修正は\n「プロジェクト」メニューで")
             
         st.divider()
         
@@ -885,7 +889,7 @@ elif current_page == "タイムテーブル作成":
                 proj = db.query(TimetableProject).filter(TimetableProject.id == st.session_state.tt_current_proj_id).first()
                 if proj:
                     save_data = edited_df.to_dict(orient="records")
-                    # 基本情報(Title,Date,Venue)はここでは更新せず、計算結果(Data)と設定(Time,Offset)のみ保存
+                    # 基本情報(Title,Date,Venue)は更新せず、計算結果(Data)と設定(Time,Offset)のみ保存
                     proj.open_time = st.session_state.tt_open_time
                     proj.start_time = st.session_state.tt_start_time
                     proj.goods_start_offset = st.session_state.tt_goods_offset
@@ -942,6 +946,7 @@ elif current_page == "アー写グリッド作成":
         
         col_g1, col_g2 = st.columns([3, 1])
         with col_g1:
+            # プロジェクト選択肢
             p_map = {f"{p.event_date} {p.title}": p.id for p in projects}
             sel_label = st.selectbox("プロジェクト選択", ["(選択)"] + list(p_map.keys()))
         
