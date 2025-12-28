@@ -8,8 +8,9 @@ import uuid
 from datetime import datetime, timedelta, date
 
 # database.pyから関数をインポート
+# ★修正1: SessionLocal を追加（CSVインポート時の自動登録に必要）
 from database import (
-    init_db, get_db, Artist, TimetableProject, FavoriteFont, 
+    init_db, get_db, SessionLocal, Artist, TimetableProject, FavoriteFont, 
     IMAGE_DIR, upload_image_to_supabase, get_image_url
 )
 
@@ -374,7 +375,6 @@ if current_page == "アーティスト管理":
                         if uploaded_file:
                             ext = os.path.splitext(uploaded_file.name)[1]
                             filename = f"{uuid.uuid4()}{ext}"
-                            
                             res = upload_image_to_supabase(uploaded_file, filename)
                             if not res:
                                 st.error("画像のアップロードに失敗しました")
@@ -443,7 +443,7 @@ if current_page == "アーティスト管理":
         db.close()
 
 # ==========================================
-# 2. タイムテーブル作成画面 (変更なし)
+# 2. タイムテーブル作成画面
 # ==========================================
 elif current_page == "タイムテーブル作成":
     st.title("⏱️ タイムテーブル作成")
@@ -469,6 +469,31 @@ elif current_page == "タイムテーブル作成":
             new_artist_settings = {}
             new_row_settings = []
             event_date_found = None
+
+            # --- 自動登録処理 ---
+            temp_db = SessionLocal() # ここでエラーにならないようインポート修正済み
+            try:
+                artists_to_check = []
+                if "グループ名" in df_csv.columns:
+                    artists_to_check = [str(row.get("グループ名", "")).strip() for _, row in df_csv.iterrows()]
+                else:
+                    artist_col = next((c for c in df_csv.columns if c.lower() == "artist"), None)
+                    if not artist_col: artist_col = df_csv.columns[0]
+                    artists_to_check = [str(row[artist_col]).strip() for _, row in df_csv.iterrows()]
+                
+                artists_to_check = list(set([a for a in artists_to_check if a and a != "nan"]))
+
+                for artist_name in artists_to_check:
+                    existing = temp_db.query(Artist).filter(Artist.name == artist_name).first()
+                    if not existing:
+                        new_artist = Artist(name=artist_name, image_filename=None)
+                        temp_db.add(new_artist)
+                temp_db.commit()
+            except Exception as e:
+                print(f"Auto registration error: {e}")
+            finally:
+                temp_db.close()
+            # ---------------------------
 
             if "グループ名" in df_csv.columns:
                 try:
@@ -893,9 +918,9 @@ elif current_page == "タイムテーブル作成":
                         "GOODS_START_MANUAL": safe_str(row_data.get("GOODS_START_MANUAL")),
                         "GOODS_DURATION": safe_int(row_data.get("GOODS_DURATION"), 60),
                         "PLACE": safe_str(row_data.get("PLACE")),
-                        "ADD_GOODS_START": safe_str(row_data.get("ADD_GOODS_START")), # ★修正: row -> row_data
-                        "ADD_GOODS_DURATION": safe_int(row_data.get("ADD_GOODS_DURATION"), None), # ★修正: row -> row_data
-                        "ADD_GOODS_PLACE": safe_str(row_data.get("ADD_GOODS_PLACE")) # ★修正: row -> row_data
+                        "ADD_GOODS_START": safe_str(row_data.get("ADD_GOODS_START")), # ★修正: row.get -> row_data.get
+                        "ADD_GOODS_DURATION": safe_int(row_data.get("ADD_GOODS_DURATION"), None), # ★修正: row.get -> row_data.get
+                        "ADD_GOODS_PLACE": safe_str(row_data.get("ADD_GOODS_PLACE")) # ★修正: row.get -> row_data.get
                     })
                 
                 if has_post_goods_check:
@@ -920,7 +945,7 @@ elif current_page == "タイムテーブル作成":
                     if isinstance(st.session_state[current_editor_key], pd.DataFrame):
                         st.session_state.binding_df = st.session_state[current_editor_key]
 
-            # デフォルトのデータフレーム作成
+            # デフォルトのデータフレーム作成（エラー回避用）
             edited_df = pd.DataFrame(columns=column_order)
 
             if not st.session_state.binding_df.empty:
@@ -1138,6 +1163,13 @@ elif current_page == "タイムテーブル作成":
             st.download_button("📄 PDF(表)DL", pdf_buffer, "timetable_business.pdf", "application/pdf")
 
         with col_act3:
+            # ★フォント選択機能
+            all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith((".ttf", ".otf"))]
+            if not all_fonts: all_fonts = ["keifont.ttf"] 
+            
+            tt_font_label = st.selectbox("画像用フォント", all_fonts, key="tt_font_selector")
+            tt_font_path = os.path.join(FONT_DIR, tt_font_label)
+
             if st.button("🚀 画像生成", type="primary"):
                 if generate_timetable_image:
                     gen_list = []
@@ -1147,7 +1179,8 @@ elif current_page == "タイムテーブル作成":
                         gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
                     
                     if gen_list:
-                        img = generate_timetable_image(gen_list)
+                        # ★修正: font_pathを渡すように変更
+                        img = generate_timetable_image(gen_list, font_path=tt_font_path)
                         st.image(img, caption="プレビュー", use_container_width=True)
                         buf_png = io.BytesIO()
                         img.save(buf_png, format="PNG")
@@ -1160,7 +1193,7 @@ elif current_page == "タイムテーブル作成":
         db.close()
 
 # ==========================================
-# 3. アー写グリッド作成画面 (変更なし)
+# 3. アー写グリッド作成画面
 # ==========================================
 elif current_page == "アー写グリッド作成":
     st.title("🖼️ アー写グリッド作成")
