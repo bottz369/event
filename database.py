@@ -19,7 +19,7 @@ except Exception:
     st.stop()
 
 # --- データベース接続 (PostgreSQL) ---
-# ★修正点: connect_argsでSSL接続を強制する
+# SSL接続を強制する設定
 try:
     engine = create_engine(
         DB_URL,
@@ -47,16 +47,27 @@ class Artist(Base):
     is_deleted = Column(Boolean, default=False)
 
 class TimetableProject(Base):
-    __tablename__ = "projects"
+    # ★変更点: テーブル名を変更して新しく作り直します（旧データとの衝突回避）
+    __tablename__ = "projects_v2"
+    
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
     event_date = Column(String)
     venue_name = Column(String)
+    
+    # ★追加: 会場URL
+    venue_url = Column(String)
+    
     open_time = Column(String)
     start_time = Column(String)
     goods_start_offset = Column(Integer)
-    data_json = Column(Text)
-    grid_order_json = Column(Text)
+    
+    data_json = Column(Text)       # タイムテーブルデータ
+    grid_order_json = Column(Text) # アー写グリッド順序
+    
+    # ★追加: チケット情報と自由入力欄（JSON形式で保存）
+    tickets_json = Column(Text)
+    free_text_json = Column(Text)
 
 class FavoriteFont(Base):
     __tablename__ = "favorite_fonts"
