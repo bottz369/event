@@ -940,16 +940,21 @@ elif current_page == "アー写グリッド作成":
     st.title("🖼️ アー写グリッド作成")
     db = next(get_db())
     
+    # ロジック読み込みチェック
+    if generate_grid_image is None:
+        st.error("⚠️ `logic_grid.py` の読み込みに失敗しています。`requirements.txt` に `opencv-python-headless` が含まれているか、またはコードにエラーがないか確認してください。")
+
     try:
+        # プロジェクト一覧取得
         projects = db.query(TimetableProject).all()
         projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
         
         col_g1, col_g2 = st.columns([3, 1])
         with col_g1:
-            # プロジェクト選択肢
             p_map = {f"{p.event_date} {p.title}": p.id for p in projects}
             sel_label = st.selectbox("プロジェクト選択", ["(選択)"] + list(p_map.keys()))
         
+        # セッション初期化
         if "grid_order" not in st.session_state: st.session_state.grid_order = []
         if "grid_cols" not in st.session_state: st.session_state.grid_cols = 5
         if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
@@ -958,12 +963,17 @@ elif current_page == "アー写グリッド作成":
             proj_id = p_map[sel_label]
             proj = db.query(TimetableProject).filter(TimetableProject.id == proj_id).first()
             
+            # プロジェクト変更時にデータをロード
             if "current_grid_proj_id" not in st.session_state or st.session_state.current_grid_proj_id != proj_id:
+                # タイムテーブルからアーティスト名を抽出
                 tt_artists = []
                 if proj.data_json:
-                    d = json.loads(proj.data_json)
-                    tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+                    try:
+                        d = json.loads(proj.data_json)
+                        tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+                    except: pass
                 
+                # 保存済みグリッド設定があればロード
                 saved_order = []
                 if proj.grid_order_json:
                     try:
@@ -976,6 +986,7 @@ elif current_page == "アー写グリッド作成":
                             saved_order = loaded
                     except: pass
                 
+                # リストのマージ（保存済み + 新規追加分）
                 if saved_order:
                     merged = [n for n in saved_order if n in tt_artists]
                     for n in tt_artists:
@@ -987,6 +998,8 @@ elif current_page == "アー写グリッド作成":
                 st.session_state.current_grid_proj_id = proj_id
 
             st.divider()
+            
+            # --- 設定エリア ---
             c_set1, c_set2, c_set3 = st.columns(3)
             with c_set1: st.session_state.grid_rows = st.number_input("行数", min_value=1, value=st.session_state.grid_rows)
             with c_set2: st.session_state.grid_cols = st.number_input("列数", min_value=1, value=st.session_state.grid_cols)
@@ -997,7 +1010,8 @@ elif current_page == "アー写グリッド作成":
                         st.session_state.grid_order = list(reversed([i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]))
                         st.rerun()
 
-            st.caption("ドラッグ&ドロップで並び替え")
+            # --- 並び替えエリア ---
+            st.caption("ドラッグ&ドロップで配置調整")
             if sort_items:
                 grid_ui = []
                 curr = 0
@@ -1029,6 +1043,7 @@ elif current_page == "アー写グリッド作成":
 
             st.divider()
             
+            # --- 画像生成エリア ---
             c_gen1, c_gen2 = st.columns(2)
             with c_gen1:
                 af = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
@@ -1036,21 +1051,49 @@ elif current_page == "アー写グリッド作成":
                 sf = st.selectbox("フォント", af, key="grid_font")
             
             with c_gen2:
-                if st.button("🚀 グリッド生成", type="primary"):
+                if st.button("🚀 グリッド画像を生成", type="primary"):
                     if generate_grid_image:
+                        # 対象アーティストのデータ収集
                         target_artists = []
+                        missing_artists = []
+                        
                         for n in st.session_state.grid_order:
                             a = db.query(Artist).filter(Artist.name == n).first()
-                            if a: target_artists.append(a)
+                            if a: 
+                                target_artists.append(a)
+                            else:
+                                missing_artists.append(n)
                         
-                        with st.spinner("生成中..."):
-                            try:
-                                img = generate_grid_image(target_artists, IMAGE_DIR, font_path=os.path.join(FONT_DIR, sf), cols=st.session_state.grid_cols)
-                                st.image(img, use_container_width=True)
-                                b = io.BytesIO(); img.save(b, format="PNG")
-                                st.download_button("画像DL", b.getvalue(), "grid.png", "image/png")
-                            except Exception as e:
-                                st.error(f"生成エラー: {e}")
+                        if not target_artists:
+                            st.warning("表示するアーティストデータがありません。")
+                        else:
+                            with st.spinner("生成中..."):
+                                try:
+                                    img = generate_grid_image(
+                                        target_artists, 
+                                        IMAGE_DIR, 
+                                        font_path=os.path.join(FONT_DIR, sf), 
+                                        cols=st.session_state.grid_cols
+                                    )
+                                    
+                                    if img:
+                                        st.image(img, caption="プレビュー", use_container_width=True)
+                                        b = io.BytesIO()
+                                        img.save(b, format="PNG")
+                                        st.download_button("画像をダウンロード", b.getvalue(), "grid.png", "image/png")
+                                    else:
+                                        st.error("画像の生成に失敗しました（結果がNoneでした）。コンソールログを確認してください。")
+                                        
+                                except Exception as e:
+                                    st.error(f"生成中にエラーが発生しました: {e}")
+                                    # デバッグ用に詳細を表示
+                                    st.exception(e)
+                    else:
+                        st.error("ロジックファイル (logic_grid.py) が読み込まれていないため実行できません。")
+    
+    except Exception as main_e:
+        st.error(f"予期せぬエラー: {main_e}")
+    
     finally:
         db.close()
 
