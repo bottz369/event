@@ -4,15 +4,15 @@ import os
 
 # ================= 設定エリア =================
 # 全体の解像度とサイズ感
-SINGLE_COL_WIDTH = 1100     # 片側の列の幅を広げました (文字が見切れにくくなります)
+SINGLE_COL_WIDTH = 1100     # 片側の列の幅
 COLUMN_GAP = 80             # 左右の列の間隔
 WIDTH = (SINGLE_COL_WIDTH * 2) + COLUMN_GAP
 ROW_HEIGHT = 130            # 1行の高さ
 ROW_MARGIN = 12             # 行と行の間隔
 
-# フォントサイズ設定 (大きく見やすく)
+# フォントサイズ設定 (枠に合わせて自動縮小されるため、最大値を指定)
 FONT_SIZE_TIME = 38         
-FONT_SIZE_ARTIST = 60       # アーティスト名をさらに強調
+FONT_SIZE_ARTIST = 60       
 FONT_SIZE_GOODS = 32        
 
 # 色の設定
@@ -20,18 +20,20 @@ COLOR_BG_ALL = (0, 0, 0, 0)        # 全体の背景（透明）
 COLOR_ROW_BG = (0, 0, 0, 210)      # 行の背景（半透明の黒）
 COLOR_TEXT = (255, 255, 255, 255)  # 白文字
 
-# ★レイアウトの境界線設定 (ここを厳密に分けました)
-# 左端を0としたときの各エリアの「開始位置」と「幅」
+# ★レイアウトの境界線設定 (重なり防止のため、間隔を確保)
+# [開始X座標, 幅]
 # 1. 時間エリア (左端)
-AREA_TIME_X = 20
-AREA_TIME_W = 240 
+AREA_TIME_X = 30
+AREA_TIME_W = 220 
 
 # 2. アーティストエリア (真ん中・一番広い)
+# 時間エリア(30+220=250)から少し間隔を空けてスタート
 AREA_ARTIST_X = 270
-AREA_ARTIST_W = 580
+AREA_ARTIST_W = 560
 
 # 3. 物販・場所エリア (右端)
-AREA_GOODS_X = 860
+# アーティストエリア(270+560=830)から間隔を空けてスタート
+AREA_GOODS_X = 850
 AREA_GOODS_W = 220
 
 def get_font(path, size):
@@ -54,15 +56,16 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     font = get_font(font_path, current_font_size)
     
     # 枠に収まるまでフォントサイズを小さくするループ
-    min_font_size = 20 # 最小サイズ制限
+    min_font_size = 15 # 最小サイズ制限
     
     while current_font_size > min_font_size:
+        # multiline_textbbox で複数行のサイズも考慮して計測
         bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=4)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
         
-        # 横幅も高さも収まっていればOK
-        if text_w <= box_w and text_h <= box_h:
+        # 横幅も高さも収まっていればOK（パディングとして -10px の余裕を持たせる）
+        if text_w <= (box_w - 10) and text_h <= (box_h - 4):
             break
         
         current_font_size -= 2
@@ -102,7 +105,6 @@ def draw_one_row(draw, base_x, base_y, row_data, font_path):
     goods_place = row_data[3]
 
     # --- 1. 時間エリア ---
-    # 左寄せ気味に配置
     draw_centered_text(
         draw, time_str, 
         base_x + AREA_TIME_X, base_y, AREA_TIME_W, ROW_HEIGHT, 
@@ -110,7 +112,6 @@ def draw_one_row(draw, base_x, base_y, row_data, font_path):
     )
     
     # --- 2. アーティストエリア ---
-    # 中央揃えで配置。枠からはみ出さないように自動縮小
     draw_centered_text(
         draw, name_str, 
         base_x + AREA_ARTIST_X, base_y, AREA_ARTIST_W, ROW_HEIGHT, 
@@ -118,7 +119,7 @@ def draw_one_row(draw, base_x, base_y, row_data, font_path):
     )
     
     # --- 3. 物販情報エリア ---
-    # 文字列の整形（「 / 」を改行に変換など）
+    # 文字列の整形
     goods_info = "-"
     if goods_time:
         if " / " in goods_time:
@@ -132,7 +133,6 @@ def draw_one_row(draw, base_x, base_y, row_data, font_path):
         else:
             goods_info = f"{goods_time} ({goods_place})" if goods_place else goods_time
 
-    # 右寄せ気味に配置
     draw_centered_text(
         draw, goods_info, 
         base_x + AREA_GOODS_X, base_y, AREA_GOODS_W, ROW_HEIGHT, 
