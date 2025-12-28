@@ -8,7 +8,6 @@ import uuid
 from datetime import datetime, timedelta, date
 
 # database.pyから関数をインポート
-# ★SessionLocalを追加（CSVインポート時の自動登録などで使用）
 from database import (
     init_db, get_db, SessionLocal, Artist, TimetableProject, FavoriteFont, 
     IMAGE_DIR, upload_image_to_supabase, get_image_url
@@ -316,9 +315,9 @@ def get_default_row_settings():
 st.sidebar.title("メニュー")
 
 if "tt_unsaved_changes" not in st.session_state: st.session_state.tt_unsaved_changes = False
-if "last_menu" not in st.session_state: st.session_state.last_menu = "プロジェクト" # 初期値をプロジェクトに変更
+if "last_menu" not in st.session_state: st.session_state.last_menu = "プロジェクト"
 
-# メニュー選択（順序変更）
+# メニュー選択
 menu_selection = st.sidebar.radio("機能を選択", ["プロジェクト", "タイムテーブル作成", "アー写グリッド作成", "アーティスト管理"], key="sb_menu")
 
 # ナビゲーション戻し用コールバック
@@ -438,26 +437,86 @@ if current_page == "プロジェクト":
                 # === 編集モード ===
                 if st.session_state.edit_proj_id == proj.id:
                     st.caption(f"編集中: ID {proj.id}")
-                    with st.form(f"edit_form_{proj.id}"):
-                        e_date = st.date_input("開催日", value=datetime.strptime(proj.event_date, "%Y-%m-%d").date() if proj.event_date else date.today())
-                        e_title = st.text_input("イベント名", value=proj.title)
-                        e_venue = st.text_input("会場名", value=proj.venue_name)
-                        e_url = st.text_input("会場URL", value=proj.venue_url or "")
-                        
-                        col_save, col_can = st.columns(2)
-                        with col_save:
-                            if st.form_submit_button("変更を保存", type="primary"):
-                                proj.event_date = e_date.strftime("%Y-%m-%d")
-                                proj.title = e_title
-                                proj.venue_name = e_venue
-                                proj.venue_url = e_url
-                                db.commit()
-                                st.session_state.edit_proj_id = None
-                                st.rerun()
-                        with col_can:
-                            if st.form_submit_button("キャンセル"):
-                                st.session_state.edit_proj_id = None
-                                st.rerun()
+                    
+                    # 基本情報
+                    e_date = st.date_input("開催日", value=datetime.strptime(proj.event_date, "%Y-%m-%d").date() if proj.event_date else date.today(), key=f"e_date_{proj.id}")
+                    e_title = st.text_input("イベント名", value=proj.title, key=f"e_title_{proj.id}")
+                    e_venue = st.text_input("会場名", value=proj.venue_name, key=f"e_venue_{proj.id}")
+                    e_url = st.text_input("会場URL", value=proj.venue_url or "", key=f"e_url_{proj.id}")
+                    
+                    st.divider()
+                    
+                    # --- チケット情報編集 ---
+                    st.markdown("🎟️ **チケット情報**")
+                    tickets_list = []
+                    try:
+                        if proj.tickets_json:
+                            tickets_list = json.loads(proj.tickets_json)
+                    except: tickets_list = []
+                    
+                    if not tickets_list:
+                         tickets_list = [{"name":"", "price":"", "note":""}]
+
+                    # データエディタで編集可能にする
+                    tickets_df = pd.DataFrame(tickets_list)
+                    edited_tickets = st.data_editor(
+                        tickets_df, 
+                        key=f"edit_tickets_{proj.id}", 
+                        num_rows="dynamic", # 行の追加削除を許可
+                        column_config={
+                            "name": st.column_config.TextColumn("チケット名"),
+                            "price": st.column_config.TextColumn("代金"),
+                            "note": st.column_config.TextColumn("備考")
+                        },
+                        use_container_width=True
+                    )
+
+                    st.divider()
+
+                    # --- 自由入力情報編集 ---
+                    st.markdown("📝 **自由入力情報**")
+                    free_list = []
+                    try:
+                        if proj.free_text_json:
+                            free_list = json.loads(proj.free_text_json)
+                    except: free_list = []
+                    
+                    if not free_list:
+                        free_list = [{"title":"", "content":""}]
+
+                    free_df = pd.DataFrame(free_list)
+                    edited_free = st.data_editor(
+                        free_df,
+                        key=f"edit_free_{proj.id}",
+                        num_rows="dynamic",
+                        column_config={
+                            "title": st.column_config.TextColumn("タイトル"),
+                            "content": st.column_config.TextColumn("内容")
+                        },
+                        use_container_width=True
+                    )
+                    
+                    st.divider()
+
+                    col_save, col_can = st.columns(2)
+                    with col_save:
+                        if st.button("変更を保存", key=f"save_{proj.id}", type="primary"):
+                            proj.event_date = e_date.strftime("%Y-%m-%d")
+                            proj.title = e_title
+                            proj.venue_name = e_venue
+                            proj.venue_url = e_url
+                            # データフレームを辞書リストに戻してJSON化
+                            proj.tickets_json = json.dumps(edited_tickets.to_dict(orient="records"), ensure_ascii=False)
+                            proj.free_text_json = json.dumps(edited_free.to_dict(orient="records"), ensure_ascii=False)
+                            
+                            db.commit()
+                            st.session_state.edit_proj_id = None
+                            st.success("更新しました")
+                            st.rerun()
+                    with col_can:
+                        if st.button("キャンセル", key=f"cancel_{proj.id}"):
+                            st.session_state.edit_proj_id = None
+                            st.rerun()
 
                 # === 通常表示モード ===
                 else:
@@ -466,6 +525,14 @@ if current_page == "プロジェクト":
                         st.subheader(f"{proj.event_date} : {proj.title}")
                         st.text(f"📍 {proj.venue_name}")
                         if proj.venue_url: st.markdown(f"[会場URL]({proj.venue_url})")
+                        
+                        # チケット情報の簡易表示
+                        if proj.tickets_json:
+                            try:
+                                t_data = json.loads(proj.tickets_json)
+                                if t_data:
+                                    st.caption(f"チケット: {len(t_data)}種 設定あり")
+                            except: pass
                     with c2:
                         if st.button("編集", key=f"edit_{proj.id}"):
                             st.session_state.edit_proj_id = proj.id
@@ -483,6 +550,25 @@ elif current_page == "タイムテーブル作成":
     st.title("⏱️ タイムテーブル作成")
     db = next(get_db())
     
+    # ★エラー回避: 初期化処理
+    if "tt_artists_order" not in st.session_state: st.session_state.tt_artists_order = []
+    if "tt_artist_settings" not in st.session_state: st.session_state.tt_artist_settings = {}
+    if "tt_row_settings" not in st.session_state: st.session_state.tt_row_settings = []
+    if "tt_has_pre_goods" not in st.session_state: st.session_state.tt_has_pre_goods = False
+    if "tt_pre_goods_settings" not in st.session_state: st.session_state.tt_pre_goods_settings = get_default_row_settings()
+    if "tt_post_goods_settings" not in st.session_state: st.session_state.tt_post_goods_settings = get_default_row_settings()
+    if "tt_editor_key" not in st.session_state: st.session_state.tt_editor_key = 0
+    if "binding_df" not in st.session_state: st.session_state.binding_df = pd.DataFrame()
+    if "rebuild_table_flag" not in st.session_state: st.session_state.rebuild_table_flag = True
+    if "tt_title" not in st.session_state: st.session_state.tt_title = ""
+    if "tt_event_date" not in st.session_state: st.session_state.tt_event_date = date.today()
+    if "tt_venue" not in st.session_state: st.session_state.tt_venue = ""
+    if "tt_open_time" not in st.session_state: st.session_state.tt_open_time = "10:00"
+    if "tt_start_time" not in st.session_state: st.session_state.tt_start_time = "10:30"
+    if "tt_goods_offset" not in st.session_state: st.session_state.tt_goods_offset = 5
+    if "request_calc" not in st.session_state: st.session_state.request_calc = False
+
+
     # --- プロジェクト選択 (即時反映) ---
     projects = db.query(TimetableProject).all()
     # 日付が新しい順
