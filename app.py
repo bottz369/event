@@ -4,7 +4,7 @@ import pandas as pd
 import json
 import io
 import time
-import uuid  # ★追加: ランダムな英数字を作るためのライブラリ
+import uuid
 from datetime import datetime, timedelta, date
 
 # database.pyから関数をインポート
@@ -350,7 +350,6 @@ else:
 # ==========================================
 if current_page == "アーティスト管理":
     st.title("🎤 アーティスト管理")
-    # next()を使ってジェネレータからセッションを取り出す
     db = next(get_db())
     
     try:
@@ -373,11 +372,9 @@ if current_page == "アーティスト管理":
                         filename = None
                         # 画像アップロード処理
                         if uploaded_file:
-                            # ★修正点: ファイル名をランダムな英数字(UUID)に変更して日本語問題を回避
                             ext = os.path.splitext(uploaded_file.name)[1]
                             filename = f"{uuid.uuid4()}{ext}"
                             
-                            # Supabaseにアップロード
                             res = upload_image_to_supabase(uploaded_file, filename)
                             if not res:
                                 st.error("画像のアップロードに失敗しました")
@@ -410,7 +407,6 @@ if current_page == "アーティスト管理":
             cols = st.columns(3)
             for idx, artist in enumerate(active_artists):
                 with cols[idx % 3]:
-                    # 画像表示をSupabaseのURL取得に変更
                     if artist.image_filename:
                         image_url = get_image_url(artist.image_filename)
                         if image_url:
@@ -451,7 +447,6 @@ if current_page == "アーティスト管理":
 # ==========================================
 elif current_page == "タイムテーブル作成":
     st.title("⏱️ タイムテーブル作成")
-    # next()を使ってジェネレータからセッションを取り出す
     db = next(get_db())
     
     def import_csv_callback():
@@ -861,7 +856,7 @@ elif current_page == "タイムテーブル作成":
             
             if st.session_state.rebuild_table_flag:
                 rows = []
-                # ... (行データ作成ロジックはそのまま)
+                
                 if st.session_state.tt_has_pre_goods:
                     dur_minutes = get_duration_minutes(st.session_state.tt_open_time, st.session_state.tt_start_time)
                     st.session_state.tt_pre_goods_settings["GOODS_START_MANUAL"] = st.session_state.tt_open_time
@@ -898,9 +893,9 @@ elif current_page == "タイムテーブル作成":
                         "GOODS_START_MANUAL": safe_str(row_data.get("GOODS_START_MANUAL")),
                         "GOODS_DURATION": safe_int(row_data.get("GOODS_DURATION"), 60),
                         "PLACE": safe_str(row_data.get("PLACE")),
-                        "ADD_GOODS_START": safe_str(row.get("ADD_GOODS_START")),
-                        "ADD_GOODS_DURATION": safe_int(row.get("ADD_GOODS_DURATION"), None),
-                        "ADD_GOODS_PLACE": safe_str(row.get("ADD_GOODS_PLACE"))
+                        "ADD_GOODS_START": safe_str(row_data.get("ADD_GOODS_START")), # ★修正: row -> row_data
+                        "ADD_GOODS_DURATION": safe_int(row_data.get("ADD_GOODS_DURATION"), None), # ★修正: row -> row_data
+                        "ADD_GOODS_PLACE": safe_str(row_data.get("ADD_GOODS_PLACE")) # ★修正: row -> row_data
                     })
                 
                 if has_post_goods_check:
@@ -1169,7 +1164,6 @@ elif current_page == "タイムテーブル作成":
 # ==========================================
 elif current_page == "アー写グリッド作成":
     st.title("🖼️ アー写グリッド作成")
-    # next()を使ってジェネレータからセッションを取り出す
     db = next(get_db())
     
     try:
