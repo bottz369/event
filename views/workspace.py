@@ -22,16 +22,7 @@ def load_project_to_session(proj):
     st.session_state.proj_venue = proj.venue_name
     st.session_state.proj_url = proj.venue_url
 
-    # チケット・自由記述 (JSON -> List of Dicts)
-    try:
-        st.session_state.proj_tickets = json.loads(proj.tickets_json) if proj.tickets_json else []
-    except: st.session_state.proj_tickets = []
-    
-    try:
-        st.session_state.proj_free_text = json.loads(proj.free_text_json) if proj.free_text_json else []
-    except: st.session_state.proj_free_text = []
-
-    # 設定のロード
+    # 設定のロード (フォント等)
     settings = {}
     if proj.settings_json:
         try: settings = json.loads(proj.settings_json)
@@ -39,7 +30,7 @@ def load_project_to_session(proj):
     st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
     st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
     
-    # フライヤー設定のロード
+    # フライヤー設定 & テキスト情報のロード
     flyer_settings = {}
     if proj.flyer_json:
         try: flyer_settings = json.loads(proj.flyer_json)
@@ -59,6 +50,32 @@ def load_project_to_session(proj):
         elif session_key in st.session_state:
             del st.session_state[session_key]
 
+    # ★追加: グリッド情報のロードロジック
+    # これがないとグリッド画面を開いたときに真っ白になります
+    grid_loaded = False
+    if proj.grid_order_json:
+        try:
+            g_data = json.loads(proj.grid_order_json)
+            if isinstance(g_data, dict):
+                st.session_state.grid_order = g_data.get("order", [])
+                st.session_state.grid_cols = g_data.get("cols", 5)
+                st.session_state.grid_rows = g_data.get("rows", 5)
+                grid_loaded = True
+            elif isinstance(g_data, list):
+                st.session_state.grid_order = g_data
+                grid_loaded = True
+        except: pass
+    
+    # グリッド情報がない場合はタイムテーブルから初期生成
+    if not grid_loaded and proj.data_json:
+        try:
+            d = json.loads(proj.data_json)
+            tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+            st.session_state.grid_order = list(reversed(tt_artists))
+            st.session_state.grid_cols = 5
+            st.session_state.grid_rows = 5
+        except: pass
+
 # --- 保存処理 ---
 def save_current_project(db, project_id):
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
@@ -70,12 +87,6 @@ def save_current_project(db, project_id):
     if "proj_venue" in st.session_state: proj.venue_name = st.session_state.proj_venue
     if "proj_url" in st.session_state: proj.venue_url = st.session_state.proj_url
     
-    # チケット・自由記述
-    if "editor_tickets" in st.session_state:
-        proj.tickets_json = json.dumps(st.session_state.editor_tickets, ensure_ascii=False)
-    if "editor_free_text" in st.session_state:
-        proj.free_text_json = json.dumps(st.session_state.editor_free_text, ensure_ascii=False)
-
     # タイムテーブルデータ
     if "binding_df" in st.session_state and not st.session_state.binding_df.empty:
         save_data = st.session_state.binding_df.to_dict(orient="records")
@@ -101,7 +112,7 @@ def save_current_project(db, project_id):
     }
     proj.settings_json = json.dumps(settings, ensure_ascii=False)
 
-    # フライヤー設定
+    # フライヤー設定 (チケット情報・注記もここに含まれる)
     flyer_data = {}
     keys = ["flyer_logo_id", "flyer_bg_id", "flyer_date_str", "flyer_venue_str", 
             "flyer_open_time", "flyer_start_time", "flyer_ticket_info", 
@@ -111,6 +122,13 @@ def save_current_project(db, project_id):
             flyer_data[k.replace("flyer_", "")] = st.session_state[k]
     
     proj.flyer_json = json.dumps(flyer_data, ensure_ascii=False)
+    
+    # テキストエリアの内容を従来の保存カラムにも入れておく（互換性のため）
+    if "flyer_ticket_info" in st.session_state:
+        proj.tickets_json = st.session_state.flyer_ticket_info
+    if "flyer_notes" in st.session_state:
+        proj.free_text_json = st.session_state.flyer_notes
+
     db.commit()
     return True
 
@@ -238,7 +256,7 @@ def render_workspace_page():
 
     st.markdown(f"### 📂 {proj.title} <small>({proj.event_date} @ {proj.venue_name})</small>", unsafe_allow_html=True)
 
-    # ★変更: タブ構成の変更
+    # タブ表示
     tab_overview, tab_tt, tab_grid, tab_flyer = st.tabs(["📝 イベント概要", "⏱️ タイムテーブル", "🖼️ アー写グリッド", "📑 フライヤーセット"])
 
     # === 1. イベント概要タブ ===
@@ -257,35 +275,13 @@ def render_workspace_page():
         c_tic, c_free = st.columns(2)
         with c_tic:
             st.subheader("チケット情報")
-            # DataEditorの初期化
-            if "proj_tickets" not in st.session_state: st.session_state.proj_tickets = []
-            st.data_editor(
-                st.session_state.proj_tickets,
-                key="editor_tickets",
-                num_rows="dynamic",
-                column_config={
-                    "name": st.column_config.TextColumn("券種名", width="medium"),
-                    "price": st.column_config.TextColumn("価格", width="small"),
-                    "note": st.column_config.TextColumn("備考", width="large"),
-                },
-                use_container_width=True
-            )
-            st.caption("※行を追加して入力してください (列名: name, price, note)")
+            # ★変更: シンプルなテキストエリアに戻し、フライヤー情報と同期
+            st.text_area("チケット詳細（改行で区切ってください）", height=200, key="flyer_ticket_info")
 
         with c_free:
             st.subheader("自由記述 (注意事項など)")
-            if "proj_free_text" not in st.session_state: st.session_state.proj_free_text = []
-            st.data_editor(
-                st.session_state.proj_free_text,
-                key="editor_free_text",
-                num_rows="dynamic",
-                column_config={
-                    "title": st.column_config.TextColumn("見出し", width="medium"),
-                    "content": st.column_config.TextColumn("内容", width="large"),
-                },
-                use_container_width=True
-            )
-            st.caption("※行を追加して入力してください (列名: title, content)")
+            # ★変更: シンプルなテキストエリアに戻し、フライヤー情報と同期
+            st.text_area("注意事項・備考", height=200, key="flyer_notes")
 
     # === 2. タイムテーブルタブ ===
     with tab_tt:
