@@ -114,7 +114,7 @@ def render_timetable_page():
     def force_sync(): st.session_state.tt_unsaved_changes = True 
     def mark_dirty(): st.session_state.tt_unsaved_changes = True
     
-    # --- CSVインポートロジック (復元) ---
+    # --- CSVインポートロジック (START/END対応強化版) ---
     def import_csv_callback():
         uploaded = st.session_state.get("csv_upload_key")
         if not uploaded: return
@@ -126,19 +126,15 @@ def render_timetable_page():
                 uploaded.seek(0)
                 df_csv = pd.read_csv(uploaded, encoding="cp932")
             
+            # カラム名の空白除去 (START の後ろのスペース対策)
             df_csv.columns = [c.strip() for c in df_csv.columns]
             
             # 自動登録ロジック
             temp_db = SessionLocal()
             try:
                 artists_to_check = []
-                if "グループ名" in df_csv.columns:
-                    artists_to_check = [str(row.get("グループ名", "")).strip() for _, row in df_csv.iterrows()]
-                else:
-                    artist_col = next((c for c in df_csv.columns if c.lower() == "artist"), None)
-                    if not artist_col: artist_col = df_csv.columns[0]
-                    artists_to_check = [str(row[artist_col]).strip() for _, row in df_csv.iterrows()]
-                
+                col_group = "グループ名" if "グループ名" in df_csv.columns else next((c for c in df_csv.columns if c.lower() == "artist"), df_csv.columns[0])
+                artists_to_check = [str(row.get(col_group, "")).strip() for _, row in df_csv.iterrows()]
                 artists_to_check = list(set([a for a in artists_to_check if a and a != "nan"]))
 
                 for artist_name in artists_to_check:
@@ -157,54 +153,67 @@ def render_timetable_page():
             new_artist_settings = {}
             new_row_settings = []
             
-            if "グループ名" in df_csv.columns:
-                for i, row in df_csv.iterrows():
-                    name = str(row.get("グループ名", ""))
-                    if name == "nan" or not name: continue 
-                    duration = safe_int(row.get("持ち時間"), 20)
-                    adjustment = 0
-                    if i < len(df_csv) - 1:
-                        current_end = str(row.get("END", "")).strip()
-                        next_start = str(df_csv.iloc[i+1].get("START", "")).strip()
-                        if current_end and next_start:
-                            adjustment = get_duration_minutes(current_end, next_start)
-                            if adjustment < 0: adjustment = 0
-                    
-                    new_order.append(name)
-                    new_artist_settings[name] = {"DURATION": duration}
-                    new_row_settings.append({
-                        "ADJUSTMENT": adjustment,
-                        "GOODS_START_MANUAL": safe_str(row.get("物販開始")),
-                        "GOODS_DURATION": safe_int(row.get("物販時間"), 60),
-                        "PLACE": safe_str(row.get("物販場所", "A")),
-                        "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": "",
-                        "IS_POST_GOODS": False
-                    })
-            else:
-                for _, row in df_csv.iterrows():
-                    artist_col = next((c for c in df_csv.columns if c.lower() == "artist"), None)
-                    if not artist_col: artist_col = df_csv.columns[0]
-                    name = str(row[artist_col])
-                    if name == "nan": continue
-                    new_order.append(name)
-                    new_artist_settings[name] = {"DURATION": safe_int(row.get('Duration'), 20)}
-                    new_row_settings.append({
-                        "ADJUSTMENT": safe_int(row.get('Adjustment'), 0),
-                        "GOODS_START_MANUAL": safe_str(row.get('GoodsStart')),
-                        "GOODS_DURATION": safe_int(row.get('GoodsDuration'), 60),
-                        "PLACE": safe_str(row.get('Place', "A")),
-                        "ADD_GOODS_START": safe_str(row.get('AddGoodsStart')),
-                        "ADD_GOODS_DURATION": safe_int(row.get('AddGoodsDuration'), None),
-                        "ADD_GOODS_PLACE": safe_str(row.get('AddGoodsPlace')),
-                        "IS_POST_GOODS": bool(row.get('IS_POST_GOODS', False))
-                    })
+            # カラム名判定
+            col_start = "START" if "START" in df_csv.columns else None
+            col_end = "END" if "END" in df_csv.columns else None
+            col_duration = "持ち時間" if "持ち時間" in df_csv.columns else "Duration"
+            col_adj = "Adjustment" if "Adjustment" in df_csv.columns else None
+
+            # ★開演時間の自動更新ロジック
+            if not df_csv.empty and col_start:
+                first_start_time = str(df_csv.iloc[0].get(col_start, "")).strip()
+                # 時刻形式 (H:M) かチェックしてセット
+                if ":" in first_start_time:
+                    try:
+                        # 0埋め整形 (9:00 -> 09:00)
+                        h, m = map(int, first_start_time.split(":"))
+                        formatted_start = f"{h:02d}:{m:02d}"
+                        st.session_state.tt_start_time = formatted_start
+                    except:
+                        pass # パース失敗時は更新しない
+
+            for i, row in df_csv.iterrows():
+                name = str(row.get(col_group, ""))
+                if name == "nan" or not name: continue 
+                
+                duration = safe_int(row.get(col_duration), 20)
+                adjustment = 0
+                
+                # 転換時間の計算: 現在のENDと次のSTARTから計算
+                if col_start and col_end and i < len(df_csv) - 1:
+                    current_end = str(row.get(col_end, "")).strip()
+                    next_start = str(df_csv.iloc[i+1].get(col_start, "")).strip()
+                    if current_end and next_start:
+                        adjustment = get_duration_minutes(current_end, next_start)
+                        if adjustment < 0: adjustment = 0
+                elif col_adj:
+                    adjustment = safe_int(row.get(col_adj), 0)
+                
+                new_order.append(name)
+                new_artist_settings[name] = {"DURATION": duration}
+                
+                # 物販情報の取得 (日本語/英語カラム両対応)
+                g_start = safe_str(row.get("物販開始") or row.get("GoodsStart"))
+                g_dur = safe_int(row.get("物販時間") or row.get("GoodsDuration"), 60)
+                g_place = safe_str(row.get("物販場所") or row.get("Place") or "A")
+                
+                new_row_settings.append({
+                    "ADJUSTMENT": adjustment,
+                    "GOODS_START_MANUAL": g_start,
+                    "GOODS_DURATION": g_dur,
+                    "PLACE": g_place,
+                    "ADD_GOODS_START": safe_str(row.get("AddGoodsStart")), 
+                    "ADD_GOODS_DURATION": safe_int(row.get("AddGoodsDuration"), None), 
+                    "ADD_GOODS_PLACE": safe_str(row.get("AddGoodsPlace")),
+                    "IS_POST_GOODS": bool(row.get("IS_POST_GOODS", False))
+                })
 
             st.session_state.tt_artists_order = new_order
             st.session_state.tt_artist_settings = new_artist_settings
             st.session_state.tt_row_settings = new_row_settings
             st.session_state.rebuild_table_flag = True 
             st.session_state.tt_unsaved_changes = True
-            st.success("CSVを読み込みました")
+            st.success(f"CSVを読み込みました (開演時間を {st.session_state.tt_start_time} に設定)")
         except Exception as e:
             st.error(f"読み込みエラー: {e}")
 
