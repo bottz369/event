@@ -30,35 +30,33 @@ def load_project_to_session(proj):
     st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
     st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
     
-    # ★修正: チケット情報のロード (エラー回避の強化)
-    # 期待する形式: [{"name":"...", "price":"...", "note":"..."}, ...]
-    tickets_loaded = False
+    # ★重要修正: チケット情報のロード (型チェックと自動修復)
+    tickets_valid = False
     if proj.tickets_json:
         try:
             data = json.loads(proj.tickets_json)
-            # リストであり、かつ中身が辞書であることを確認
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-                st.session_state.proj_tickets = data
-                tickets_loaded = True
-        except:
-            pass
+            if isinstance(data, list) and len(data) > 0:
+                # 中身が辞書かチェック
+                if all(isinstance(x, dict) for x in data):
+                    st.session_state.proj_tickets = data
+                    tickets_valid = True
+        except: pass
     
-    if not tickets_loaded:
+    if not tickets_valid:
         st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
 
-    # ★修正: 自由記述のロード (エラー回避の強化)
-    # 期待する形式: [{"title":"...", "content":"..."}, ...]
-    free_text_loaded = False
+    # ★重要修正: 自由記述のロード (型チェックと自動修復)
+    free_valid = False
     if proj.free_text_json:
         try:
             data = json.loads(proj.free_text_json)
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-                st.session_state.proj_free_text = data
-                free_text_loaded = True
-        except:
-            pass
+            if isinstance(data, list) and len(data) > 0:
+                if all(isinstance(x, dict) for x in data):
+                    st.session_state.proj_free_text = data
+                    free_valid = True
+        except: pass
             
-    if not free_text_loaded:
+    if not free_valid:
         st.session_state.proj_free_text = [{"title":"", "content":""}]
 
     # フライヤー設定
@@ -92,6 +90,8 @@ def load_project_to_session(proj):
                 grid_loaded = True
             elif isinstance(g_data, list):
                 st.session_state.grid_order = g_data
+                st.session_state.grid_cols = 5
+                st.session_state.grid_rows = 5
                 grid_loaded = True
         except: pass
     
@@ -100,8 +100,8 @@ def load_project_to_session(proj):
             d = json.loads(proj.data_json)
             tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
             st.session_state.grid_order = list(reversed(tt_artists))
-            st.session_state.grid_cols = 5
-            st.session_state.grid_rows = 5
+            if "grid_cols" not in st.session_state: st.session_state.grid_cols = 5
+            if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
         except: pass
 
 # --- 保存処理 ---
@@ -293,14 +293,14 @@ def render_workspace_page():
         
         c_tic, c_free = st.columns(2)
         
-        # --- チケット情報入力 ---
+        # --- チケット情報入力 (ガード処理付き) ---
         with c_tic:
             st.subheader("チケット情報")
             if "proj_tickets" not in st.session_state:
                 st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
             
             for i, ticket in enumerate(st.session_state.proj_tickets):
-                # ticketが辞書でない場合のガード処理
+                # ★AttributeError回避: 辞書型でない場合は強制初期化
                 if not isinstance(ticket, dict):
                     ticket = {"name":"", "price":"", "note":""}
                     st.session_state.proj_tickets[i] = ticket
@@ -324,14 +324,14 @@ def render_workspace_page():
                 st.session_state.proj_tickets.append({"name":"", "price":"", "note":""})
                 st.rerun()
 
-        # --- 自由記述入力 ---
+        # --- 自由記述入力 (ガード処理付き) ---
         with c_free:
             st.subheader("自由記述 (注意事項など)")
             if "proj_free_text" not in st.session_state:
                 st.session_state.proj_free_text = [{"title":"", "content":""}]
             
             for i, item in enumerate(st.session_state.proj_free_text):
-                # itemが辞書でない場合のガード処理
+                # ★AttributeError回避
                 if not isinstance(item, dict):
                     item = {"title":"", "content":""}
                     st.session_state.proj_free_text[i] = item
