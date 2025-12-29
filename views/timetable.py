@@ -22,15 +22,13 @@ except ImportError:
     generate_timetable_image = None
 
 def render_timetable_page():
-    # タイトル表示制御
+    # ワークスペース内ではタイトル非表示
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("⏱️ タイムテーブル作成")
     
     db = next(get_db())
     
-    # --- プロジェクトロードロジック ---
     selected_id = None
-    
     if "ws_active_project_id" in st.session_state and st.session_state.ws_active_project_id:
         selected_id = st.session_state.ws_active_project_id
     else:
@@ -51,7 +49,6 @@ def render_timetable_page():
         if selected_label != "(選択してください)":
             selected_id = proj_map[selected_label]
 
-    # --- データロード処理 ---
     if selected_id:
         if st.session_state.get("tt_current_proj_id") != selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
@@ -110,11 +107,9 @@ def render_timetable_page():
                 st.session_state.tt_current_proj_id = selected_id
                 if "ws_active_project_id" not in st.session_state: st.rerun()
 
-    # Callback helpers
     def force_sync(): st.session_state.tt_unsaved_changes = True 
     def mark_dirty(): st.session_state.tt_unsaved_changes = True
     
-    # --- CSVインポートロジック (START/END対応強化版) ---
     def import_csv_callback():
         uploaded = st.session_state.get("csv_upload_key")
         if not uploaded: return
@@ -126,10 +121,8 @@ def render_timetable_page():
                 uploaded.seek(0)
                 df_csv = pd.read_csv(uploaded, encoding="cp932")
             
-            # カラム名の空白除去 (START の後ろのスペース対策)
             df_csv.columns = [c.strip() for c in df_csv.columns]
             
-            # 自動登録ロジック
             temp_db = SessionLocal()
             try:
                 artists_to_check = []
@@ -148,29 +141,24 @@ def render_timetable_page():
             finally:
                 temp_db.close()
             
-            # 読み込み処理
             new_order = []
             new_artist_settings = {}
             new_row_settings = []
             
-            # カラム名判定
             col_start = "START" if "START" in df_csv.columns else None
             col_end = "END" if "END" in df_csv.columns else None
             col_duration = "持ち時間" if "持ち時間" in df_csv.columns else "Duration"
             col_adj = "Adjustment" if "Adjustment" in df_csv.columns else None
 
-            # ★開演時間の自動更新ロジック
             if not df_csv.empty and col_start:
                 first_start_time = str(df_csv.iloc[0].get(col_start, "")).strip()
-                # 時刻形式 (H:M) かチェックしてセット
                 if ":" in first_start_time:
                     try:
-                        # 0埋め整形 (9:00 -> 09:00)
                         h, m = map(int, first_start_time.split(":"))
                         formatted_start = f"{h:02d}:{m:02d}"
                         st.session_state.tt_start_time = formatted_start
                     except:
-                        pass # パース失敗時は更新しない
+                        pass 
 
             for i, row in df_csv.iterrows():
                 name = str(row.get(col_group, ""))
@@ -179,7 +167,6 @@ def render_timetable_page():
                 duration = safe_int(row.get(col_duration), 20)
                 adjustment = 0
                 
-                # 転換時間の計算: 現在のENDと次のSTARTから計算
                 if col_start and col_end and i < len(df_csv) - 1:
                     current_end = str(row.get(col_end, "")).strip()
                     next_start = str(df_csv.iloc[i+1].get(col_start, "")).strip()
@@ -192,7 +179,6 @@ def render_timetable_page():
                 new_order.append(name)
                 new_artist_settings[name] = {"DURATION": duration}
                 
-                # 物販情報の取得 (日本語/英語カラム両対応)
                 g_start = safe_str(row.get("物販開始") or row.get("GoodsStart"))
                 g_dur = safe_int(row.get("物販時間") or row.get("GoodsDuration"), 60)
                 g_place = safe_str(row.get("物販場所") or row.get("Place") or "A")
@@ -217,7 +203,6 @@ def render_timetable_page():
         except Exception as e:
             st.error(f"読み込みエラー: {e}")
 
-    # --- UI描画 ---
     if st.session_state.tt_current_proj_id:
         st.divider()
         col_info1, col_info2 = st.columns([3, 1])
@@ -352,6 +337,7 @@ def render_timetable_page():
             for i, row in edited_df.iterrows():
                 name = row["ARTIST"]
                 is_post = bool(row.get("IS_POST_GOODS", False))
+                
                 if name == "開演前物販":
                     dur = get_duration_minutes(st.session_state.tt_open_time, st.session_state.tt_start_time)
                     st.session_state.tt_pre_goods_settings = {"GOODS_START_MANUAL": st.session_state.tt_open_time, "GOODS_DURATION": dur, "PLACE": ""}
@@ -359,14 +345,19 @@ def render_timetable_page():
                 if name == "終演後物販":
                     st.session_state.tt_post_goods_settings = {"GOODS_START_MANUAL": safe_str(row["GOODS_START_MANUAL"]), "GOODS_DURATION": safe_int(row["GOODS_DURATION"], 60), "PLACE": ""}
                     continue
+                
                 if is_post: current_has_post_check = True
                 st.session_state.tt_artist_settings[name] = {"DURATION": safe_int(row["DURATION"], 20)}
+                
                 g_start = safe_str(row["GOODS_START_MANUAL"])
                 g_dur = safe_int(row["GOODS_DURATION"], 60)
                 add_start = safe_str(row["ADD_GOODS_START"])
                 add_dur = safe_int(row["ADD_GOODS_DURATION"], None)
                 add_place = safe_str(row["ADD_GOODS_PLACE"])
-                if is_post: g_start = ""; g_dur = 60; add_start = ""; add_dur = None; add_place = ""
+                
+                if is_post:
+                    g_start = ""; g_dur = 60; add_start = ""; add_dur = None; add_place = ""
+
                 new_row_settings_from_edit.append({
                     "ADJUSTMENT": safe_int(row["ADJUSTMENT"], 0),
                     "GOODS_START_MANUAL": g_start, "GOODS_DURATION": g_dur, "PLACE": safe_str(row["PLACE"]),
@@ -387,59 +378,56 @@ def render_timetable_page():
                     if i >= len(st.session_state.tt_row_settings): break
                     rd = st.session_state.tt_row_settings[i]
                     dur = st.session_state.tt_artist_settings[name].get("DURATION", 20)
+                    
                     end_obj = curr + timedelta(minutes=dur)
                     if not rd.get("IS_POST_GOODS", False):
                         g_start_obj = end_obj + timedelta(minutes=st.session_state.tt_goods_offset)
                         rd["GOODS_START_MANUAL"] = g_start_obj.strftime("%H:%M")
                         st.session_state.tt_row_settings[i] = rd
+                    
                     curr = end_obj + timedelta(minutes=rd.get("ADJUSTMENT", 0))
-                if current_has_post_check: st.session_state.tt_post_goods_settings["GOODS_START_MANUAL"] = curr.strftime("%H:%M")
+                
+                if current_has_post_check:
+                    st.session_state.tt_post_goods_settings["GOODS_START_MANUAL"] = curr.strftime("%H:%M")
+                
                 st.session_state.rebuild_table_flag = True; st.session_state.tt_editor_key += 1
                 st.session_state.request_calc = False; st.success("計算完了"); st.rerun()
 
+            # --- 結果表示 ---
             calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
             st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], use_container_width=True, hide_index=True)
             
             st.divider()
-            col_a1, col_a2, col_a3 = st.columns(3)
+            
+            # --- 保存ボタン削除、フォント設定をセッション管理に変更 ---
+            col_a1, col_a2 = st.columns(2)
             with col_a1:
-                if st.button("💾 上書き保存", type="primary"):
-                    proj = db.query(TimetableProject).filter(TimetableProject.id == st.session_state.tt_current_proj_id).first()
-                    if proj:
-                        save_data = edited_df.to_dict(orient="records")
-                        proj.open_time = st.session_state.tt_open_time
-                        proj.start_time = st.session_state.tt_start_time
-                        proj.goods_start_offset = st.session_state.tt_goods_offset
-                        proj.data_json = json.dumps(save_data, ensure_ascii=False)
-                        db.commit()
-                        st.session_state.tt_unsaved_changes = False
-                        st.success("保存しました")
-
-            with col_a2:
-                st.caption("データ出力")
-                csv_d = calculated_df.to_csv(index=False).encode('utf-8_sig')
-                st.download_button("CSV", csv_d, "timetable.csv", 'text/csv')
-                pdf_b = create_business_pdf(calculated_df, st.session_state.tt_title, st.session_state.tt_event_date.strftime("%Y-%m-%d"), st.session_state.tt_venue)
-                st.download_button("PDF", pdf_b, "timetable.pdf", "application/pdf")
-
-            with col_a3:
                 all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
                 if not all_fonts: all_fonts = ["keifont.ttf"]
-                selected_font = st.selectbox("画像用フォント", all_fonts)
                 
-                if st.button("🚀 画像生成"):
+                # フォント設定 (ワークスペースで保存されるようにキーを設定)
+                f_idx = 0
+                if "tt_font" in st.session_state and st.session_state.tt_font in all_fonts:
+                    f_idx = all_fonts.index(st.session_state.tt_font)
+                st.selectbox("画像用フォント", all_fonts, index=f_idx, key="tt_font")
+
+            with col_a2:
+                if st.button("🚀 画像生成", use_container_width=True):
                     if generate_timetable_image:
                         gen_list = []
                         for _, row in calculated_df.iterrows():
                             if row["ARTIST"] == "OPEN / START": continue
                             gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
+                        
                         if gen_list:
-                            img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, selected_font))
+                            img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
                             st.image(img, caption="プレビュー", use_container_width=True)
                             buf = io.BytesIO(); img.save(buf, format="PNG")
-                            st.download_button("画像ダウンロード", buf.getvalue(), "timetable.png", "image/png")
-                        else: st.warning("データがありません")
-                    else: st.error("ロジックエラー")
+                            st.download_button("画像ダウンロード", buf.getvalue(), "timetable.png", "image/png", use_container_width=True)
+                        else:
+                            st.warning("データがありません")
+                    else:
+                        st.error("ロジックエラー")
     else:
         st.info("👈 上のボックスからプロジェクトを選択してください")
     
