@@ -65,9 +65,10 @@ class TimetableProject(Base):
     
     tickets_json = Column(Text)    # チケット情報
     free_text_json = Column(Text)  # 自由入力欄
+    flyer_json = Column(Text)      # フライヤー設定（素材IDやテキストなど）
     
-    # ★追加: フライヤー作成の設定保存用
-    flyer_json = Column(Text)
+    # ★追加: 画面ごとの細かい設定（フォント選択など）を保存
+    settings_json = Column(Text)
 
 # ★追加: 素材アーカイブ用テーブル
 class Asset(Base):
