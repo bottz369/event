@@ -9,16 +9,21 @@ def render_artists_page():
     db = next(get_db())
     if "editing_artist_id" not in st.session_state: st.session_state.editing_artist_id = None
 
+    # ★対応拡張子リストを定義（ここを変更すれば一括で管理できます）
+    # .heic はブラウザ非対応のため除外していますが、必要なら変換処理とセットで追加可能です
+    ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif']
+
     try:
         with st.expander("➕ 新規登録", expanded=False):
             with st.form("new_artist"):
                 n = st.text_input("名前")
-                f = st.file_uploader("画像", type=['jpg','png'])
+                # ★修正箇所1: 定義したリストを使用
+                f = st.file_uploader("画像", type=ALLOWED_EXTENSIONS)
                 if st.form_submit_button("登録"):
                     if n:
                         fname = None
                         if f:
-                            ext = os.path.splitext(f.name)[1]
+                            ext = os.path.splitext(f.name)[1].lower() # 拡張子を小文字に統一
                             fname = f"{uuid.uuid4()}{ext}"
                             upload_image_to_supabase(f, fname)
                         
@@ -41,14 +46,15 @@ def render_artists_page():
                 with st.container(border=True):
                     if st.session_state.editing_artist_id == a.id:
                         en = st.text_input("名前", a.name, key=f"en_{a.id}")
-                        ef = st.file_uploader("画像変更", type=['jpg','png'], key=f"ef_{a.id}")
+                        # ★修正箇所2: 定義したリストを使用
+                        ef = st.file_uploader("画像変更", type=ALLOWED_EXTENSIONS, key=f"ef_{a.id}")
                         c1, c2 = st.columns(2)
                         with c1:
                             if st.button("保存", key=f"sv_{a.id}"):
                                 if en:
                                     fn = a.image_filename
                                     if ef:
-                                        ext = os.path.splitext(ef.name)[1]
+                                        ext = os.path.splitext(ef.name)[1].lower()
                                         fn = f"{uuid.uuid4()}{ext}"
                                         upload_image_to_supabase(ef, fn)
                                     a.name = en; a.image_filename = fn; db.commit()
