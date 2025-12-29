@@ -10,6 +10,7 @@ from views.flyer import render_flyer_editor
 
 # --- プロジェクトデータのロード関数 ---
 def load_project_to_session(proj):
+    """DBから読み込んだプロジェクト情報をセッションステートに展開する"""
     st.session_state.tt_current_proj_id = proj.id
     
     # 基本情報
@@ -29,27 +30,43 @@ def load_project_to_session(proj):
     st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
     st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
     
-    # ★重要: チケット・自由記述をリストとしてロード
-    # JSONが保存されていない場合は、空のリストではなく初期フォーム用に1行入ったリストを作るなどの調整も可
+    # ★修正: チケット情報のロード (エラー回避の強化)
+    # 期待する形式: [{"name":"...", "price":"...", "note":"..."}, ...]
+    tickets_loaded = False
     if proj.tickets_json:
-        try: st.session_state.proj_tickets = json.loads(proj.tickets_json)
-        except: st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
-    else:
+        try:
+            data = json.loads(proj.tickets_json)
+            # リストであり、かつ中身が辞書であることを確認
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                st.session_state.proj_tickets = data
+                tickets_loaded = True
+        except:
+            pass
+    
+    if not tickets_loaded:
         st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
 
+    # ★修正: 自由記述のロード (エラー回避の強化)
+    # 期待する形式: [{"title":"...", "content":"..."}, ...]
+    free_text_loaded = False
     if proj.free_text_json:
-        try: st.session_state.proj_free_text = json.loads(proj.free_text_json)
-        except: st.session_state.proj_free_text = [{"title":"", "content":""}]
-    else:
+        try:
+            data = json.loads(proj.free_text_json)
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                st.session_state.proj_free_text = data
+                free_text_loaded = True
+        except:
+            pass
+            
+    if not free_text_loaded:
         st.session_state.proj_free_text = [{"title":"", "content":""}]
 
-    # フライヤー設定（テキストエリア系は削除し、デザイン設定のみロード）
+    # フライヤー設定
     flyer_settings = {}
     if proj.flyer_json:
         try: flyer_settings = json.loads(proj.flyer_json)
         except: pass
     
-    # フライヤー画面固有の新しいキー名に対応
     keys_map = {
         "flyer_logo_id": "logo_id", "flyer_bg_id": "bg_id",
         "flyer_sub_title": "sub_title", "flyer_input_1": "input_1",
@@ -92,19 +109,17 @@ def save_current_project(db, project_id):
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     if not proj: return False
     
-    # 基本情報
     if "proj_title" in st.session_state: proj.title = st.session_state.proj_title
     if "proj_date" in st.session_state: proj.event_date = st.session_state.proj_date.strftime("%Y-%m-%d")
     if "proj_venue" in st.session_state: proj.venue_name = st.session_state.proj_venue
     if "proj_url" in st.session_state: proj.venue_url = st.session_state.proj_url
     
-    # ★変更: チケット・自由記述をJSONとして保存
+    # JSONとして保存
     if "proj_tickets" in st.session_state:
         proj.tickets_json = json.dumps(st.session_state.proj_tickets, ensure_ascii=False)
     if "proj_free_text" in st.session_state:
         proj.free_text_json = json.dumps(st.session_state.proj_free_text, ensure_ascii=False)
 
-    # タイムテーブルデータ
     if "binding_df" in st.session_state and not st.session_state.binding_df.empty:
         save_data = st.session_state.binding_df.to_dict(orient="records")
         proj.data_json = json.dumps(save_data, ensure_ascii=False)
@@ -113,7 +128,6 @@ def save_current_project(db, project_id):
     if "tt_start_time" in st.session_state: proj.start_time = st.session_state.tt_start_time
     if "tt_goods_offset" in st.session_state: proj.goods_start_offset = st.session_state.tt_goods_offset
 
-    # グリッド設定
     if "grid_order" in st.session_state:
         grid_data = {
             "cols": st.session_state.get("grid_cols", 5),
@@ -122,14 +136,12 @@ def save_current_project(db, project_id):
         }
         proj.grid_order_json = json.dumps(grid_data, ensure_ascii=False)
 
-    # 画面設定
     settings = {
         "tt_font": st.session_state.get("tt_font", "keifont.ttf"),
         "grid_font": st.session_state.get("grid_font", "keifont.ttf")
     }
     proj.settings_json = json.dumps(settings, ensure_ascii=False)
 
-    # フライヤー設定（新しいキー名に対応）
     flyer_data = {}
     keys = ["flyer_logo_id", "flyer_bg_id", "flyer_sub_title", "flyer_input_1", 
             "flyer_bottom_left", "flyer_bottom_right", "flyer_font", "flyer_text_color", "flyer_stroke_color"]
@@ -264,10 +276,9 @@ def render_workspace_page():
 
     st.markdown(f"### 📂 {proj.title} <small>({proj.event_date} @ {proj.venue_name})</small>", unsafe_allow_html=True)
 
-    # タブ表示
     tab_overview, tab_tt, tab_grid, tab_flyer = st.tabs(["📝 イベント概要", "⏱️ タイムテーブル", "🖼️ アー写グリッド", "📑 フライヤーセット"])
 
-    # === 1. イベント概要タブ (ダイナミックフォーム実装) ===
+    # === 1. イベント概要タブ ===
     with tab_overview:
         st.subheader("基本情報")
         c_basic1, c_basic2 = st.columns(2)
@@ -282,14 +293,18 @@ def render_workspace_page():
         
         c_tic, c_free = st.columns(2)
         
-        # --- チケット情報入力 (行追加・削除) ---
+        # --- チケット情報入力 ---
         with c_tic:
             st.subheader("チケット情報")
             if "proj_tickets" not in st.session_state:
                 st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
             
-            # リストのコピーを使ってイテレーション
             for i, ticket in enumerate(st.session_state.proj_tickets):
+                # ticketが辞書でない場合のガード処理
+                if not isinstance(ticket, dict):
+                    ticket = {"name":"", "price":"", "note":""}
+                    st.session_state.proj_tickets[i] = ticket
+
                 with st.container(border=True):
                     cols = st.columns([3, 2, 4, 1])
                     with cols[0]:
@@ -299,29 +314,38 @@ def render_workspace_page():
                     with cols[2]:
                         ticket["note"] = st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", label_visibility="collapsed", placeholder="ドリンク代別")
                     with cols[3]:
-                        if st.button("🗑️", key=f"del_t_{i}"):
-                            st.session_state.proj_tickets.pop(i)
-                            st.rerun()
+                        # 1行目は削除不可
+                        if i > 0:
+                            if st.button("🗑️", key=f"del_t_{i}"):
+                                st.session_state.proj_tickets.pop(i)
+                                st.rerun()
             
             if st.button("＋ 新しいチケットを追加"):
                 st.session_state.proj_tickets.append({"name":"", "price":"", "note":""})
                 st.rerun()
 
-        # --- 自由記述入力 (行追加・削除) ---
+        # --- 自由記述入力 ---
         with c_free:
             st.subheader("自由記述 (注意事項など)")
             if "proj_free_text" not in st.session_state:
                 st.session_state.proj_free_text = [{"title":"", "content":""}]
             
             for i, item in enumerate(st.session_state.proj_free_text):
+                # itemが辞書でない場合のガード処理
+                if not isinstance(item, dict):
+                    item = {"title":"", "content":""}
+                    st.session_state.proj_free_text[i] = item
+
                 with st.container(border=True):
                     c_head, c_btn = st.columns([5, 1])
                     with c_head:
                         item["title"] = st.text_input("タイトル", value=item.get("title",""), key=f"f_title_{i}", placeholder="注意事項")
                     with c_btn:
-                        if st.button("🗑️", key=f"del_f_{i}"):
-                            st.session_state.proj_free_text.pop(i)
-                            st.rerun()
+                        # 1行目は削除不可
+                        if i > 0:
+                            if st.button("🗑️", key=f"del_f_{i}"):
+                                st.session_state.proj_free_text.pop(i)
+                                st.rerun()
                     
                     item["content"] = st.text_area("内容", value=item.get("content",""), key=f"f_content_{i}", height=100)
 
