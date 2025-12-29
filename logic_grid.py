@@ -30,7 +30,6 @@ def get_face_center_y_from_cv_img(cv_img):
     face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
     
     if not os.path.exists(face_cascade_path):
-        # カスケードファイルがない場合は顔認識をスキップ
         return None
         
     face_cascade = cv2.CascadeClassifier(face_cascade_path)
@@ -42,10 +41,7 @@ def get_face_center_y_from_cv_img(cv_img):
     return None
 
 def crop_smart(pil_img):
-    """
-    スマートクロッピング関数
-    PIL画像をOpenCV形式に変換して顔認識を行い、中心を決定する
-    """
+    """スマートクロッピング関数"""
     img_width, img_height = pil_img.size
     
     # PIL -> OpenCV変換
@@ -57,31 +53,10 @@ def crop_smart(pil_img):
     except:
         face_y = None
     
-    # アスペクト比計算 (TILE_WIDTH : TILE_HEIGHT)
-    target_ratio = TILE_WIDTH / TILE_HEIGHT
-    img_ratio = img_width / img_height
-    
-    if img_ratio > target_ratio:
-        # 画像が横長すぎる場合 -> 高さを基準にリサイズ
-        new_height = TILE_HEIGHT
-        new_width = int(new_height * img_ratio)
-        scale = new_height / img_height
-    else:
-        # 画像が縦長すぎる場合 -> 幅を基準にリサイズ
-        new_width = TILE_WIDTH
-        new_height = int(new_width / img_ratio)
-        scale = new_width / img_width
-
-    # まずリサイズ（大きめに確保して後でクロップする前提）
-    # 元ロジックに合わせて、クロップサイズより少し大きくなるようにリサイズ
-    
-    # ここでは元のロジックを尊重しつつ、指定サイズに合わせる計算を行います
-    # crop_smartの引数が変わっているため、元のロジックを再現します
-    
     crop_width = TILE_WIDTH
     crop_height = TILE_HEIGHT
 
-    # リサイズ倍率の決定
+    # リサイズ倍率の決定 (隙間なく埋めるため max を使用)
     scale_factor = max(crop_width / img_width, crop_height / img_height)
     resized_w = int(img_width * scale_factor)
     resized_h = int(img_height * scale_factor)
@@ -89,15 +64,12 @@ def crop_smart(pil_img):
     resized_img = pil_img.resize((resized_w, resized_h), Image.LANCZOS)
     
     # クロップ位置の決定
-    # 横方向は常に中央
     left = (resized_w - crop_width) // 2
     
-    # 縦方向は顔位置を考慮
     if face_y is not None:
         target_y = face_y * scale_factor
         top = target_y - (crop_height // 2)
     else:
-        # 顔が見つからない場合は上から15%の位置を中心と仮定（デフォルトロジック）
         top = (resized_h * 0.15) - (crop_height // 2)
 
     # はみ出し補正
@@ -106,10 +78,35 @@ def crop_smart(pil_img):
     
     return resized_img.crop((left, int(top), left + int(crop_width), int(top) + int(crop_height)))
 
+def create_no_image_placeholder(width, height):
+    """No Image画像を生成する"""
+    # 黒背景
+    img = Image.new("RGBA", (width, height), (30, 30, 30, 255))
+    draw = ImageDraw.Draw(img)
+    
+    # テキスト描画 "No Image"
+    text = "No Image"
+    try:
+        # デフォルトフォントより少し大きいフォントを使いたいが、
+        # 汎用性を考慮してここではデフォルトを使用（本来はfonts/keifont.ttfなどを読み込むと良い）
+        font = ImageFont.load_default()
+    except:
+        pass
+        
+    # 中央に配置
+    # 文字サイズが小さいので、枠線などで装飾
+    draw.rectangle([(10, 10), (width-10, height-10)], outline=(100, 100, 100), width=2)
+    
+    # 中心座標計算 (簡易的)
+    bbox = draw.textbbox((0, 0), text)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    draw.text(((width - tw) / 2, (height - th) / 2), text, fill="white")
+    
+    return img
+
 def get_row_distribution(total, base_cols, max_cols):
-    """
-    従来の自動計算ロジック
-    """
+    """自動レイアウト計算"""
     if total == 0: return []
     rows = math.ceil(total / base_cols)
     if rows <= 1: return [total]
@@ -132,30 +129,26 @@ def load_image_from_url(url):
 
 def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf", cols=None):
     """
-    grid画像を生成する（Supabase対応）
-    artists: Artistオブジェクトのリスト
-    image_dir_unused: 互換性のために残していますが使いません
+    grid画像を生成する（Supabase対応 & No Image対応）
     """
-    valid_artists = [a for a in artists if a.image_filename]
-    total_images = len(valid_artists)
+    # ★変更: 画像がないアーティストも除外せず、全て対象にする
+    target_artists = artists 
+    total_images = len(target_artists)
     
     if total_images == 0:
         return None
 
     # --- 行ごとの枚数とレイアウトモードの決定 ---
     if cols and cols > 0:
-        # カスタムモード
         row_counts = []
         temp_total = total_images
         while temp_total > 0:
             take = min(cols, temp_total)
             row_counts.append(take)
             temp_total -= take
-        
         reference_cols = cols  
         fixed_grid_mode = True 
     else:
-        # デフォルトモード
         row_counts = get_row_distribution(total_images, BASE_COLUMNS, MAX_COLUMNS)
         reference_cols = BASE_COLUMNS
         fixed_grid_mode = False
@@ -200,7 +193,6 @@ def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf"
     current_img_idx = 0
     current_y = MARGIN 
 
-    # フォントロード（ループ外で1回試行）
     default_font = ImageFont.load_default()
 
     for config in row_configs:
@@ -213,64 +205,66 @@ def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf"
         for col_idx in range(count):
             if current_img_idx >= total_images: break
             
-            target_artist = valid_artists[current_img_idx]
+            target_artist = target_artists[current_img_idx]
             artist_name = target_artist.name
             
             # X座標の計算
             x = MARGIN + (col_idx * (w + MARGIN))
             
             try:
-                # ★Supabaseから画像取得
-                img_url = get_image_url(target_artist.image_filename)
-                img = load_image_from_url(img_url)
+                # 1. 画像読み込みを試みる
+                img = None
+                if target_artist.image_filename:
+                    img_url = get_image_url(target_artist.image_filename)
+                    if img_url:
+                        img = load_image_from_url(img_url)
                 
+                # 2. クロップまたはNo Image生成
                 if img:
-                    # ここでスマートクロップ時にリサイズも行うように関数を修正したため
-                    # 引数として w, h を渡したいところですが、
-                    # 元のcrop_smartは縦横比固定のロジックだったため、
-                    # 一旦 TILE_WIDTH/HEIGHT に合わせてクロップし、
-                    # その後にこのグリッドのセルサイズ(w, h)にリサイズして貼り付けます
-                    
-                    cropped = crop_smart(img) # TILE_WIDTH, TILE_HEIGHT サイズで返ってくる
-                    resized_final = cropped.resize((w, h), Image.LANCZOS)
-                    
-                    canvas.paste(resized_final, (int(x), int(current_y)))
-
-                    # テキストエリア描画
-                    text_bg_y = current_y + h
-                    draw.rectangle([(x, text_bg_y), (x + w, text_bg_y + th)], fill="white")
-
-                    # フォントサイズ調整
-                    current_font_size = font_max
-                    while current_font_size > MIN_FONT_SIZE:
-                        try:
-                            if font_path and os.path.exists(font_path):
-                                font = ImageFont.truetype(font_path, current_font_size)
-                            else:
-                                font = default_font
-                                break
-                        except:
-                            font = default_font
-                            break
-                        
-                        bbox = draw.textbbox((0, 0), artist_name, font=font)
-                        text_w = bbox[2] - bbox[0]
-                        if text_w < (w - 10): 
-                            break 
-                        current_font_size -= 2 
-
-                    # 文字配置
-                    bbox = draw.textbbox((0, 0), artist_name, font=font)
-                    text_w = bbox[2] - bbox[0]
-                    text_h = bbox[3] - bbox[1]
-                    
-                    text_x = x + (w - text_w) / 2
-                    # テキストエリアの上下中央
-                    text_y = text_bg_y + (th - text_h) / 2 - bbox[1]
-
-                    draw.text((text_x, text_y), artist_name, fill="black", font=font)
+                    # 画像がある場合: スマートクロップ
+                    cropped = crop_smart(img)
                 else:
-                    print(f"Failed to load image for {artist_name}")
+                    # 画像がない場合: プレースホルダ生成
+                    cropped = create_no_image_placeholder(TILE_WIDTH, TILE_HEIGHT)
+                
+                # 3. グリッドのセルサイズに合わせてリサイズして貼り付け
+                resized_final = cropped.resize((w, h), Image.LANCZOS)
+                canvas.paste(resized_final, (int(x), int(current_y)))
+
+                # 4. テキストエリア描画
+                text_bg_y = current_y + h
+                draw.rectangle([(x, text_bg_y), (x + w, text_bg_y + th)], fill="white")
+
+                # フォントサイズ調整
+                current_font_size = font_max
+                target_font = default_font # 初期値
+                
+                while current_font_size > MIN_FONT_SIZE:
+                    try:
+                        if font_path and os.path.exists(font_path):
+                            target_font = ImageFont.truetype(font_path, current_font_size)
+                        else:
+                            target_font = default_font
+                            break
+                    except:
+                        target_font = default_font
+                        break
+                    
+                    bbox = draw.textbbox((0, 0), artist_name, font=target_font)
+                    text_w = bbox[2] - bbox[0]
+                    if text_w < (w - 10): 
+                        break 
+                    current_font_size -= 2 
+
+                # 文字配置
+                bbox = draw.textbbox((0, 0), artist_name, font=target_font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+                
+                text_x = x + (w - text_w) / 2
+                text_y = text_bg_y + (th - text_h) / 2 - bbox[1]
+
+                draw.text((text_x, text_y), artist_name, fill="black", font=target_font)
                     
             except Exception as e:
                 print(f"Error processing artist {artist_name}: {e}")
