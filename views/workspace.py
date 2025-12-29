@@ -1,9 +1,9 @@
 import streamlit as st
+from datetime import date
+import json
 from database import get_db, TimetableProject
 
 # 各機能の読み込み
-# ※ timetable.py と grid.py は後で少し修正する必要がありますが、
-#    現状のままでも動作させるために工夫して呼び出します。
 from views.timetable import render_timetable_page 
 from views.grid import render_grid_page
 from views.flyer import render_flyer_editor
@@ -18,39 +18,74 @@ def render_workspace_page():
     
     proj_map = {f"{p.event_date} {p.title}": p.id for p in projects}
     
+    # 選択肢の作成
+    options = ["(選択してください)", "➕ 新規プロジェクト作成"] + list(proj_map.keys())
+    
     # セッションで選択中のプロジェクトを保持
     if "ws_active_project_id" not in st.session_state:
         st.session_state.ws_active_project_id = None
 
-    selected_label = st.selectbox(
-        "作業するプロジェクトを選択", 
-        ["(選択してください)"] + list(proj_map.keys()),
-        index=0 if not st.session_state.ws_active_project_id else list(proj_map.values()).index(st.session_state.ws_active_project_id) + 1
-    )
+    # インデックス計算
+    current_idx = 0
+    if st.session_state.ws_active_project_id:
+        current_val = next((k for k, v in proj_map.items() if v == st.session_state.ws_active_project_id), None)
+        if current_val in options:
+            current_idx = options.index(current_val)
 
-    if selected_label == "(選択してください)":
-        st.info("まずはプロジェクトを選択してください。")
+    selected_label = st.selectbox("作業するプロジェクトを選択", options, index=current_idx)
+
+    # --- A. 新規作成モード ---
+    if selected_label == "➕ 新規プロジェクト作成":
+        st.divider()
+        st.subheader("✨ 新しいプロジェクトを作成")
+        with st.form("ws_new_project"):
+            c1, c2 = st.columns(2)
+            with c1:
+                p_date = st.date_input("開催日", value=date.today())
+                p_title = st.text_input("イベント名")
+            with c2:
+                p_venue = st.text_input("会場名")
+                p_url = st.text_input("会場URL")
+            
+            if st.form_submit_button("作成して開始", type="primary"):
+                if p_title and p_venue:
+                    new_proj = TimetableProject(
+                        title=p_title,
+                        event_date=p_date.strftime("%Y-%m-%d"),
+                        venue_name=p_venue,
+                        venue_url=p_url,
+                        open_time="10:00", start_time="10:30"
+                    )
+                    db.add(new_proj)
+                    db.commit()
+                    # 作成したプロジェクトを選択状態にする
+                    st.session_state.ws_active_project_id = new_proj.id
+                    st.success("プロジェクトを作成しました！")
+                    st.rerun()
+                else:
+                    st.error("イベント名と会場名は必須です")
         db.close()
         return
 
-    # 選択確定
+    # --- B. 未選択状態 ---
+    if selected_label == "(選択してください)":
+        st.info("👆 上のボックスからプロジェクトを選択するか、新規作成してください。")
+        db.close()
+        return
+
+    # --- C. プロジェクト作業モード ---
     project_id = proj_map[selected_label]
     st.session_state.ws_active_project_id = project_id
     
-    # プロジェクト情報の取得
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     
     st.divider()
     st.markdown(f"### 📂 {proj.title} <small>({proj.event_date} @ {proj.venue_name})</small>", unsafe_allow_html=True)
 
-    # 2. タブで機能切り替え
     tab_tt, tab_grid, tab_flyer = st.tabs(["⏱️ タイムテーブル", "🖼️ アー写グリッド", "📑 フライヤーセット"])
 
     with tab_tt:
-        # 既存の timetable.py は「選択ボックス」を持っていますが、
-        # ここでは強制的にIDをセットしてあげることで連携させます。
         st.session_state.tt_current_proj_id = project_id
-        # 既存関数の呼び出し（本来は引数を受け取る形にリファクタリングするのがベストですが、今回は既存を流用）
         render_timetable_page()
     
     with tab_grid:
@@ -58,7 +93,6 @@ def render_workspace_page():
         render_grid_page()
 
     with tab_flyer:
-        # ここは新しく作ったコンポーネントを呼ぶ
         render_flyer_editor(project_id)
 
     db.close()
