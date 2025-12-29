@@ -6,7 +6,7 @@ import json
 from constants import FONT_DIR
 from database import get_db, TimetableProject, Asset, get_image_url
 
-# --- 描画ロジック (変更なし) ---
+# --- 描画ロジック ---
 def draw_text_centered(draw, text, x, y, font, fill, stroke_width=0, stroke_fill=None, anchor="ma"):
     draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill, anchor=anchor)
 
@@ -27,25 +27,31 @@ def resize_image_to_fit(img, max_width, max_height):
     new_size = (int(img.width * ratio), int(img.height * ratio))
     return img.resize(new_size, Image.LANCZOS)
 
-def create_flyer_image(bg_path, logo_path, main_bytes, date_str, venue_str, open_time, start_time, ticket_info, notes, font_path, text_color, stroke_color):
+def create_flyer_image(
+    bg_path, logo_path, main_bytes, 
+    sub_title, input_1, bottom_left, bottom_right, 
+    font_path, text_color, stroke_color
+):
     try: base_img = Image.open(bg_path).convert("RGBA")
     except: return None
     width, height = base_img.size
     draw = ImageDraw.Draw(base_img)
     
     try:
-        font_date = ImageFont.truetype(font_path, int(width * 0.08))
-        font_time = ImageFont.truetype(font_path, int(width * 0.05))
-        font_venue = ImageFont.truetype(font_path, int(width * 0.04))
+        # フォントサイズ設定 (比率は適宜調整)
+        font_sub = ImageFont.truetype(font_path, int(width * 0.08))   # サブタイトル
+        font_in1 = ImageFont.truetype(font_path, int(width * 0.04))   # 入力1
+        font_btm = ImageFont.truetype(font_path, int(width * 0.05))   # 左下/右下
         font_ticket = ImageFont.truetype(font_path, int(width * 0.045))
-        font_note = ImageFont.truetype(font_path, int(width * 0.025))
+        font_free = ImageFont.truetype(font_path, int(width * 0.025))
     except:
-        font_date = ImageFont.load_default()
+        font_sub = font_in1 = font_btm = font_ticket = font_free = ImageFont.load_default()
     
     current_y = height * 0.05
     center_x = width / 2
     stroke_w = int(width * 0.003)
 
+    # 1. ロゴ
     if logo_path:
         try:
             logo_img = Image.open(logo_path).convert("RGBA")
@@ -55,19 +61,24 @@ def create_flyer_image(bg_path, logo_path, main_bytes, date_str, venue_str, open
             current_y += logo_img.height + (height * 0.02)
         except: pass
 
-    draw_text_centered(draw, date_str, center_x, current_y, font_date, text_color, stroke_w, stroke_color)
-    bbox = draw.textbbox((0, 0), date_str, font=font_date)
+    # 2. サブタイトル (旧 Date)
+    draw_text_centered(draw, sub_title, center_x, current_y, font_sub, text_color, stroke_w, stroke_color)
+    bbox = draw.textbbox((0, 0), sub_title, font=font_sub)
     current_y += (bbox[3] - bbox[1]) + (height * 0.01)
     
-    draw_text_centered(draw, venue_str, center_x, current_y, font_venue, text_color, stroke_w, stroke_color)
-    bbox = draw.textbbox((0, 0), venue_str, font=font_venue)
+    # 3. 入力1 (旧 Venue)
+    draw_text_centered(draw, input_1, center_x, current_y, font_in1, text_color, stroke_w, stroke_color)
+    bbox = draw.textbbox((0, 0), input_1, font=font_in1)
     current_y += (bbox[3] - bbox[1]) + (height * 0.02)
 
-    time_str = f"OPEN {open_time} ▶ START {start_time}"
-    draw_text_centered(draw, time_str, center_x, current_y, font_time, text_color, stroke_w, stroke_color)
-    bbox = draw.textbbox((0, 0), time_str, font=font_time)
+    # 4. 左下 / 右下 (旧 OPEN / START)
+    # 並べて表示
+    time_str = f"{bottom_left}   {bottom_right}"
+    draw_text_centered(draw, time_str, center_x, current_y, font_btm, text_color, stroke_w, stroke_color)
+    bbox = draw.textbbox((0, 0), time_str, font=font_btm)
     current_y += (bbox[3] - bbox[1]) + (height * 0.03)
 
+    # 5. メイン画像
     if main_bytes:
         try:
             main_img = Image.open(main_bytes).convert("RGBA")
@@ -79,9 +90,28 @@ def create_flyer_image(bg_path, logo_path, main_bytes, date_str, venue_str, open
                 current_y += main_img.height + (height * 0.03)
         except: pass
 
-    current_y = draw_multiline_text_centered(draw, ticket_info, center_x, current_y, font_ticket, text_color, 1.2, stroke_w, stroke_color)
+    # 6. チケット情報・自由記述 (Overviewタブのセッションデータから生成)
+    ticket_str = ""
+    if "proj_tickets" in st.session_state:
+        lines = []
+        for t in st.session_state.proj_tickets:
+            # "チケット名 ¥金額 (備考)" の形式で結合
+            line = f"{t.get('name','')} {t.get('price','')}"
+            if t.get("note"): line += f" ({t.get('note')})"
+            if line.strip(): lines.append(line)
+        ticket_str = "\n".join(lines)
+
+    notes_str = ""
+    if "proj_free_text" in st.session_state:
+        lines = []
+        for f in st.session_state.proj_free_text:
+            if f.get("title"): lines.append(f"【{f.get('title')}】")
+            if f.get("content"): lines.append(f.get("content"))
+        notes_str = "\n".join(lines)
+
+    current_y = draw_multiline_text_centered(draw, ticket_str, center_x, current_y, font_ticket, text_color, 1.2, stroke_w, stroke_color)
     current_y += height * 0.02
-    draw_multiline_text_centered(draw, notes, center_x, current_y, font_note, text_color, 1.3, 0, None)
+    draw_multiline_text_centered(draw, notes_str, center_x, current_y, font_free, text_color, 1.3, 0, None)
 
     return base_img
 
@@ -96,7 +126,6 @@ def render_flyer_editor(project_id):
 
     st.subheader("📑 フライヤーセット作成")
     
-    # アーカイブから素材を取得
     logos = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
     bgs = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
     
@@ -107,36 +136,33 @@ def render_flyer_editor(project_id):
     c_conf, c_prev = st.columns([1, 1])
 
     with c_conf:
-        with st.expander("1. 素材選択 (アーカイブより)", expanded=True):
-            # ロゴ選択
+        with st.expander("1. 素材選択", expanded=True):
             logo_opts = {a.id: a.name for a in logos}
             l_idx = 0
             if "flyer_logo_id" in st.session_state and st.session_state.flyer_logo_id in logo_opts:
                 l_idx = list(logo_opts.keys()).index(st.session_state.flyer_logo_id)
             st.selectbox("ロゴ画像", options=logo_opts.keys(), format_func=lambda x: logo_opts[x], key="flyer_logo_id", index=l_idx)
             
-            # 背景選択
             bg_opts = {a.id: a.name for a in bgs}
             b_idx = 0
             if "flyer_bg_id" in st.session_state and st.session_state.flyer_bg_id in bg_opts:
                 b_idx = list(bg_opts.keys()).index(st.session_state.flyer_bg_id)
             st.selectbox("背景画像", options=bg_opts.keys(), format_func=lambda x: bg_opts[x], key="flyer_bg_id", index=b_idx)
             
-            # メイン画像 (アップロード: キャッシュなしで直接変数で受ける)
             st.caption("メイン画像 (タイムテーブル/グリッド)")
             main_file = st.file_uploader("画像をアップロード", type=['png','jpg','webp'])
             if main_file:
                 st.session_state.flyer_main_image_cache = main_file
 
-        with st.expander("2. テキスト情報", expanded=True):
-            # キーを指定してバインド (workspace.pyで初期値ロード済み)
-            st.text_input("開催日表記", key="flyer_date_str")
-            st.text_input("会場表記", key="flyer_venue_str")
+        with st.expander("2. テキスト情報 (その他はイベント概要タブ)", expanded=True):
+            # 項目名を変更
+            st.text_input("サブタイトル", key="flyer_sub_title")
+            st.text_input("入力1 (会場など)", key="flyer_input_1")
             c1, c2 = st.columns(2)
-            with c1: st.text_input("OPEN", key="flyer_open_time")
-            with c2: st.text_input("START", key="flyer_start_time")
-            st.text_area("チケット情報", height=100, key="flyer_ticket_info")
-            st.text_area("注意事項", height=80, key="flyer_notes")
+            with c1: st.text_input("左下 (OPENなど)", key="flyer_bottom_left")
+            with c2: st.text_input("右下 (STARTなど)", key="flyer_bottom_right")
+            
+            st.info("ℹ️ チケット情報や注意事項は「イベント概要」タブで入力してください")
 
         with st.expander("3. デザイン", expanded=False):
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
@@ -148,16 +174,12 @@ def render_flyer_editor(project_id):
             st.color_picker("文字色", key="flyer_text_color")
             st.color_picker("縁取り色", key="flyer_stroke_color")
 
-        # ★修正: 保存ボタン削除 (ワークスペースの「上書き保存」で保存されます)
-        
         # プレビュー更新ボタン
         if st.button("🔄 プレビューを更新", type="primary", use_container_width=True):
-            pass # rerunがかかるので更新される
+            pass 
 
     with c_prev:
         st.markdown("##### プレビュー")
-        
-        # 画像データの準備
         main_img_bytes = main_file if main_file else st.session_state.get("flyer_main_image_cache")
         
         if "flyer_bg_id" in st.session_state and "flyer_logo_id" in st.session_state and main_img_bytes:
@@ -170,16 +192,13 @@ def render_flyer_editor(project_id):
                 
                 if bg_path and logo_path:
                     try:
-                        # セッションステートの値を使って生成
                         font_path = os.path.join(FONT_DIR, st.session_state.get("flyer_font", "keifont.ttf"))
                         img = create_flyer_image(
                             bg_path, logo_path, main_img_bytes,
-                            st.session_state.get("flyer_date_str", ""), 
-                            st.session_state.get("flyer_venue_str", ""),
-                            st.session_state.get("flyer_open_time", ""), 
-                            st.session_state.get("flyer_start_time", ""),
-                            st.session_state.get("flyer_ticket_info", ""), 
-                            st.session_state.get("flyer_notes", ""),
+                            st.session_state.get("flyer_sub_title", ""), 
+                            st.session_state.get("flyer_input_1", ""),
+                            st.session_state.get("flyer_bottom_left", ""), 
+                            st.session_state.get("flyer_bottom_right", ""),
                             font_path, 
                             st.session_state.get("flyer_text_color", "#FFFFFF"), 
                             st.session_state.get("flyer_stroke_color", "#000000")
