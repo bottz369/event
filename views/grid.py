@@ -16,7 +16,7 @@ except ImportError:
     generate_grid_image = None
 
 def render_grid_page():
-    # ★変更: タイトルはワークスペースで出してるので、単独起動時のみ表示
+    # ワークスペース内ではタイトル非表示
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("🖼️ アー写グリッド作成")
 
@@ -97,8 +97,9 @@ def render_grid_page():
             
             # --- 設定エリア ---
             c_set1, c_set2, c_set3 = st.columns(3)
-            with c_set1: st.session_state.grid_rows = st.number_input("行数", min_value=1, value=st.session_state.grid_rows)
-            with c_set2: st.session_state.grid_cols = st.number_input("列数", min_value=1, value=st.session_state.grid_cols)
+            # キーを指定してセッションステートにバインド
+            with c_set1: st.number_input("行数", min_value=1, value=st.session_state.grid_rows, key="grid_rows")
+            with c_set2: st.number_input("列数", min_value=1, value=st.session_state.grid_cols, key="grid_cols")
             with c_set3: 
                 if st.button("リセット"):
                     if proj.data_json:
@@ -131,20 +132,23 @@ def render_grid_page():
                     st.session_state.grid_order = new_flat
                     st.rerun()
 
-            if st.button("💾 配置を保存"):
-                save_d = {"cols": st.session_state.grid_cols, "rows": st.session_state.grid_rows, "order": st.session_state.grid_order}
-                proj.grid_order_json = json.dumps(save_d, ensure_ascii=False)
-                db.commit()
-                st.success("保存しました")
+            # ★修正: 保存ボタン削除 (ワークスペースの「上書き保存」で保存されます)
 
             st.divider()
             
             # --- 画像生成エリア ---
             c_gen1, c_gen2 = st.columns(2)
             with c_gen1:
-                af = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
-                if not af: af = ["keifont.ttf"]
-                sf = st.selectbox("フォント", af, key="grid_font")
+                all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
+                if not all_fonts: all_fonts = ["keifont.ttf"]
+                
+                # 初期値設定 (ワークスペースでロードされた設定があれば反映)
+                f_idx = 0
+                if "grid_font" in st.session_state and st.session_state.grid_font in all_fonts:
+                    f_idx = all_fonts.index(st.session_state.grid_font)
+                
+                # キーを指定してセッションステートにバインド
+                st.selectbox("フォント", all_fonts, index=f_idx, key="grid_font")
             
             with c_gen2:
                 if st.button("🚀 グリッド画像を生成", type="primary"):
@@ -165,10 +169,11 @@ def render_grid_page():
                         else:
                             with st.spinner("生成中..."):
                                 try:
+                                    # 選択されたフォント(st.session_state.grid_font)を使用
                                     img = generate_grid_image(
                                         target_artists, 
                                         IMAGE_DIR, 
-                                        font_path=os.path.join(FONT_DIR, sf), 
+                                        font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
                                         cols=st.session_state.grid_cols
                                     )
                                     
