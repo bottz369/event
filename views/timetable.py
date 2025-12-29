@@ -22,35 +22,52 @@ except ImportError:
     generate_timetable_image = None
 
 def render_timetable_page():
-    st.title("⏱️ タイムテーブル作成")
+    # ★変更: タイトルはワークスペースで出してるので、単独起動時のみ表示
+    if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
+        st.title("⏱️ タイムテーブル作成")
+    
     db = next(get_db())
     
-    # --- プロジェクト選択 (即時反映) ---
-    projects = db.query(TimetableProject).all()
-    projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
+    # --- プロジェクトロードロジック ---
+    selected_id = None
     
-    proj_map = {f"{p.event_date} {p.title}": p.id for p in projects}
-    options = ["(選択してください)"] + list(proj_map.keys())
-    
-    if "tt_current_proj_id" not in st.session_state: st.session_state.tt_current_proj_id = None
-    
-    index = 0
-    if st.session_state.tt_current_proj_id:
-        current_label = next((k for k, v in proj_map.items() if v == st.session_state.tt_current_proj_id), None)
-        if current_label and current_label in options:
-            index = options.index(current_label)
-
-    selected_label = st.selectbox("プロジェクトを選択", options, index=index)
-    
-    if selected_label != "(選択してください)":
-        selected_id = proj_map[selected_label]
+    # パターンA: ワークスペースからIDが渡されている場合
+    if "ws_active_project_id" in st.session_state and st.session_state.ws_active_project_id:
+        selected_id = st.session_state.ws_active_project_id
         
+    # パターンB: 単独起動で、ユーザーがセレクトボックスから選ぶ場合
+    else:
+        projects = db.query(TimetableProject).all()
+        projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
+        
+        proj_map = {f"{p.event_date} {p.title}": p.id for p in projects}
+        options = ["(選択してください)"] + list(proj_map.keys())
+        
+        if "tt_current_proj_id" not in st.session_state: st.session_state.tt_current_proj_id = None
+        
+        index = 0
+        if st.session_state.tt_current_proj_id:
+            current_label = next((k for k, v in proj_map.items() if v == st.session_state.tt_current_proj_id), None)
+            if current_label and current_label in options:
+                index = options.index(current_label)
+
+        selected_label = st.selectbox("プロジェクトを選択", options, index=index)
+        
+        if selected_label != "(選択してください)":
+            selected_id = proj_map[selected_label]
+
+    # --- データロード処理 (IDが決まったら実行) ---
+    if selected_id:
         # IDが変わった場合のみロード（または初回）
-        if st.session_state.tt_current_proj_id != selected_id:
+        if st.session_state.get("tt_current_proj_id") != selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             if proj:
                 st.session_state.tt_title = proj.title
-                st.session_state.tt_event_date = datetime.strptime(proj.event_date, "%Y-%m-%d").date() if proj.event_date else date.today()
+                try:
+                    st.session_state.tt_event_date = datetime.strptime(proj.event_date, "%Y-%m-%d").date() if proj.event_date else date.today()
+                except:
+                    st.session_state.tt_event_date = date.today()
+                    
                 st.session_state.tt_venue = proj.venue_name
                 st.session_state.tt_open_time = proj.open_time or "10:00"
                 st.session_state.tt_start_time = proj.start_time or "10:30"
@@ -58,50 +75,55 @@ def render_timetable_page():
                 
                 # データ展開
                 if proj.data_json:
-                    data = json.loads(proj.data_json)
-                    new_order = []
-                    new_artist_settings = {}
-                    new_row_settings = []
-                    st.session_state.tt_has_pre_goods = False
-                    
-                    for item in data:
-                        name = item["ARTIST"]
-                        if name == "開演前物販":
-                            st.session_state.tt_has_pre_goods = True
-                            st.session_state.tt_pre_goods_settings = {
-                                "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                                "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                                "PLACE": safe_str(item.get("PLACE")),
-                            }
-                            continue
-                        if name == "終演後物販":
-                            st.session_state.tt_post_goods_settings = {
-                                "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                                "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                                "PLACE": safe_str(item.get("PLACE")),
-                            }
-                            continue
+                    try:
+                        data = json.loads(proj.data_json)
+                        new_order = []
+                        new_artist_settings = {}
+                        new_row_settings = []
+                        st.session_state.tt_has_pre_goods = False
                         
-                        new_order.append(name)
-                        new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
-                        new_row_settings.append({
-                            "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
-                            "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                            "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                            "PLACE": safe_str(item.get("PLACE")),
-                            "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
-                            "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
-                            "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
-                            "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
-                        })
-                    
-                    st.session_state.tt_artists_order = new_order
-                    st.session_state.tt_artist_settings = new_artist_settings
-                    st.session_state.tt_row_settings = new_row_settings
-                    st.session_state.rebuild_table_flag = True
+                        for item in data:
+                            name = item["ARTIST"]
+                            if name == "開演前物販":
+                                st.session_state.tt_has_pre_goods = True
+                                st.session_state.tt_pre_goods_settings = {
+                                    "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                                    "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                                    "PLACE": safe_str(item.get("PLACE")),
+                                }
+                                continue
+                            if name == "終演後物販":
+                                st.session_state.tt_post_goods_settings = {
+                                    "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                                    "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                                    "PLACE": safe_str(item.get("PLACE")),
+                                }
+                                continue
+                            
+                            new_order.append(name)
+                            new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
+                            new_row_settings.append({
+                                "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
+                                "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                                "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                                "PLACE": safe_str(item.get("PLACE")),
+                                "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
+                                "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
+                                "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
+                                "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
+                            })
+                        
+                        st.session_state.tt_artists_order = new_order
+                        st.session_state.tt_artist_settings = new_artist_settings
+                        st.session_state.tt_row_settings = new_row_settings
+                        st.session_state.rebuild_table_flag = True
+                    except Exception as e:
+                        st.error(f"データ展開エラー: {e}")
                 
                 st.session_state.tt_current_proj_id = selected_id
-                st.rerun()
+                # ワークスペース以外で選択変更があった場合のみrerun
+                if "ws_active_project_id" not in st.session_state:
+                    st.rerun()
 
     # --- ヘルパー関数 ---
     def force_sync():
