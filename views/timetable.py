@@ -36,18 +36,8 @@ def render_timetable_page():
         projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
         proj_map = {f"{p.event_date} {p.title}": p.id for p in projects}
         options = ["(選択してください)"] + list(proj_map.keys())
-        
-        if "tt_current_proj_id" not in st.session_state: st.session_state.tt_current_proj_id = None
-        
-        index = 0
-        if st.session_state.tt_current_proj_id:
-            current_label = next((k for k, v in proj_map.items() if v == st.session_state.tt_current_proj_id), None)
-            if current_label and current_label in options:
-                index = options.index(current_label)
-
-        selected_label = st.selectbox("プロジェクトを選択", options, index=index)
-        if selected_label != "(選択してください)":
-            selected_id = proj_map[selected_label]
+        selected_label = st.selectbox("プロジェクトを選択", options)
+        if selected_label != "(選択してください)": selected_id = proj_map[selected_label]
 
     if selected_id:
         if st.session_state.get("tt_current_proj_id") != selected_id:
@@ -210,7 +200,7 @@ def render_timetable_page():
             st.subheader(f"📅 {st.session_state.tt_event_date} : {st.session_state.tt_title}")
             st.write(f"**📍 会場:** {st.session_state.tt_venue}")
         with col_info2:
-            st.info("ℹ️ 基本情報の修正は\n「プロジェクト」メニューで")
+            st.info("ℹ️ 基本情報の修正は\n「イベント概要」タブで")
         st.divider()
         
         col_p1, col_p2, col_p3 = st.columns(3)
@@ -399,17 +389,22 @@ def render_timetable_page():
             
             st.divider()
             
-            # --- 保存ボタン削除、フォント設定をセッション管理に変更 ---
+            # --- 画像生成 & 設定エリア (保存ボタン削除済み) ---
             col_a1, col_a2 = st.columns(2)
             with col_a1:
                 all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
                 if not all_fonts: all_fonts = ["keifont.ttf"]
                 
-                # フォント設定 (ワークスペースで保存されるようにキーを設定)
-                f_idx = 0
-                if "tt_font" in st.session_state and st.session_state.tt_font in all_fonts:
-                    f_idx = all_fonts.index(st.session_state.tt_font)
-                st.selectbox("画像用フォント", all_fonts, index=f_idx, key="tt_font")
+                # ★修正: エラー回避のため index 引数を削除
+                # キーがある場合は session_state に初期値をセットして任せる
+                if "tt_font" not in st.session_state:
+                    st.session_state.tt_font = all_fonts[0]
+                
+                # 安全策: session_stateの値がリストにない場合のフォールバック
+                if st.session_state.tt_font not in all_fonts:
+                    st.session_state.tt_font = all_fonts[0]
+
+                st.selectbox("画像用フォント", all_fonts, key="tt_font")
 
             with col_a2:
                 if st.button("🚀 画像生成", use_container_width=True):
