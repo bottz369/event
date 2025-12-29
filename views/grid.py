@@ -16,32 +16,47 @@ except ImportError:
     generate_grid_image = None
 
 def render_grid_page():
-    st.title("🖼️ アー写グリッド作成")
+    # ★変更: タイトルはワークスペースで出してるので、単独起動時のみ表示
+    if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
+        st.title("🖼️ アー写グリッド作成")
+
     db = next(get_db())
     
     if generate_grid_image is None:
         st.error("⚠️ `logic_grid.py` の読み込みに失敗しています。`requirements.txt` に `opencv-python-headless` が含まれているか、またはコードにエラーがないか確認してください。")
 
     try:
-        projects = db.query(TimetableProject).all()
-        projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
+        # --- プロジェクト選択ロジック ---
+        selected_id = None
         
-        col_g1, col_g2 = st.columns([3, 1])
-        with col_g1:
-            p_map = {f"{p.event_date} {p.title}": p.id for p in projects}
-            sel_label = st.selectbox("プロジェクト選択", ["(選択)"] + list(p_map.keys()))
-        
+        # パターンA: ワークスペースからIDが渡されている場合
+        if "ws_active_project_id" in st.session_state and st.session_state.ws_active_project_id:
+            selected_id = st.session_state.ws_active_project_id
+            
+        # パターンB: 単独起動で、ユーザーがセレクトボックスから選ぶ場合
+        else:
+            projects = db.query(TimetableProject).all()
+            projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
+            
+            col_g1, col_g2 = st.columns([3, 1])
+            with col_g1:
+                p_map = {f"{p.event_date} {p.title}": p.id for p in projects}
+                sel_label = st.selectbox("プロジェクト選択", ["(選択)"] + list(p_map.keys()))
+            
+            if sel_label != "(選択)":
+                selected_id = p_map[sel_label]
+
         # セッション初期化
         if "grid_order" not in st.session_state: st.session_state.grid_order = []
         if "grid_cols" not in st.session_state: st.session_state.grid_cols = 5
         if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
         
-        if sel_label != "(選択)":
-            proj_id = p_map[sel_label]
-            proj = db.query(TimetableProject).filter(TimetableProject.id == proj_id).first()
+        # --- データロード & メイン処理 ---
+        if selected_id:
+            proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             
             # プロジェクト変更時にデータをロード
-            if "current_grid_proj_id" not in st.session_state or st.session_state.current_grid_proj_id != proj_id:
+            if "current_grid_proj_id" not in st.session_state or st.session_state.current_grid_proj_id != selected_id:
                 # タイムテーブルからアーティスト名を抽出
                 tt_artists = []
                 if proj.data_json:
@@ -72,7 +87,11 @@ def render_grid_page():
                 else:
                     st.session_state.grid_order = list(reversed(tt_artists))
                 
-                st.session_state.current_grid_proj_id = proj_id
+                st.session_state.current_grid_proj_id = selected_id
+                
+                # ワークスペース以外で選択変更があった場合のみrerun
+                if "ws_active_project_id" not in st.session_state:
+                    st.rerun()
 
             st.divider()
             
