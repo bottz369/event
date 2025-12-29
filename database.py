@@ -47,8 +47,8 @@ class Artist(Base):
     is_deleted = Column(Boolean, default=False)
 
 class TimetableProject(Base):
-    # ★変更点: カラム追加に伴いテーブル名をv3に変更して再作成させます
-    __tablename__ = "projects_v3"
+    # ★重要修正: テーブル名を v4 に変更して、新しいカラム構成で再作成させます
+    __tablename__ = "projects_v4"
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
@@ -65,9 +65,9 @@ class TimetableProject(Base):
     
     tickets_json = Column(Text)    # チケット情報
     free_text_json = Column(Text)  # 自由入力欄
-    flyer_json = Column(Text)      # フライヤー設定（素材IDやテキストなど）
+    flyer_json = Column(Text)      # フライヤー設定
     
-    # ★追加: 画面ごとの細かい設定（フォント選択など）を保存
+    # ★追加された設定保存用カラム
     settings_json = Column(Text)
 
 # ★追加: 素材アーカイブ用テーブル
