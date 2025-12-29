@@ -2,6 +2,7 @@ import streamlit as st
 from datetime import date, datetime
 import json
 from database import get_db, TimetableProject
+from utils import safe_str, safe_int # 追加読み込み
 
 # 各機能の読み込み
 from views.timetable import render_timetable_page 
@@ -15,12 +16,65 @@ def load_project_to_session(proj):
     
     # 基本情報
     st.session_state.proj_title = proj.title
-    try:
-        st.session_state.proj_date = datetime.strptime(proj.event_date, "%Y-%m-%d").date()
-    except:
-        st.session_state.proj_date = date.today()
+    try: st.session_state.proj_date = datetime.strptime(proj.event_date, "%Y-%m-%d").date()
+    except: st.session_state.proj_date = date.today()
     st.session_state.proj_venue = proj.venue_name
     st.session_state.proj_url = proj.venue_url
+
+    # タイムテーブル基本設定
+    st.session_state.tt_open_time = proj.open_time or "10:00"
+    st.session_state.tt_start_time = proj.start_time or "10:30"
+    st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
+
+    # ★重要修正: タイムテーブルデータ(data_json)の展開ロジックを追加
+    # これがないとリロード時にデータが消えたように見えます
+    if proj.data_json:
+        try:
+            data = json.loads(proj.data_json)
+            new_order = []
+            new_artist_settings = {}
+            new_row_settings = []
+            st.session_state.tt_has_pre_goods = False
+            
+            for item in data:
+                name = item["ARTIST"]
+                if name == "開演前物販":
+                    st.session_state.tt_has_pre_goods = True
+                    st.session_state.tt_pre_goods_settings = {
+                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                        "PLACE": safe_str(item.get("PLACE")),
+                    }
+                    continue
+                if name == "終演後物販":
+                    st.session_state.tt_post_goods_settings = {
+                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                        "PLACE": safe_str(item.get("PLACE")),
+                    }
+                    continue
+                
+                new_order.append(name)
+                new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
+                new_row_settings.append({
+                    "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
+                    "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                    "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                    "PLACE": safe_str(item.get("PLACE")),
+                    "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
+                    "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
+                    "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
+                    "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
+                })
+            
+            # セッションに反映
+            st.session_state.tt_artists_order = new_order
+            st.session_state.tt_artist_settings = new_artist_settings
+            st.session_state.tt_row_settings = new_row_settings
+            st.session_state.rebuild_table_flag = True # テーブル再構築フラグをON
+            
+        except Exception as e:
+            print(f"Data load error: {e}")
 
     # 設定のロード
     settings = {}
@@ -30,30 +84,24 @@ def load_project_to_session(proj):
     st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
     st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
     
-    # ★修正: チケット情報のロード (エラー回避)
+    # チケット情報のロード (エラー回避)
     tickets_data = []
     if proj.tickets_json:
         try:
             data = json.loads(proj.tickets_json)
-            if isinstance(data, list):
-                tickets_data = data
+            if isinstance(data, list): tickets_data = data
         except: pass
-    
-    if not tickets_data:
-        tickets_data = [{"name":"", "price":"", "note":""}]
+    if not tickets_data: tickets_data = [{"name":"", "price":"", "note":""}]
     st.session_state.proj_tickets = tickets_data
 
-    # ★修正: 自由記述のロード (エラー回避)
+    # 自由記述のロード (エラー回避)
     free_data = []
     if proj.free_text_json:
         try:
             data = json.loads(proj.free_text_json)
-            if isinstance(data, list):
-                free_data = data
+            if isinstance(data, list): free_data = data
         except: pass
-            
-    if not free_data:
-        free_data = [{"title":"", "content":""}]
+    if not free_data: free_data = [{"title":"", "content":""}]
     st.session_state.proj_free_text = free_data
 
     # フライヤー設定
@@ -111,7 +159,6 @@ def save_current_project(db, project_id):
     if "proj_venue" in st.session_state: proj.venue_name = st.session_state.proj_venue
     if "proj_url" in st.session_state: proj.venue_url = st.session_state.proj_url
     
-    # JSONとして保存
     if "proj_tickets" in st.session_state:
         proj.tickets_json = json.dumps(st.session_state.proj_tickets, ensure_ascii=False)
     if "proj_free_text" in st.session_state:
@@ -287,7 +334,6 @@ def render_workspace_page():
             st.text_input("会場URL", key="proj_url")
         
         st.divider()
-        
         c_tic, c_free = st.columns(2)
         
         # --- チケット情報入力 ---
@@ -296,11 +342,11 @@ def render_workspace_page():
             if "proj_tickets" not in st.session_state:
                 st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
             
-            # ★エラー回避: データが壊れていたらその場で修復
+            # データ修復
             clean_tickets = []
             for t in st.session_state.proj_tickets:
                 if isinstance(t, dict): clean_tickets.append(t)
-                else: clean_tickets.append({"name": str(t), "price":"", "note":""}) # 文字列なら名前に変換
+                else: clean_tickets.append({"name": str(t), "price":"", "note":""})
             st.session_state.proj_tickets = clean_tickets
 
             for i, ticket in enumerate(st.session_state.proj_tickets):
@@ -313,7 +359,6 @@ def render_workspace_page():
                     with cols[2]:
                         ticket["note"] = st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", label_visibility="collapsed", placeholder="ドリンク代別")
                     with cols[3]:
-                        # 1行目は削除不可
                         if i > 0:
                             if st.button("🗑️", key=f"del_t_{i}"):
                                 st.session_state.proj_tickets.pop(i)
@@ -329,7 +374,6 @@ def render_workspace_page():
             if "proj_free_text" not in st.session_state:
                 st.session_state.proj_free_text = [{"title":"", "content":""}]
             
-            # ★エラー回避: データ修復
             clean_free = []
             for f in st.session_state.proj_free_text:
                 if isinstance(f, dict): clean_free.append(f)
@@ -342,7 +386,6 @@ def render_workspace_page():
                     with c_head:
                         item["title"] = st.text_input("タイトル", value=item.get("title",""), key=f"f_title_{i}", placeholder="注意事項")
                     with c_btn:
-                        # 1行目は削除不可
                         if i > 0:
                             if st.button("🗑️", key=f"del_f_{i}"):
                                 st.session_state.proj_free_text.pop(i)
