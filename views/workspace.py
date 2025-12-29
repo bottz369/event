@@ -2,7 +2,7 @@ import streamlit as st
 from datetime import date, datetime
 import json
 from database import get_db, TimetableProject
-from utils import safe_str, safe_int # 追加読み込み
+from utils import safe_int, safe_str
 
 # 各機能の読み込み
 from views.timetable import render_timetable_page 
@@ -16,8 +16,10 @@ def load_project_to_session(proj):
     
     # 基本情報
     st.session_state.proj_title = proj.title
-    try: st.session_state.proj_date = datetime.strptime(proj.event_date, "%Y-%m-%d").date()
-    except: st.session_state.proj_date = date.today()
+    try:
+        st.session_state.proj_date = datetime.strptime(proj.event_date, "%Y-%m-%d").date()
+    except:
+        st.session_state.proj_date = date.today()
     st.session_state.proj_venue = proj.venue_name
     st.session_state.proj_url = proj.venue_url
 
@@ -26,8 +28,7 @@ def load_project_to_session(proj):
     st.session_state.tt_start_time = proj.start_time or "10:30"
     st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
 
-    # ★重要修正: タイムテーブルデータ(data_json)の展開ロジックを追加
-    # これがないとリロード時にデータが消えたように見えます
+    # ★タイムテーブルデータのロード
     if proj.data_json:
         try:
             data = json.loads(proj.data_json)
@@ -37,7 +38,7 @@ def load_project_to_session(proj):
             st.session_state.tt_has_pre_goods = False
             
             for item in data:
-                name = item["ARTIST"]
+                name = item.get("ARTIST")
                 if name == "開演前物販":
                     st.session_state.tt_has_pre_goods = True
                     st.session_state.tt_pre_goods_settings = {
@@ -54,24 +55,25 @@ def load_project_to_session(proj):
                     }
                     continue
                 
-                new_order.append(name)
-                new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
-                new_row_settings.append({
-                    "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
-                    "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                    "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                    "PLACE": safe_str(item.get("PLACE")),
-                    "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
-                    "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
-                    "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
-                    "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
-                })
+                if name:
+                    new_order.append(name)
+                    new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
+                    new_row_settings.append({
+                        "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
+                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                        "PLACE": safe_str(item.get("PLACE")),
+                        "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
+                        "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
+                        "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
+                        "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
+                    })
             
             # セッションに反映
             st.session_state.tt_artists_order = new_order
             st.session_state.tt_artist_settings = new_artist_settings
             st.session_state.tt_row_settings = new_row_settings
-            st.session_state.rebuild_table_flag = True # テーブル再構築フラグをON
+            st.session_state.rebuild_table_flag = True 
             
         except Exception as e:
             print(f"Data load error: {e}")
@@ -84,7 +86,7 @@ def load_project_to_session(proj):
     st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
     st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
     
-    # チケット情報のロード (エラー回避)
+    # チケット情報のロード
     tickets_data = []
     if proj.tickets_json:
         try:
@@ -94,7 +96,7 @@ def load_project_to_session(proj):
     if not tickets_data: tickets_data = [{"name":"", "price":"", "note":""}]
     st.session_state.proj_tickets = tickets_data
 
-    # 自由記述のロード (エラー回避)
+    # 自由記述のロード
     free_data = []
     if proj.free_text_json:
         try:
@@ -143,13 +145,13 @@ def load_project_to_session(proj):
     if not grid_loaded and proj.data_json:
         try:
             d = json.loads(proj.data_json)
-            tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+            tt_artists = [i.get("ARTIST") for i in d if i.get("ARTIST") not in ["開演前物販", "終演後物販"]]
             st.session_state.grid_order = list(reversed(tt_artists))
             if "grid_cols" not in st.session_state: st.session_state.grid_cols = 5
             if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
         except: pass
 
-# --- 保存処理 ---
+# --- 保存処理 (強化版) ---
 def save_current_project(db, project_id):
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     if not proj: return False
@@ -164,8 +166,53 @@ def save_current_project(db, project_id):
     if "proj_free_text" in st.session_state:
         proj.free_text_json = json.dumps(st.session_state.proj_free_text, ensure_ascii=False)
 
+    # ★タイムテーブルデータの保存ロジック強化
+    # binding_df があればそれを使うが、なければ(他タブから保存した場合など) session_state の情報から構築する
+    save_data = []
+    
+    # 優先: binding_df が存在して空でない場合
     if "binding_df" in st.session_state and not st.session_state.binding_df.empty:
         save_data = st.session_state.binding_df.to_dict(orient="records")
+    
+    # フォールバック: binding_df がない場合、セッション変数から再構築
+    elif "tt_artists_order" in st.session_state and st.session_state.tt_artists_order:
+        # 開演前物販
+        if st.session_state.get("tt_has_pre_goods"):
+            p = st.session_state.get("tt_pre_goods_settings", {})
+            save_data.append({
+                "ARTIST": "開演前物販", "DURATION": 0, "ADJUSTMENT": 0, "IS_POST_GOODS": False,
+                "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
+                "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": ""
+            })
+        
+        # アーティスト
+        for i, name in enumerate(st.session_state.tt_artists_order):
+            ad = st.session_state.tt_artist_settings.get(name, {"DURATION": 20})
+            # row_settings が足りない場合のガード
+            if i < len(st.session_state.tt_row_settings):
+                rd = st.session_state.tt_row_settings[i]
+            else:
+                rd = {} # デフォルト
+            
+            save_data.append({
+                "ARTIST": name, "DURATION": safe_int(ad.get("DURATION"), 20),
+                "IS_POST_GOODS": bool(rd.get("IS_POST_GOODS", False)), "ADJUSTMENT": safe_int(rd.get("ADJUSTMENT"), 0),
+                "GOODS_START_MANUAL": safe_str(rd.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(rd.get("GOODS_DURATION"), 60), "PLACE": safe_str(rd.get("PLACE")),
+                "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE"))
+            })
+            
+        # 終演後物販
+        has_post = any(x.get("IS_POST_GOODS") for x in save_data)
+        if has_post:
+            p = st.session_state.get("tt_post_goods_settings", {})
+            save_data.append({
+                "ARTIST": "終演後物販", "DURATION": 0, "ADJUSTMENT": 0, "IS_POST_GOODS": False,
+                "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
+                "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": ""
+            })
+
+    # データがあれば保存
+    if save_data:
         proj.data_json = json.dumps(save_data, ensure_ascii=False)
     
     if "tt_open_time" in st.session_state: proj.open_time = st.session_state.tt_open_time
