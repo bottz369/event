@@ -5,29 +5,25 @@ import time
 from PIL import Image
 from database import get_db, Artist, upload_image_to_supabase, get_image_url
 
-# ★追加: グリッド作成ロジックから画像処理関数を借りてくる
+# 画像処理ロジックの読み込み
 try:
     from logic_grid import (
         load_image_from_url, crop_smart, create_no_image_placeholder
     )
-    # logic_gridが読み込めたかどうかフラグ
     HAS_LOGIC = True
 except ImportError:
     HAS_LOGIC = False
 
-# ★追加: 画像処理をキャッシュ化して高速化
-# (show_spinner=False にして裏で処理させる)
+# 画像処理をキャッシュ化して高速化
 @st.cache_data(show_spinner=False)
 def get_processed_thumbnail(image_filename):
     """
     画像を読み込み、アー写グリッドと同じ比率(16:9)で顔認識クロップを行う。
     画像がない場合はNo Image画像を生成して返す。
     """
-    # 表示用サイズ (16:9)
     target_w, target_h = 400, 225
 
     if not HAS_LOGIC:
-        # ロジックがない場合のフォールバック（ただの黒画像）
         return Image.new("RGB", (target_w, target_h), (50, 50, 50))
 
     if image_filename:
@@ -35,13 +31,9 @@ def get_processed_thumbnail(image_filename):
         if url:
             img = load_image_from_url(url)
             if img:
-                # 顔認識スマートクロップを実行
-                # (logic_grid.py の設定サイズでクロップされる)
                 cropped = crop_smart(img)
-                # 管理画面用にリサイズして返す
                 return cropped.resize((target_w, target_h), Image.LANCZOS)
     
-    # 画像がない、またはエラー等の場合はNo Image画像を生成
     return create_no_image_placeholder(target_w, target_h)
 
 def render_artists_page():
@@ -49,7 +41,6 @@ def render_artists_page():
     db = next(get_db())
     if "editing_artist_id" not in st.session_state: st.session_state.editing_artist_id = None
 
-    # 対応拡張子リスト
     ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif']
 
     try:
@@ -76,7 +67,6 @@ def render_artists_page():
 
         st.divider()
         
-        # アーティスト一覧取得
         artists = db.query(Artist).filter(Artist.is_deleted==False).order_by(Artist.name).all()
         if not artists: st.info("なし")
         
@@ -97,8 +87,6 @@ def render_artists_page():
                                         ext = os.path.splitext(ef.name)[1].lower()
                                         fn = f"{uuid.uuid4()}{ext}"
                                         upload_image_to_supabase(ef, fn)
-                                        # 画像が更新されたらキャッシュをクリアしたいが、
-                                        # 個別のクリアは難しいのでファイル名変更で対応
                                     a.name = en; a.image_filename = fn; db.commit()
                                     st.session_state.editing_artist_id = None; st.rerun()
                         with c2:
@@ -107,11 +95,24 @@ def render_artists_page():
                     
                     # --- 通常表示モード ---
                     else:
-                        # ★ここを変更: 画像処理関数を通して表示
                         thumb = get_processed_thumbnail(a.image_filename)
                         st.image(thumb, use_container_width=True)
                         
-                        st.subheader(a.name)
+                        # ★ここを変更: CSSを使って改行禁止＆省略表示(...)にする
+                        # title属性を入れているので、マウスオーバーすると全文字出ます
+                        st.markdown(f"""
+                        <div style="
+                            white-space: nowrap; 
+                            overflow: hidden; 
+                            text-overflow: ellipsis; 
+                            font-size: 1.2rem; 
+                            font-weight: bold;
+                            margin-bottom: 10px;
+                        " title="{a.name}">
+                            {a.name}
+                        </div>
+                        """, unsafe_allow_html=True)
+
                         c1, c2 = st.columns(2)
                         with c1:
                             if st.button("編集", key=f"ed_{a.id}"):
