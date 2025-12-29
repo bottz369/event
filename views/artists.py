@@ -33,6 +33,41 @@ def render_artists_page():
 
         st.divider()
         artists = db.query(Artist).filter(Artist.is_deleted==False).order_by(Artist.name).all()
-        # ... (以下、元の表示コード) ...
+        if not artists: st.info("なし")
+        
+        cols = st.columns(3)
+        for i, a in enumerate(artists):
+            with cols[i%3]:
+                with st.container(border=True):
+                    if st.session_state.editing_artist_id == a.id:
+                        en = st.text_input("名前", a.name, key=f"en_{a.id}")
+                        ef = st.file_uploader("画像変更", type=['jpg','png'], key=f"ef_{a.id}")
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("保存", key=f"sv_{a.id}"):
+                                if en:
+                                    fn = a.image_filename
+                                    if ef:
+                                        ext = os.path.splitext(ef.name)[1]
+                                        fn = f"{uuid.uuid4()}{ext}"
+                                        upload_image_to_supabase(ef, fn)
+                                    a.name = en; a.image_filename = fn; db.commit()
+                                    st.session_state.editing_artist_id = None; st.rerun()
+                        with c2:
+                            if st.button("中止", key=f"cn_{a.id}"):
+                                st.session_state.editing_artist_id = None; st.rerun()
+                    else:
+                        if a.image_filename:
+                            u = get_image_url(a.image_filename)
+                            if u: st.image(u, use_container_width=True)
+                        st.subheader(a.name)
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("編集", key=f"ed_{a.id}"):
+                                st.session_state.editing_artist_id = a.id; st.rerun()
+                        with c2:
+                            if st.button("削除", key=f"dl_{a.id}"):
+                                a.is_deleted = True; a.name = f"{a.name}_del_{int(time.time())}"
+                                db.commit(); st.rerun()
     finally:
         db.close()
