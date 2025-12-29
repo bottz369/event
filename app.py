@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 from datetime import date
 from database import init_db
 from constants import get_default_row_settings
@@ -6,7 +7,6 @@ from views.projects import render_projects_page
 from views.timetable import render_timetable_page
 from views.grid import render_grid_page
 from views.artists import render_artists_page
-import pandas as pd
 
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
