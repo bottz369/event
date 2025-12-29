@@ -47,15 +47,13 @@ class Artist(Base):
     is_deleted = Column(Boolean, default=False)
 
 class TimetableProject(Base):
-    # ★変更点: テーブル名を変更して新しく作り直します（旧データとの衝突回避）
-    __tablename__ = "projects_v2"
+    # ★変更点: カラム追加に伴いテーブル名をv3に変更して再作成させます
+    __tablename__ = "projects_v3"
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
     event_date = Column(String)
     venue_name = Column(String)
-    
-    # ★追加: 会場URL
     venue_url = Column(String)
     
     open_time = Column(String)
@@ -65,9 +63,20 @@ class TimetableProject(Base):
     data_json = Column(Text)       # タイムテーブルデータ
     grid_order_json = Column(Text) # アー写グリッド順序
     
-    # ★追加: チケット情報と自由入力欄（JSON形式で保存）
-    tickets_json = Column(Text)
-    free_text_json = Column(Text)
+    tickets_json = Column(Text)    # チケット情報
+    free_text_json = Column(Text)  # 自由入力欄
+    
+    # ★追加: フライヤー作成の設定保存用
+    flyer_json = Column(Text)
+
+# ★追加: 素材アーカイブ用テーブル
+class Asset(Base):
+    __tablename__ = "assets"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)         # 表示名（例: "メインロゴ_白"）
+    asset_type = Column(String)   # "logo" or "background"
+    image_filename = Column(String)
+    is_deleted = Column(Boolean, default=False)
 
 class FavoriteFont(Base):
     __tablename__ = "favorite_fonts"
@@ -95,10 +104,14 @@ def upload_image_to_supabase(file_obj, filename):
     """画像をSupabase Storageにアップロードし、ファイル名を返す"""
     try:
         file_bytes = file_obj.getvalue()
+        # 拡張子に応じたContent-Typeの設定
         content_type = "image/png"
-        if filename.lower().endswith(".jpg") or filename.lower().endswith(".jpeg"):
+        lower_name = filename.lower()
+        if lower_name.endswith(".jpg") or lower_name.endswith(".jpeg"):
             content_type = "image/jpeg"
-            
+        elif lower_name.endswith(".webp"):
+            content_type = "image/webp"
+        
         res = supabase.storage.from_(BUCKET_NAME).upload(
             path=filename,
             file=file_bytes,
