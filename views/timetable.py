@@ -103,14 +103,106 @@ def render_timetable_page():
                 st.session_state.tt_current_proj_id = selected_id
                 st.rerun()
 
-    # Callback helpers
+    # --- ヘルパー関数 ---
     def force_sync():
         st.session_state.tt_unsaved_changes = True 
     def mark_dirty():
         st.session_state.tt_unsaved_changes = True
 
-    # --- CSVインポートロジック (長いので元のコード参照またはutilsへ移動推奨だがここでは省略して元のロジックを埋め込み) ---
-    # ※ 省略せず実装する場合は、元の `import_csv_callback` 関数をここに配置してください。
+    # --- CSVインポートロジック ---
+    def import_csv_callback():
+        uploaded = st.session_state.get("csv_upload_key")
+        if not uploaded: return
+        try:
+            uploaded.seek(0)
+            try:
+                df_csv = pd.read_csv(uploaded)
+            except UnicodeDecodeError:
+                uploaded.seek(0)
+                df_csv = pd.read_csv(uploaded, encoding="cp932")
+            
+            df_csv.columns = [c.strip() for c in df_csv.columns]
+            
+            # 自動登録ロジック
+            temp_db = SessionLocal()
+            try:
+                artists_to_check = []
+                if "グループ名" in df_csv.columns:
+                    artists_to_check = [str(row.get("グループ名", "")).strip() for _, row in df_csv.iterrows()]
+                else:
+                    artist_col = next((c for c in df_csv.columns if c.lower() == "artist"), None)
+                    if not artist_col: artist_col = df_csv.columns[0]
+                    artists_to_check = [str(row[artist_col]).strip() for _, row in df_csv.iterrows()]
+                
+                artists_to_check = list(set([a for a in artists_to_check if a and a != "nan"]))
+
+                for artist_name in artists_to_check:
+                    existing = temp_db.query(Artist).filter(Artist.name == artist_name).first()
+                    if not existing:
+                        new_artist = Artist(name=artist_name, image_filename=None)
+                        temp_db.add(new_artist)
+                temp_db.commit()
+            except Exception as e:
+                print(f"Auto reg error: {e}")
+            finally:
+                temp_db.close()
+            
+            # 読み込み処理
+            new_order = []
+            new_artist_settings = {}
+            new_row_settings = []
+            
+            if "グループ名" in df_csv.columns:
+                for i, row in df_csv.iterrows():
+                    name = str(row.get("グループ名", ""))
+                    if name == "nan" or not name: continue 
+                    duration = safe_int(row.get("持ち時間"), 20)
+                    adjustment = 0
+                    if i < len(df_csv) - 1:
+                        current_end = str(row.get("END", "")).strip()
+                        next_start = str(df_csv.iloc[i+1].get("START", "")).strip()
+                        if current_end and next_start:
+                            adjustment = get_duration_minutes(current_end, next_start)
+                            if adjustment < 0: adjustment = 0
+                    
+                    new_order.append(name)
+                    new_artist_settings[name] = {"DURATION": duration}
+                    new_row_settings.append({
+                        "ADJUSTMENT": adjustment,
+                        "GOODS_START_MANUAL": safe_str(row.get("物販開始")),
+                        "GOODS_DURATION": safe_int(row.get("物販時間"), 60),
+                        "PLACE": safe_str(row.get("物販場所", "A")),
+                        "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": "",
+                        "IS_POST_GOODS": False
+                    })
+            else:
+                for _, row in df_csv.iterrows():
+                    artist_col = next((c for c in df_csv.columns if c.lower() == "artist"), None)
+                    if not artist_col: artist_col = df_csv.columns[0]
+                    name = str(row[artist_col])
+                    if name == "nan": continue
+                    new_order.append(name)
+                    new_artist_settings[name] = {"DURATION": safe_int(row.get('Duration'), 20)}
+                    new_row_settings.append({
+                        "ADJUSTMENT": safe_int(row.get('Adjustment'), 0),
+                        "GOODS_START_MANUAL": safe_str(row.get('GoodsStart')),
+                        "GOODS_DURATION": safe_int(row.get('GoodsDuration'), 60),
+                        "PLACE": safe_str(row.get('Place', "A")),
+                        "ADD_GOODS_START": safe_str(row.get('AddGoodsStart')),
+                        "ADD_GOODS_DURATION": safe_int(row.get('AddGoodsDuration'), None),
+                        "ADD_GOODS_PLACE": safe_str(row.get('AddGoodsPlace')),
+                        "IS_POST_GOODS": bool(row.get('IS_POST_GOODS', False))
+                    })
+
+            st.session_state.tt_artists_order = new_order
+            st.session_state.tt_artist_settings = new_artist_settings
+            st.session_state.tt_row_settings = new_row_settings
+            st.session_state.rebuild_table_flag = True 
+            st.session_state.tt_unsaved_changes = True
+            
+            st.success("CSVを読み込みました")
+        except Exception as e:
+            st.error(f"読み込みエラー: {e}")
 
     # --- UI描画 ---
     if st.session_state.tt_current_proj_id:
@@ -137,7 +229,13 @@ def render_timetable_page():
             st.session_state.request_calc = True
             mark_dirty()
 
-        # --- エディタとロジック (以下、元のコードと同じ) ---
+        with st.expander("📂 CSVから構成を読み込む"):
+            st.file_uploader("CSVファイル", key="csv_upload_key")
+            st.button("CSV反映", on_click=import_csv_callback)
+
+        st.divider()
+
+        # --- エディタとロジック ---
         col_ui_left, col_ui_right = st.columns([1, 2.5])
         
         with col_ui_left:
@@ -256,9 +354,68 @@ def render_timetable_page():
                 hide_index=True, on_change=force_sync
             )
             
-            # --- 保存処理 & 計算ロジック (省略せずコピーしてください) ---
-            # ... (元のコードの Data Editor 後の処理ブロックをここに配置) ...
+            # --- 編集内容の保存ロジック ---
+            new_row_settings_from_edit = []
+            current_has_post_check = False
+            for i, row in edited_df.iterrows():
+                name = row["ARTIST"]
+                is_post = bool(row.get("IS_POST_GOODS", False))
+                
+                if name == "開演前物販":
+                    dur = get_duration_minutes(st.session_state.tt_open_time, st.session_state.tt_start_time)
+                    st.session_state.tt_pre_goods_settings = {"GOODS_START_MANUAL": st.session_state.tt_open_time, "GOODS_DURATION": dur, "PLACE": ""}
+                    continue
+                if name == "終演後物販":
+                    st.session_state.tt_post_goods_settings = {"GOODS_START_MANUAL": safe_str(row["GOODS_START_MANUAL"]), "GOODS_DURATION": safe_int(row["GOODS_DURATION"], 60), "PLACE": ""}
+                    continue
+                
+                if is_post: current_has_post_check = True
+                st.session_state.tt_artist_settings[name] = {"DURATION": safe_int(row["DURATION"], 20)}
+                
+                g_start = safe_str(row["GOODS_START_MANUAL"])
+                g_dur = safe_int(row["GOODS_DURATION"], 60)
+                add_start = safe_str(row["ADD_GOODS_START"])
+                add_dur = safe_int(row["ADD_GOODS_DURATION"], None)
+                add_place = safe_str(row["ADD_GOODS_PLACE"])
+                
+                if is_post:
+                    g_start = ""; g_dur = 60; add_start = ""; add_dur = None; add_place = ""
+
+                new_row_settings_from_edit.append({
+                    "ADJUSTMENT": safe_int(row["ADJUSTMENT"], 0),
+                    "GOODS_START_MANUAL": g_start, "GOODS_DURATION": g_dur, "PLACE": safe_str(row["PLACE"]),
+                    "ADD_GOODS_START": add_start, "ADD_GOODS_DURATION": add_dur, "ADD_GOODS_PLACE": add_place,
+                    "IS_POST_GOODS": is_post
+                })
             
+            if len(new_row_settings_from_edit) == len(st.session_state.tt_artists_order):
+                st.session_state.tt_row_settings = new_row_settings_from_edit
+            
+            row_exists = any(r["ARTIST"] == "終演後物販" for r in st.session_state.binding_df.to_dict("records"))
+            if (current_has_post_check and not row_exists) or (not current_has_post_check and row_exists):
+                st.session_state.rebuild_table_flag = True; mark_dirty(); st.rerun()
+
+            if st.session_state.request_calc:
+                curr = datetime.strptime(st.session_state.tt_start_time, "%H:%M")
+                for i, name in enumerate(st.session_state.tt_artists_order):
+                    if i >= len(st.session_state.tt_row_settings): break
+                    rd = st.session_state.tt_row_settings[i]
+                    dur = st.session_state.tt_artist_settings[name].get("DURATION", 20)
+                    
+                    end_obj = curr + timedelta(minutes=dur)
+                    if not rd.get("IS_POST_GOODS", False):
+                        g_start_obj = end_obj + timedelta(minutes=st.session_state.tt_goods_offset)
+                        rd["GOODS_START_MANUAL"] = g_start_obj.strftime("%H:%M")
+                        st.session_state.tt_row_settings[i] = rd
+                    
+                    curr = end_obj + timedelta(minutes=rd.get("ADJUSTMENT", 0))
+                
+                if current_has_post_check:
+                    st.session_state.tt_post_goods_settings["GOODS_START_MANUAL"] = curr.strftime("%H:%M")
+                
+                st.session_state.rebuild_table_flag = True; st.session_state.tt_editor_key += 1
+                st.session_state.request_calc = False; st.success("計算完了"); st.rerun()
+
             # --- 結果表示 ---
             calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
             st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], use_container_width=True, hide_index=True)
