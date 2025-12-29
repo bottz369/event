@@ -30,34 +30,31 @@ def load_project_to_session(proj):
     st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
     st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
     
-    # ★重要修正: チケット情報のロード (型チェックと自動修復)
-    tickets_valid = False
+    # ★修正: チケット情報のロード (エラー回避)
+    tickets_data = []
     if proj.tickets_json:
         try:
             data = json.loads(proj.tickets_json)
-            if isinstance(data, list) and len(data) > 0:
-                # 中身が辞書かチェック
-                if all(isinstance(x, dict) for x in data):
-                    st.session_state.proj_tickets = data
-                    tickets_valid = True
+            if isinstance(data, list):
+                tickets_data = data
         except: pass
     
-    if not tickets_valid:
-        st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
+    if not tickets_data:
+        tickets_data = [{"name":"", "price":"", "note":""}]
+    st.session_state.proj_tickets = tickets_data
 
-    # ★重要修正: 自由記述のロード (型チェックと自動修復)
-    free_valid = False
+    # ★修正: 自由記述のロード (エラー回避)
+    free_data = []
     if proj.free_text_json:
         try:
             data = json.loads(proj.free_text_json)
-            if isinstance(data, list) and len(data) > 0:
-                if all(isinstance(x, dict) for x in data):
-                    st.session_state.proj_free_text = data
-                    free_valid = True
+            if isinstance(data, list):
+                free_data = data
         except: pass
             
-    if not free_valid:
-        st.session_state.proj_free_text = [{"title":"", "content":""}]
+    if not free_data:
+        free_data = [{"title":"", "content":""}]
+    st.session_state.proj_free_text = free_data
 
     # フライヤー設定
     flyer_settings = {}
@@ -293,18 +290,20 @@ def render_workspace_page():
         
         c_tic, c_free = st.columns(2)
         
-        # --- チケット情報入力 (ガード処理付き) ---
+        # --- チケット情報入力 ---
         with c_tic:
             st.subheader("チケット情報")
             if "proj_tickets" not in st.session_state:
                 st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
             
-            for i, ticket in enumerate(st.session_state.proj_tickets):
-                # ★AttributeError回避: 辞書型でない場合は強制初期化
-                if not isinstance(ticket, dict):
-                    ticket = {"name":"", "price":"", "note":""}
-                    st.session_state.proj_tickets[i] = ticket
+            # ★エラー回避: データが壊れていたらその場で修復
+            clean_tickets = []
+            for t in st.session_state.proj_tickets:
+                if isinstance(t, dict): clean_tickets.append(t)
+                else: clean_tickets.append({"name": str(t), "price":"", "note":""}) # 文字列なら名前に変換
+            st.session_state.proj_tickets = clean_tickets
 
+            for i, ticket in enumerate(st.session_state.proj_tickets):
                 with st.container(border=True):
                     cols = st.columns([3, 2, 4, 1])
                     with cols[0]:
@@ -324,18 +323,20 @@ def render_workspace_page():
                 st.session_state.proj_tickets.append({"name":"", "price":"", "note":""})
                 st.rerun()
 
-        # --- 自由記述入力 (ガード処理付き) ---
+        # --- 自由記述入力 ---
         with c_free:
             st.subheader("自由記述 (注意事項など)")
             if "proj_free_text" not in st.session_state:
                 st.session_state.proj_free_text = [{"title":"", "content":""}]
             
-            for i, item in enumerate(st.session_state.proj_free_text):
-                # ★AttributeError回避
-                if not isinstance(item, dict):
-                    item = {"title":"", "content":""}
-                    st.session_state.proj_free_text[i] = item
+            # ★エラー回避: データ修復
+            clean_free = []
+            for f in st.session_state.proj_free_text:
+                if isinstance(f, dict): clean_free.append(f)
+                else: clean_free.append({"title": str(f), "content":""})
+            st.session_state.proj_free_text = clean_free
 
+            for i, item in enumerate(st.session_state.proj_free_text):
                 with st.container(border=True):
                     c_head, c_btn = st.columns([5, 1])
                     with c_head:
