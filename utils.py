@@ -328,3 +328,51 @@ def create_project_assets_zip(project, db, Asset):
 
     zip_buffer.seek(0)
     return zip_buffer
+
+# --- utils.py の末尾に追加 ---
+
+from PIL import Image, ImageDraw, ImageFont
+import os
+
+def create_font_specimen_img(font_dir, font_list):
+    """
+    指定されたフォントリストの見本画像を生成する
+    """
+    if not font_list:
+        return None
+
+    # 設定
+    row_height = 60
+    margin = 20
+    img_width = 600
+    img_height = (row_height * len(font_list)) + (margin * 2)
+    
+    # キャンバス作成
+    canvas = Image.new("RGB", (img_width, img_height), (255, 255, 255))
+    draw = ImageDraw.Draw(canvas)
+    
+    try:
+        # デフォルトのラベル用フォント
+        label_font = ImageFont.load_default()
+    except:
+        label_font = None
+
+    y = margin
+    sample_text = "あいう ABC 123"
+
+    for font_filename in font_list:
+        font_path = os.path.join(font_dir, font_filename)
+        
+        # 1. フォント名を描画 (左側・小さめ)
+        draw.text((margin, y + 15), font_filename, fill=(100, 100, 100), font=label_font)
+        
+        # 2. サンプルテキストを描画 (右側・指定フォント)
+        try:
+            custom_font = ImageFont.truetype(font_path, 36)
+            draw.text((250, y), sample_text, fill=(0, 0, 0), font=custom_font)
+        except:
+            draw.text((250, y), "Load Error", fill=(255, 0, 0), font=label_font)
+            
+        y += row_height
+
+    return canvas
