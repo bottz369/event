@@ -45,7 +45,6 @@ def render_grid_page():
         if "grid_alignment" not in st.session_state: st.session_state.grid_alignment = "中央揃え"
         if "grid_layout_mode" not in st.session_state: st.session_state.grid_layout_mode = "レンガ (サイズ統一)"
         
-        # 生成時の設定を保存する変数を初期化
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
         if selected_id:
@@ -162,7 +161,13 @@ def render_grid_page():
             if not all_fonts: all_fonts = ["keifont.ttf"]
             
             if "grid_font" not in st.session_state: st.session_state.grid_font = all_fonts[0]
-            st.selectbox("プレビュー用フォント", all_fonts, key="grid_font")
+            
+            # ★修正ポイント: 現在のフォントがリストの何番目にあるかを探し、indexを指定する
+            current_font_index = 0
+            if st.session_state.grid_font in all_fonts:
+                current_font_index = all_fonts.index(st.session_state.grid_font)
+            
+            st.selectbox("プレビュー用フォント", all_fonts, index=current_font_index, key="grid_font")
             
             # 設定スナップショット
             current_params = {
@@ -203,7 +208,6 @@ def render_grid_page():
                                     st.session_state.last_generated_grid_image = img
                                     st.session_state.grid_last_generated_params = current_params
                                     
-                                    # ★重要: DBへも保存（オートセーブ）
                                     if save_current_project(db, selected_id):
                                         st.toast("保存＆プレビュー更新完了！", icon="✅")
                                     else:
@@ -215,27 +219,22 @@ def render_grid_page():
                 else:
                     st.error("ロジックエラー")
 
-            # =================================================================
-            # ★判定ロジック改善: 画像があるなら常に表示する
-            # =================================================================
+            # 判定ロジック
             is_outdated = False
             if st.session_state.get("grid_last_generated_params") is None:
                 is_outdated = True
             elif st.session_state.grid_last_generated_params != current_params:
                 is_outdated = True
             
-            # 生成済みの画像がある場合（最優先で表示）
             if st.session_state.get("last_generated_grid_image"):
                 if is_outdated:
-                    # 設定が変わっている場合は警告を出すが、画像は消さない
                     st.warning("⚠️ 設定が変更されています。最新の状態にするには「設定反映」ボタンを押してください。")
-                    st.caption("👇 前回生成時のプレビュー（現在の設定とは異なる可能性があります）")
+                    st.caption("👇 前回生成時のプレビュー")
                 else:
                     st.caption("👇 現在のプレビュー")
                 
                 st.image(st.session_state.last_generated_grid_image, use_container_width=True)
             
-            # 画像がまだない場合
             elif is_outdated:
                  st.info("👆 設定を行ったら「設定反映」ボタンを押してプレビューを生成してください。")
 
