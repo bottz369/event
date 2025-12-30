@@ -10,8 +10,6 @@ from constants import (
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf
-
-# 保存ロジックをインポート
 from logic_project import save_current_project
 
 try:
@@ -391,14 +389,20 @@ def render_timetable_page():
             
             st.divider()
 
-            # --- ★追加: 画像生成・プレビューエリア (Grid画面と統一) ---
+            # --- ★追加: 画像生成・プレビューエリア ---
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["keifont.ttf"]
             
             if "tt_font" not in st.session_state: st.session_state.tt_font = all_fonts[0]
-            st.selectbox("プレビュー用フォント", all_fonts, key="tt_font")
             
-            # 設定スナップショット (フォント変更などの検知用)
+            # ★修正ポイント: 現在のフォントがリストの何番目にあるかを探し、indexを指定する
+            current_font_index = 0
+            if st.session_state.tt_font in all_fonts:
+                current_font_index = all_fonts.index(st.session_state.tt_font)
+                
+            st.selectbox("プレビュー用フォント", all_fonts, index=current_font_index, key="tt_font")
+            
+            # 設定スナップショット
             current_tt_params = {
                 "gen_list": gen_list,
                 "font": st.session_state.tt_font
@@ -431,7 +435,7 @@ def render_timetable_page():
                     st.error("ロジックエラー: generate_timetable_image がロードされていません")
 
             # =================================================================
-            # ★判定ロジック改善: 画像があるなら常に表示する
+            # ★判定ロジック
             # =================================================================
             is_outdated = False
             if st.session_state.tt_last_generated_params is None:
