@@ -1,8 +1,54 @@
 import streamlit as st
+from datetime import datetime
+from logic_project import save_current_project
+
+def generate_event_text():
+    """イベント概要をテキスト形式で生成する（SNS投稿用など）"""
+    title = st.session_state.get("proj_title", "")
+    date_val = st.session_state.get("proj_date")
+    venue = st.session_state.get("proj_venue", "")
+    url = st.session_state.get("proj_url", "")
+    
+    date_str = date_val.strftime("%Y年%m月%d日") if date_val else ""
+    open_t = st.session_state.get("tt_open_time", "10:00")
+    start_t = st.session_state.get("tt_start_time", "10:30")
+    
+    text = f"""【イベント情報】
+{date_str}
+『{title}』
+会場: {venue}
+OPEN {open_t} / START {start_t}
+
+🎫 チケット"""
+    
+    if "proj_tickets" in st.session_state:
+        for t in st.session_state.proj_tickets:
+            name = t.get("name", "")
+            price = t.get("price", "")
+            note = t.get("note", "")
+            line = f"- {name}: {price}"
+            if note: line += f" ({note})"
+            if name or price: text += "\n" + line
+    
+    if url:
+        text += f"\n\n🔗 詳細・予約:\n{url}"
+        
+    if "proj_free_text" in st.session_state:
+        for f in st.session_state.proj_free_text:
+            ft = f.get("title", "")
+            fc = f.get("content", "")
+            if ft or fc:
+                text += f"\n\n■ {ft}\n{fc}"
+                
+    return text
 
 def render_overview_page():
     """イベント概要（基本情報・チケット・自由記述）の編集画面"""
     
+    # プロジェクトIDの取得（保存用）
+    project_id = st.session_state.get("ws_active_project_id")
+    db = next(get_db_session_helper()) # DBセッション取得用のヘルパーが必要ですが、ここでは簡易的にimport元を想定
+
     # --- 基本情報 ---
     st.subheader("基本情報")
     c_basic1, c_basic2 = st.columns(2)
@@ -22,7 +68,7 @@ def render_overview_page():
         if "proj_tickets" not in st.session_state:
             st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
         
-        # データ修復（辞書型以外が混入した場合のガード）
+        # データ修復
         clean_tickets = []
         for t in st.session_state.proj_tickets:
             if isinstance(t, dict): clean_tickets.append(t)
@@ -54,7 +100,6 @@ def render_overview_page():
         if "proj_free_text" not in st.session_state:
             st.session_state.proj_free_text = [{"title":"", "content":""}]
         
-        # データ修復
         clean_free = []
         for f in st.session_state.proj_free_text:
             if isinstance(f, dict): clean_free.append(f)
@@ -77,3 +122,37 @@ def render_overview_page():
         if st.button("＋ 新しい項目を追加"):
             st.session_state.proj_free_text.append({"title":"", "content":""})
             st.rerun()
+
+    st.divider()
+
+    # --- ★追加: 設定反映 & テキストプレビューエリア ---
+    # レイアウトを他のタブに合わせる
+    st.caption("変更内容は以下のボタンで保存してください。同時に告知用テキストを生成します。")
+    
+    if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
+        if project_id:
+            # DB接続を取得して保存実行
+            from database import get_db
+            db = next(get_db())
+            try:
+                if save_current_project(db, project_id):
+                    st.toast("イベント情報を保存しました！", icon="✅")
+                    
+                    # テキスト生成してセッションに保存（再描画後も表示するため）
+                    st.session_state.overview_text_preview = generate_event_text()
+                else:
+                    st.error("保存に失敗しました")
+            finally:
+                db.close()
+        else:
+            st.error("プロジェクトが選択されていません")
+
+    # 生成されたテキストがあれば表示
+    if "overview_text_preview" in st.session_state and st.session_state.overview_text_preview:
+        st.subheader("📝 告知用テキストプレビュー")
+        st.text_area("コピーしてSNSなどで使用できます", value=st.session_state.overview_text_preview, height=300, key="txt_preview_area")
+
+# ヘルパー関数 (DBセッション取得用)
+def get_db_session_helper():
+    from database import get_db
+    return get_db()
