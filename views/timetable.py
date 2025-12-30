@@ -393,7 +393,7 @@ def render_timetable_page():
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["keifont.ttf"]
             
-            # セッションの値がリストにない場合のガード（リセット防止の核心）
+            # セッションの値がリストにない場合のガード
             if "tt_font" not in st.session_state or st.session_state.tt_font not in all_fonts:
                 st.session_state.tt_font = all_fonts[0]
             
@@ -405,10 +405,8 @@ def render_timetable_page():
                 else:
                     st.info("フォントが見つかりません")
 
-            # 現在の選択状態からindexを逆算
-            current_font_index = all_fonts.index(st.session_state.tt_font)
-            
-            st.selectbox("プレビュー用フォント", all_fonts, index=current_font_index, key="tt_font")
+            # ★修正: index引数を削除 (keyと競合するため)
+            st.selectbox("プレビュー用フォント", all_fonts, key="tt_font")
             
             # 設定スナップショット
             current_tt_params = {
@@ -429,7 +427,7 @@ def render_timetable_page():
                         st.session_state.last_generated_tt_image = auto_img
                         st.session_state.tt_last_generated_params = current_tt_params
                     except Exception as e:
-                        pass # 自動生成失敗時は何もしない（手動ボタンでエラーを見せる）
+                        pass # 自動生成失敗時は何もしない
 
             # ボタン式
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
