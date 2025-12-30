@@ -64,7 +64,8 @@ def render_grid_page():
                 new_rows = st.number_input("行数", min_value=1, key="grid_rows")
                 
             with c_set2:
-                if st.button("リセット (タイムテーブルから再読込)"):
+                # ★修正: keyを追加して重複エラーを回避
+                if st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset"):
                     if proj.data_json:
                         d = json.loads(proj.data_json)
                         st.session_state.grid_order = list(reversed([i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]))
@@ -86,9 +87,13 @@ def render_grid_page():
 
             st.text_input(
                 "各行の枚数設定 (カンマ区切り)", 
-                key="grid_row_counts_str", 
+                key="grid_row_counts_str_input", # key名を変更して安全策
+                value=st.session_state.grid_row_counts_str,
                 help="例: 3,4,6 と入力すると、1行目3枚、2行目4枚、3行目6枚になります。"
             )
+            
+            # 入力値をセッションに反映
+            st.session_state.grid_row_counts_str = st.session_state.grid_row_counts_str_input
 
             try:
                 parsed_counts = [int(x.strip()) for x in st.session_state.grid_row_counts_str.split(",") if x.strip()]
@@ -157,8 +162,8 @@ def render_grid_page():
             if "grid_font" not in st.session_state: st.session_state.grid_font = all_fonts[0]
             st.selectbox("プレビュー用フォント", all_fonts, key="grid_font")
             
-            # ★変更箇所: 即時反映ではなくボタン式に変更
-            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True):
+            # ★修正: keyを追加して重複エラーを回避
+            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
                 if generate_grid_image:
                     target_artists = []
                     for n in st.session_state.grid_order:
@@ -184,7 +189,6 @@ def render_grid_page():
                                 )
                                 
                                 if img:
-                                    # 生成した画像をセッションに保存 (フライヤー画面へ連携)
                                     st.session_state.last_generated_grid_image = img
                                     st.toast("プレビューを更新しました！", icon="✅")
                                 else:
@@ -194,7 +198,6 @@ def render_grid_page():
                 else:
                     st.error("ロジックエラー")
 
-            # ★画像の表示: セッションに画像がある場合のみ表示する
             if st.session_state.get("last_generated_grid_image"):
                 st.caption("👇 現在のプレビュー")
                 st.image(st.session_state.last_generated_grid_image, use_container_width=True)
