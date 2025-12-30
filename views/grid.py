@@ -5,6 +5,7 @@ import io
 from database import get_db, TimetableProject, Artist, IMAGE_DIR
 from constants import FONT_DIR
 from logic_project import save_current_project
+from utils import create_font_specimen_img
 
 try:
     from streamlit_sortables import sort_items
@@ -160,12 +161,20 @@ def render_grid_page():
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["keifont.ttf"]
             
-            if "grid_font" not in st.session_state: st.session_state.grid_font = all_fonts[0]
+            # セッションの値がリストにない場合のガード（リセット防止の核心）
+            if "grid_font" not in st.session_state or st.session_state.grid_font not in all_fonts:
+                st.session_state.grid_font = all_fonts[0]
             
-            # ★修正ポイント: 現在のフォントがリストの何番目にあるかを探し、indexを指定する
-            current_font_index = 0
-            if st.session_state.grid_font in all_fonts:
-                current_font_index = all_fonts.index(st.session_state.grid_font)
+            # ★フォント見本パネル
+            with st.expander("🔤 フォント一覧見本を表示"):
+                specimen_img = create_font_specimen_img(FONT_DIR, all_fonts)
+                if specimen_img:
+                    st.image(specimen_img, use_container_width=True)
+                else:
+                    st.info("フォントが見つかりません")
+
+            # 現在の選択状態からindexを逆算
+            current_font_index = all_fonts.index(st.session_state.grid_font)
             
             st.selectbox("プレビュー用フォント", all_fonts, index=current_font_index, key="grid_font")
             
@@ -178,6 +187,36 @@ def render_grid_page():
                 "font": st.session_state.grid_font,
                 "rows": st.session_state.grid_rows
             }
+
+            # =================================================================
+            # ★追加: 自動生成ロジック (画像がない場合に実行)
+            # =================================================================
+            if st.session_state.get("last_generated_grid_image") is None:
+                if generate_grid_image:
+                    target_artists = []
+                    for n in st.session_state.grid_order:
+                        a = db.query(Artist).filter(Artist.name == n).first()
+                        if a: target_artists.append(a)
+                    
+                    if target_artists:
+                        try:
+                            is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
+                            align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
+                            align_val = align_map.get(st.session_state.grid_alignment, "center")
+
+                            auto_img = generate_grid_image(
+                                target_artists, 
+                                IMAGE_DIR, 
+                                font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
+                                row_counts=parsed_counts, 
+                                is_brick_mode=is_brick,
+                                alignment=align_val
+                            )
+                            # 自動生成したものを保存して最新にする
+                            st.session_state.last_generated_grid_image = auto_img
+                            st.session_state.grid_last_generated_params = current_params
+                        except:
+                            pass # 失敗時はサイレント
 
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
                 if generate_grid_image:
