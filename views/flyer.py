@@ -2,11 +2,42 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import io
 import os
+import requests  # ★追加: URLから画像を読み込むために必要
 from constants import FONT_DIR
-# ★修正: IMAGE_DIR をインポートに追加
-from database import get_db, TimetableProject, Asset, IMAGE_DIR
-from logic_project import save_current_project
+from database import get_db, TimetableProject, Asset, get_image_url
 from utils import create_font_specimen_img
+
+# --- ヘルパー関数: 画像読み込みの強化 ---
+def load_image_from_source(source):
+    """
+    パス(str), URL(str), Imageオブジェクト, アップロードファイルなど
+    あらゆる形式から PIL.Image を生成する万能関数
+    """
+    if source is None:
+        return None
+
+    try:
+        # 1. すでにPIL画像の場合
+        if isinstance(source, Image.Image):
+            return source.convert("RGBA")
+        
+        # 2. 文字列（パス または URL）の場合
+        if isinstance(source, str):
+            # URLの場合 (Supabase対応)
+            if source.startswith("http"):
+                response = requests.get(source, timeout=10)
+                response.raise_for_status()
+                return Image.open(io.BytesIO(response.content)).convert("RGBA")
+            # ローカルパスの場合
+            else:
+                return Image.open(source).convert("RGBA")
+
+        # 3. アップロードされたファイル (BytesIO) の場合
+        return Image.open(source).convert("RGBA")
+
+    except Exception as e:
+        print(f"Image Load Error: {e}")
+        return None
 
 # --- 描画ヘルパー関数 ---
 def draw_text_centered(draw, text, x, y, font, fill, stroke_width=0, stroke_fill=None, anchor="ma"):
@@ -32,15 +63,13 @@ def resize_image_to_fit(img, max_width, max_height):
 
 # --- フライヤー画像合成ロジック ---
 def create_flyer_image(
-    bg_path, logo_path, main_source, 
+    bg_source, logo_source, main_source, 
     sub_title, input_1, bottom_left, bottom_right, 
     font_path, text_color, stroke_color
 ):
-    # 背景読み込み
-    try: 
-        base_img = Image.open(bg_path).convert("RGBA")
-    except Exception as e: 
-        print(f"Background Load Error: {e}")
+    # 背景読み込み (URL対応版)
+    base_img = load_image_from_source(bg_source)
+    if base_img is None:
         return None
         
     width, height = base_img.size
@@ -60,21 +89,19 @@ def create_flyer_image(
     center_x = width / 2
     stroke_w = int(width * 0.003)
 
-    # 1. ロゴ配置
-    if logo_path:
+    # 1. ロゴ配置 (URL対応版)
+    logo_img = load_image_from_source(logo_source)
+    if logo_img:
         try:
-            logo_img = Image.open(logo_path).convert("RGBA")
             logo_img = resize_image_to_fit(logo_img, width * 0.8, height * 0.2)
             logo_x = int((width - logo_img.width) / 2)
             base_img.paste(logo_img, (logo_x, int(current_y)), logo_img)
             current_y += logo_img.height + (height * 0.02)
-        except Exception as e:
-            print(f"Logo Load Error: {e}")
-            pass
+        except: pass
     else:
         current_y += height * 0.1
 
-    # 2. 上部テキスト (日付・会場など)
+    # 2. 上部テキスト
     if sub_title:
         draw_text_centered(draw, sub_title, center_x, current_y, font_sub, text_color, stroke_w, stroke_color)
         bbox = draw.textbbox((0, 0), sub_title, font=font_sub)
@@ -91,27 +118,19 @@ def create_flyer_image(
         bbox = draw.textbbox((0, 0), time_str, font=font_btm)
         current_y += (bbox[3] - bbox[1]) + (height * 0.03)
 
-    # 3. メイン画像 (Grid / Timetable / Custom)
-    if main_source:
+    # 3. メイン画像 (URL対応版)
+    main_img = load_image_from_source(main_source)
+    if main_img:
         try:
-            if isinstance(main_source, Image.Image):
-                main_img = main_source.convert("RGBA")
-            else:
-                main_img = Image.open(main_source).convert("RGBA")
-                
-            # メイン画像の配置エリア計算 (下部のテキストエリア分を残す)
             available_height = (height * 0.95) - current_y - (height * 0.25)
-            
             if available_height > 100:
                 main_img = resize_image_to_fit(main_img, width * 0.95, available_height)
                 main_x = int((width - main_img.width) / 2)
                 base_img.paste(main_img, (main_x, int(current_y)), main_img)
                 current_y += main_img.height + (height * 0.03)
-        except Exception as e:
-            print(f"Main Image Error: {e}")
-            pass
+        except: pass
 
-    # 4. 下部情報 (チケット・自由記述)
+    # 4. 下部情報
     ticket_str = ""
     if "proj_tickets" in st.session_state:
         lines = []
@@ -151,57 +170,46 @@ def render_flyer_editor(project_id):
         db.close()
         return
 
-    st.subheader("📑 フライヤーセット同時生成")
-    st.caption("デザインを設定し、全てのパターンのフライヤーを一括生成します。")
+    st.subheader("📑 フライヤーセット生成")
     
     if not bgs:
-        st.warning("⚠️ 「素材アーカイブ」メニューで、少なくとも1つの『背景画像』を登録してください。")
+        st.warning("⚠️ 「素材アーカイブ」で背景画像を登録してください。")
         db.close()
         return
+
+    # --- セッション初期化（生成済み画像保持用） ---
+    if "flyer_result_grid" not in st.session_state: st.session_state.flyer_result_grid = None
+    if "flyer_result_tt" not in st.session_state: st.session_state.flyer_result_tt = None
+    if "flyer_result_custom" not in st.session_state: st.session_state.flyer_result_custom = None
 
     # --- レイアウト ---
     c_conf, c_prev = st.columns([1, 1])
 
     with c_conf:
-        # 1. 素材選択
         with st.expander("1. 素材選択 (共通)", expanded=True):
-            # ロゴ
             logo_opts = {0: "(なし)"}
             for a in logos: logo_opts[a.id] = a.name
-            
             current_logo_id = st.session_state.get("flyer_logo_id", 0)
             if current_logo_id not in logo_opts: current_logo_id = 0
-            
             st.selectbox("ロゴ画像", options=logo_opts.keys(), format_func=lambda x: logo_opts[x], key="flyer_logo_id")
             
-            # 背景
             bg_opts = {a.id: a.name for a in bgs}
             current_bg_id = st.session_state.get("flyer_bg_id")
             if current_bg_id not in bg_opts and bg_opts:
-                current_bg_id = list(bg_opts.keys())[0]
-                st.session_state.flyer_bg_id = current_bg_id
-            
+                st.session_state.flyer_bg_id = list(bg_opts.keys())[0]
             st.selectbox("背景画像", options=bg_opts.keys(), format_func=lambda x: bg_opts[x], key="flyer_bg_id")
 
-        # 2. テキスト情報
         with st.expander("2. テキスト情報 (共通)", expanded=True):
-            st.text_input("サブタイトル (日付など)", key="flyer_sub_title")
-            st.text_input("入力1 (会場名など)", key="flyer_input_1")
+            st.text_input("サブタイトル", key="flyer_sub_title")
+            st.text_input("入力1", key="flyer_input_1")
             c1, c2 = st.columns(2)
-            with c1: st.text_input("左下 (OPENなど)", key="flyer_bottom_left")
-            with c2: st.text_input("右下 (STARTなど)", key="flyer_bottom_right")
-            st.caption("※チケット情報や注意事項は「イベント概要」タブの内容が自動反映されます。")
+            with c1: st.text_input("左下", key="flyer_bottom_left")
+            with c2: st.text_input("右下", key="flyer_bottom_right")
 
-        # 3. デザイン
         with st.expander("3. デザイン (共通)", expanded=False):
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["keifont.ttf"]
             
-            with st.expander("🔤 フォント一覧見本"):
-                specimen_img = create_font_specimen_img(FONT_DIR, all_fonts)
-                if specimen_img:
-                    st.image(specimen_img, use_container_width=True)
-
             if "flyer_font" not in st.session_state or st.session_state.flyer_font not in all_fonts:
                 st.session_state.flyer_font = all_fonts[0]
             
@@ -211,129 +219,87 @@ def render_flyer_editor(project_id):
             
         st.divider()
         
-        if st.button("🔄 設定反映 (プレビュー更新＆保存)", type="primary", use_container_width=True):
-            if save_current_project(db, project_id):
-                st.toast("設定を保存し、プレビューを更新しました！", icon="✅")
-                st.session_state.flyer_force_update = True
-            else:
-                st.error("保存に失敗しました")
-
-    # --- プレビュー表示エリア ---
-    with c_prev:
-        st.markdown("##### 生成プレビュー")
-        
-        bg_id = st.session_state.get("flyer_bg_id")
-        logo_id = st.session_state.get("flyer_logo_id")
-        
-        # ★修正: get_image_url ではなく IMAGE_DIR を使って絶対パスを構築
-        bg_path = None
-        if bg_id:
-            bg_asset = db.query(Asset).filter(Asset.id == bg_id).first()
-            if bg_asset:
-                bg_path = os.path.join(IMAGE_DIR, bg_asset.image_filename)
-        
-        logo_path = None
-        if logo_id and logo_id != 0:
-            logo_asset = db.query(Asset).filter(Asset.id == logo_id).first()
-            if logo_asset:
-                logo_path = os.path.join(IMAGE_DIR, logo_asset.image_filename)
+        # --- ★ここがポイント: 生成ボタン ---
+        if st.button("🚀 画像を生成する", type="primary", use_container_width=True):
+            bg_id = st.session_state.get("flyer_bg_id")
+            logo_id = st.session_state.get("flyer_logo_id")
             
-        font_path = os.path.join(FONT_DIR, st.session_state.get("flyer_font", "keifont.ttf"))
+            # URLを取得 (ローカルファイルパスではなくURL)
+            bg_url = None
+            if bg_id:
+                bg_asset = db.query(Asset).filter(Asset.id == bg_id).first()
+                if bg_asset: bg_url = get_image_url(bg_asset.image_filename)
+            
+            logo_url = None
+            if logo_id and logo_id != 0:
+                logo_asset = db.query(Asset).filter(Asset.id == logo_id).first()
+                if logo_asset: logo_url = get_image_url(logo_asset.image_filename)
+            
+            font_path = os.path.join(FONT_DIR, st.session_state.get("flyer_font", "keifont.ttf"))
+            
+            if not bg_url:
+                st.error("背景画像のURL取得に失敗しました")
+            else:
+                common_args = {
+                    "bg_source": bg_url, # ★URLを渡す
+                    "logo_source": logo_url, # ★URLを渡す
+                    "sub_title": st.session_state.get("flyer_sub_title", ""),
+                    "input_1": st.session_state.get("flyer_input_1", ""),
+                    "bottom_left": st.session_state.get("flyer_bottom_left", ""),
+                    "bottom_right": st.session_state.get("flyer_bottom_right", ""),
+                    "font_path": font_path,
+                    "text_color": st.session_state.get("flyer_text_color", "#FFFFFF"),
+                    "stroke_color": st.session_state.get("flyer_stroke_color", "#000000")
+                }
 
-        if not bg_path or not os.path.exists(bg_path):
-            st.warning("⚠️ 背景画像が読み込めません。")
-        else:
-            tab_grid, tab_tt, tab_custom = st.tabs(["🖼️ アー写グリッド版", "⏱️ タイムテーブル版", "📁 カスタム"])
+                with st.spinner("画像をダウンロード & 生成中..."):
+                    # 1. Grid
+                    grid_source = st.session_state.get("last_generated_grid_image")
+                    if grid_source:
+                        st.session_state.flyer_result_grid = create_flyer_image(main_source=grid_source, **common_args)
+                    
+                    # 2. TT
+                    tt_source = st.session_state.get("last_generated_tt_image")
+                    if tt_source:
+                        st.session_state.flyer_result_tt = create_flyer_image(main_source=tt_source, **common_args)
+                    
+                    # 3. Custom (もしファイルがあれば)
+                    custom_file = st.session_state.get("flyer_custom_file_uploader")
+                    if custom_file:
+                        st.session_state.flyer_result_custom = create_flyer_image(main_source=custom_file, **common_args)
+                
+                st.success("生成完了！右側で確認・ダウンロードできます 👉")
 
-            common_args = {
-                "bg_path": bg_path,
-                "logo_path": logo_path,
-                "sub_title": st.session_state.get("flyer_sub_title", ""),
-                "input_1": st.session_state.get("flyer_input_1", ""),
-                "bottom_left": st.session_state.get("flyer_bottom_left", ""),
-                "bottom_right": st.session_state.get("flyer_bottom_right", ""),
-                "font_path": font_path,
-                "text_color": st.session_state.get("flyer_text_color", "#FFFFFF"),
-                "stroke_color": st.session_state.get("flyer_stroke_color", "#000000")
-            }
+    # --- プレビュー & ダウンロードエリア ---
+    with c_prev:
+        st.markdown("##### 生成結果 & ダウンロード")
+        
+        tab_grid, tab_tt, tab_custom = st.tabs(["🖼️ アー写グリッド", "⏱️ タイムテーブル", "📁 カスタム"])
 
-            # 1. アー写グリッド版
-            with tab_grid:
-                grid_source = st.session_state.get("last_generated_grid_image")
-                if grid_source:
-                    try:
-                        img_grid = create_flyer_image(main_source=grid_source, **common_args)
-                        
-                        if img_grid:
-                            st.image(img_grid, use_container_width=True)
-                            
-                            buf = io.BytesIO()
-                            img_grid.save(buf, format="PNG")
-                            st.download_button(
-                                "画像をダウンロード (Grid)", 
-                                buf.getvalue(), 
-                                "flyer_grid.png", 
-                                "image/png", 
-                                type="primary", 
-                                use_container_width=True
-                            )
-                        else:
-                            st.error("画像生成に失敗しました（ベース画像読込エラーなど）")
-                    except Exception as e:
-                        st.error(f"生成エラー: {e}")
-                else:
-                    st.warning("⚠️ まだアー写グリッドが作成されていません。")
-                    st.info("「アー写グリッド」タブで「設定反映」ボタンを押して画像を生成してください。")
+        with tab_grid:
+            if st.session_state.flyer_result_grid:
+                st.image(st.session_state.flyer_result_grid, use_container_width=True)
+                buf = io.BytesIO()
+                st.session_state.flyer_result_grid.save(buf, format="PNG")
+                st.download_button("画像をダウンロード", buf.getvalue(), "flyer_grid.png", "image/png", type="primary", use_container_width=True, key="dl_grid")
+            else:
+                st.info("左側の「画像を生成する」ボタンを押してください。")
 
-            # 2. タイムテーブル版
-            with tab_tt:
-                tt_source = st.session_state.get("last_generated_tt_image")
-                if tt_source:
-                    try:
-                        img_tt = create_flyer_image(main_source=tt_source, **common_args)
-                        
-                        if img_tt:
-                            st.image(img_tt, use_container_width=True)
-                            
-                            buf = io.BytesIO()
-                            img_tt.save(buf, format="PNG")
-                            st.download_button(
-                                "画像をダウンロード (TT)", 
-                                buf.getvalue(), 
-                                "flyer_timetable.png", 
-                                "image/png", 
-                                type="primary", 
-                                use_container_width=True
-                            )
-                        else:
-                            st.error("画像生成に失敗しました")
-                    except Exception as e:
-                        st.error(f"生成エラー: {e}")
-                else:
-                    st.warning("⚠️ まだタイムテーブル画像が作成されていません。")
-                    st.info("「タイムテーブル」タブで「設定反映」ボタンを押して画像を生成してください。")
+        with tab_tt:
+            if st.session_state.flyer_result_tt:
+                st.image(st.session_state.flyer_result_tt, use_container_width=True)
+                buf = io.BytesIO()
+                st.session_state.flyer_result_tt.save(buf, format="PNG")
+                st.download_button("画像をダウンロード", buf.getvalue(), "flyer_tt.png", "image/png", type="primary", use_container_width=True, key="dl_tt")
+            else:
+                st.info("左側の「画像を生成する」ボタンを押してください。")
 
-            # 3. カスタム
-            with tab_custom:
-                st.caption("手持ちの画像をメインエリアに配置したい場合はこちら")
-                custom_file = st.file_uploader("メイン画像をアップロード", type=['png','jpg','webp'])
-                if custom_file:
-                    try:
-                        img_custom = create_flyer_image(main_source=custom_file, **common_args)
-                        if img_custom:
-                            st.image(img_custom, use_container_width=True)
-                            
-                            buf = io.BytesIO()
-                            img_custom.save(buf, format="PNG")
-                            st.download_button(
-                                "画像をダウンロード (Custom)", 
-                                buf.getvalue(), 
-                                "flyer_custom.png", 
-                                "image/png", 
-                                type="primary", 
-                                use_container_width=True
-                            )
-                    except Exception as e:
-                        st.error(f"生成エラー: {e}")
+        with tab_custom:
+            st.file_uploader("手動画像 (任意)", type=['png','jpg'], key="flyer_custom_file_uploader")
+            if st.session_state.flyer_result_custom:
+                st.image(st.session_state.flyer_result_custom, use_container_width=True)
+                buf = io.BytesIO()
+                st.session_state.flyer_result_custom.save(buf, format="PNG")
+                st.download_button("画像をダウンロード", buf.getvalue(), "flyer_custom.png", "image/png", type="primary", use_container_width=True, key="dl_custom")
 
     db.close()
