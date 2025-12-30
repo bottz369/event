@@ -4,6 +4,7 @@ import json
 import io
 from database import get_db, TimetableProject, Artist, IMAGE_DIR
 from constants import FONT_DIR
+from logic_project import save_current_project
 
 try:
     from streamlit_sortables import sort_items
@@ -44,7 +45,7 @@ def render_grid_page():
         if "grid_alignment" not in st.session_state: st.session_state.grid_alignment = "中央揃え"
         if "grid_layout_mode" not in st.session_state: st.session_state.grid_layout_mode = "レンガ (サイズ統一)"
         
-        # ★追加: 生成時の設定を保存する変数を初期化
+        # 生成時の設定を保存する変数を初期化
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
         if selected_id:
@@ -163,9 +164,7 @@ def render_grid_page():
             if "grid_font" not in st.session_state: st.session_state.grid_font = all_fonts[0]
             st.selectbox("プレビュー用フォント", all_fonts, key="grid_font")
             
-            # =================================================================
-            # ★現在の設定値をまとめる（変更検知用）
-            # =================================================================
+            # 設定スナップショット
             current_params = {
                 "order": st.session_state.grid_order,
                 "row_counts": st.session_state.grid_row_counts_str,
@@ -174,7 +173,6 @@ def render_grid_page():
                 "font": st.session_state.grid_font,
                 "rows": st.session_state.grid_rows
             }
-            # =================================================================
 
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
                 if generate_grid_image:
@@ -186,7 +184,7 @@ def render_grid_page():
                     if not target_artists:
                         st.warning("表示するアーティストデータがありません。")
                     else:
-                        with st.spinner("画像を生成中..."):
+                        with st.spinner("画像を生成＆保存中..."):
                             try:
                                 is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
                                 align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
@@ -203,9 +201,13 @@ def render_grid_page():
                                 
                                 if img:
                                     st.session_state.last_generated_grid_image = img
-                                    # ★生成成功時に、現在の設定を「最終生成設定」として保存
                                     st.session_state.grid_last_generated_params = current_params
-                                    st.toast("プレビューを更新しました！", icon="✅")
+                                    
+                                    # ★重要: DBへも保存（オートセーブ）
+                                    if save_current_project(db, selected_id):
+                                        st.toast("保存＆プレビュー更新完了！", icon="✅")
+                                    else:
+                                        st.error("DB保存に失敗しました")
                                 else:
                                     st.error("生成失敗")
                             except Exception as e:
@@ -214,30 +216,28 @@ def render_grid_page():
                     st.error("ロジックエラー")
 
             # =================================================================
-            # ★判定ロジック: 現在の設定と、最後に生成した時の設定が一致するか？
+            # ★判定ロジック改善: 画像があるなら常に表示する
             # =================================================================
             is_outdated = False
-            
-            # まだ一度も生成していない場合
             if st.session_state.get("grid_last_generated_params") is None:
                 is_outdated = True
-            # 生成後に何か変更があった場合
             elif st.session_state.grid_last_generated_params != current_params:
                 is_outdated = True
             
-            # --- 表示切り替え ---
-            if is_outdated:
-                # 変更がある場合: 画像を隠して赤字で警告
-                st.markdown("""
-                    <div style="background-color: #ffebee; border: 1px solid #ef5350; padding: 10px; border-radius: 5px; text-align: center; color: #c62828; font-weight: bold;">
-                        ⚠️ 設定が変更されています。<br>
-                        プレビューを更新するには、上の「設定反映」ボタンを押してください。
-                    </div>
-                """, unsafe_allow_html=True)
-            elif st.session_state.get("last_generated_grid_image"):
-                # 最新の場合: 画像を表示
-                st.caption("👇 現在のプレビュー")
+            # 生成済みの画像がある場合（最優先で表示）
+            if st.session_state.get("last_generated_grid_image"):
+                if is_outdated:
+                    # 設定が変わっている場合は警告を出すが、画像は消さない
+                    st.warning("⚠️ 設定が変更されています。最新の状態にするには「設定反映」ボタンを押してください。")
+                    st.caption("👇 前回生成時のプレビュー（現在の設定とは異なる可能性があります）")
+                else:
+                    st.caption("👇 現在のプレビュー")
+                
                 st.image(st.session_state.last_generated_grid_image, use_container_width=True)
+            
+            # 画像がまだない場合
+            elif is_outdated:
+                 st.info("👆 設定を行ったら「設定反映」ボタンを押してプレビューを生成してください。")
 
     except Exception as main_e:
         st.error(f"予期せぬエラー: {main_e}")
