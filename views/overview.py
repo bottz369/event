@@ -56,7 +56,6 @@ def generate_event_text():
             name = t.get("name", "")
             price = t.get("price", "")
             note = t.get("note", "")
-            # フォーマット: - Sチケット: ¥6,000 (備考)
             line = f"- {name}: {price}"
             if note:
                 line += f" ({note})"
@@ -65,10 +64,14 @@ def generate_event_text():
     else:
         text += "\n(情報なし)"
 
-    # 4. 出演者リスト (タイムテーブルのデータから取得)
-    artists = st.session_state.get("tt_artists_order", [])
-    # "開演前物販" などを除外する場合のフィルター（必要に応じて有効化）
-    # valid_artists = [a for a in artists if "物販" not in a] 
+    # 4. 出演者リスト
+    # ★変更: アー写グリッドの設定順序 (grid_order) を優先して使用
+    if "grid_order" in st.session_state and st.session_state.grid_order:
+        artists = st.session_state.grid_order
+    else:
+        # グリッド順序がまだない場合はタイムテーブル順をバックアップとして使用
+        artists = st.session_state.get("tt_artists_order", [])
+
     valid_artists = artists
 
     if valid_artists:
@@ -83,7 +86,6 @@ def generate_event_text():
             ft = f.get("title", "")
             fc = f.get("content", "")
             if ft or fc:
-                # フォーマット: ■タイトル \n 内容
                 text += f"\n\n■{ft}\n{fc}"
                 
     return text
@@ -171,7 +173,6 @@ def render_overview_page():
     # --- ★追加: 設定反映 & テキストプレビューエリア ---
     st.caption("変更内容は以下のボタンで保存してください。同時に告知用テキストを生成します。")
     
-    # ページを開いた時に、まだ生成されていなければ生成する
     if "overview_text_preview" not in st.session_state or st.session_state.overview_text_preview is None:
         st.session_state.overview_text_preview = generate_event_text()
 
@@ -182,7 +183,6 @@ def render_overview_page():
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
-                    # ★修正: ボタンを押した瞬間に強制的に再生成して更新
                     st.session_state.overview_text_preview = generate_event_text()
                 else:
                     st.error("保存に失敗しました")
@@ -191,14 +191,11 @@ def render_overview_page():
         else:
             st.error("プロジェクトが選択されていません")
 
-    # ★修正: セッションの値を確実に表示するために、text_areaのvalueに直接渡す
-    # (keyを指定しつつvalueを動的に変える場合、Streamlitの挙動に注意が必要だが、
-    #  ボタン押下でrerunがかかるため、session_stateが更新されていれば反映されるはず)
     if st.session_state.get("overview_text_preview"):
         st.subheader("📝 告知用テキストプレビュー")
         st.text_area(
             "コピーしてSNSなどで使用できます", 
             value=st.session_state.overview_text_preview, 
             height=400, 
-            key="txt_overview_preview_area" # key名を変更してキャッシュ干渉を回避
+            key="txt_overview_preview_area"
         )
