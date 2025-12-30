@@ -3,7 +3,8 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import os
 from constants import FONT_DIR
-from database import get_db, TimetableProject, Asset, get_image_url
+# ★修正: IMAGE_DIR をインポートに追加
+from database import get_db, TimetableProject, Asset, IMAGE_DIR
 from logic_project import save_current_project
 from utils import create_font_specimen_img
 
@@ -13,7 +14,6 @@ def draw_text_centered(draw, text, x, y, font, fill, stroke_width=0, stroke_fill
 
 def draw_multiline_text_centered(draw, text, x, y, font, fill, line_spacing_ratio=1.2, stroke_width=0, stroke_fill=None, anchor="ma"):
     lines = text.split('\n')
-    # フォントの高さを取得
     bbox = draw.textbbox((0, 0), "A", font=font)
     line_height = (bbox[3] - bbox[1]) * line_spacing_ratio
     
@@ -39,13 +39,14 @@ def create_flyer_image(
     # 背景読み込み
     try: 
         base_img = Image.open(bg_path).convert("RGBA")
-    except: 
+    except Exception as e: 
+        print(f"Background Load Error: {e}")
         return None
         
     width, height = base_img.size
     draw = ImageDraw.Draw(base_img)
     
-    # フォントサイズ計算 (画像サイズに対する比率で設定)
+    # フォント設定
     try:
         font_sub = ImageFont.truetype(font_path, int(width * 0.08))
         font_in1 = ImageFont.truetype(font_path, int(width * 0.04))
@@ -67,7 +68,9 @@ def create_flyer_image(
             logo_x = int((width - logo_img.width) / 2)
             base_img.paste(logo_img, (logo_x, int(current_y)), logo_img)
             current_y += logo_img.height + (height * 0.02)
-        except: pass
+        except Exception as e:
+            print(f"Logo Load Error: {e}")
+            pass
     else:
         current_y += height * 0.1
 
@@ -109,7 +112,6 @@ def create_flyer_image(
             pass
 
     # 4. 下部情報 (チケット・自由記述)
-    # セッションから自動取得
     ticket_str = ""
     if "proj_tickets" in st.session_state:
         lines = []
@@ -140,7 +142,6 @@ def create_flyer_image(
 def render_flyer_editor(project_id):
     db = next(get_db())
     
-    # データを取得
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     logos = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
     bgs = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
@@ -168,7 +169,6 @@ def render_flyer_editor(project_id):
             logo_opts = {0: "(なし)"}
             for a in logos: logo_opts[a.id] = a.name
             
-            # セッション値の整合性チェック
             current_logo_id = st.session_state.get("flyer_logo_id", 0)
             if current_logo_id not in logo_opts: current_logo_id = 0
             
@@ -197,12 +197,11 @@ def render_flyer_editor(project_id):
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["keifont.ttf"]
             
-            # フォント見本
-            specimen_img = create_font_specimen_img(FONT_DIR, all_fonts)
-            if specimen_img:
-                st.image(specimen_img, use_container_width=True)
+            with st.expander("🔤 フォント一覧見本"):
+                specimen_img = create_font_specimen_img(FONT_DIR, all_fonts)
+                if specimen_img:
+                    st.image(specimen_img, use_container_width=True)
 
-            # ガード処理
             if "flyer_font" not in st.session_state or st.session_state.flyer_font not in all_fonts:
                 st.session_state.flyer_font = all_fonts[0]
             
@@ -212,11 +211,9 @@ def render_flyer_editor(project_id):
             
         st.divider()
         
-        # 設定反映ボタン
         if st.button("🔄 設定反映 (プレビュー更新＆保存)", type="primary", use_container_width=True):
             if save_current_project(db, project_id):
                 st.toast("設定を保存し、プレビューを更新しました！", icon="✅")
-                # 再描画を強制
                 st.session_state.flyer_force_update = True
             else:
                 st.error("保存に失敗しました")
@@ -225,28 +222,29 @@ def render_flyer_editor(project_id):
     with c_prev:
         st.markdown("##### 生成プレビュー")
         
-        # 必要なIDなどの取得
         bg_id = st.session_state.get("flyer_bg_id")
         logo_id = st.session_state.get("flyer_logo_id")
         
-        # パス解決
-        bg_asset = db.query(Asset).filter(Asset.id == bg_id).first()
-        bg_path = get_image_url(bg_asset.image_filename) if bg_asset else None
+        # ★修正: get_image_url ではなく IMAGE_DIR を使って絶対パスを構築
+        bg_path = None
+        if bg_id:
+            bg_asset = db.query(Asset).filter(Asset.id == bg_id).first()
+            if bg_asset:
+                bg_path = os.path.join(IMAGE_DIR, bg_asset.image_filename)
         
         logo_path = None
         if logo_id and logo_id != 0:
             logo_asset = db.query(Asset).filter(Asset.id == logo_id).first()
-            if logo_asset: logo_path = get_image_url(logo_asset.image_filename)
+            if logo_asset:
+                logo_path = os.path.join(IMAGE_DIR, logo_asset.image_filename)
             
         font_path = os.path.join(FONT_DIR, st.session_state.get("flyer_font", "keifont.ttf"))
 
-        if not bg_path:
-            st.info("👈 背景画像を選択してください")
+        if not bg_path or not os.path.exists(bg_path):
+            st.warning("⚠️ 背景画像が読み込めません。")
         else:
-            # タブ切り替え
             tab_grid, tab_tt, tab_custom = st.tabs(["🖼️ アー写グリッド版", "⏱️ タイムテーブル版", "📁 カスタム"])
 
-            # 共通引数を辞書化
             common_args = {
                 "bg_path": bg_path,
                 "logo_path": logo_path,
@@ -264,13 +262,11 @@ def render_flyer_editor(project_id):
                 grid_source = st.session_state.get("last_generated_grid_image")
                 if grid_source:
                     try:
-                        # プレビュー生成
                         img_grid = create_flyer_image(main_source=grid_source, **common_args)
                         
                         if img_grid:
                             st.image(img_grid, use_container_width=True)
                             
-                            # ダウンロードボタン
                             buf = io.BytesIO()
                             img_grid.save(buf, format="PNG")
                             st.download_button(
