@@ -27,7 +27,7 @@ def render_grid_page():
     try:
         selected_id = st.session_state.get("ws_active_project_id")
         
-        # --- (中略：プロジェクト選択ロジックなどはそのまま) ---
+        # --- (プロジェクト選択ロジック) ---
         if not selected_id:
             projects = db.query(TimetableProject).all()
             if projects:
@@ -38,14 +38,20 @@ def render_grid_page():
 
         # セッション初期化
         if "grid_order" not in st.session_state: st.session_state.grid_order = []
-        if "grid_cols" not in st.session_state: st.session_state.grid_cols = 5
         if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
-        # ★追加: 新機能用のセッション
-        if "grid_stagger" not in st.session_state: st.session_state.grid_stagger = False
+        # 基本の列数（最大幅の基準として使用）
+        if "grid_base_cols" not in st.session_state: st.session_state.grid_base_cols = 5
+        
+        # ★追加: 行ごとの枚数設定（文字列で管理）
+        if "grid_row_counts_str" not in st.session_state: st.session_state.grid_row_counts_str = "5,5,5,5,5"
+        # ★追加: 配置・揃え設定
+        if "grid_alignment" not in st.session_state: st.session_state.grid_alignment = "中央揃え"
         if "grid_layout_mode" not in st.session_state: st.session_state.grid_layout_mode = "レンガ (サイズ統一)"
         
         if selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
+            
+            # 初回ロード
             if not st.session_state.grid_order and proj and proj.data_json:
                 try:
                     d = json.loads(proj.data_json)
@@ -55,32 +61,73 @@ def render_grid_page():
 
             st.divider()
             
-            # --- 設定エリア (拡張) ---
-            c_set1, c_set2, c_set3 = st.columns(3)
+            # --- 設定エリア ---
+            c_set1, c_set2 = st.columns([1, 2])
             
-            with c_set1: st.number_input("行数", min_value=1, key="grid_rows")
-            with c_set2: st.number_input("列数 (最大)", min_value=1, key="grid_cols")
-            
-            with c_set3: 
+            with c_set1: 
+                # 行数を変えたら、設定文字列も連動して増減させる
+                new_rows = st.number_input("行数", min_value=1, key="grid_rows")
+                
+            with c_set2:
+                # リセットボタン
                 if st.button("リセット (タイムテーブルから再読込)"):
                     if proj.data_json:
                         d = json.loads(proj.data_json)
                         st.session_state.grid_order = list(reversed([i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]))
                         st.rerun()
+
+            # --- ★重要: 行ごとの枚数設定 ---
+            # 行数が変わった場合、input文字列のデフォルト値を調整するロジック
+            current_counts = []
+            try:
+                current_counts = [int(x.strip()) for x in st.session_state.grid_row_counts_str.split(",") if x.strip()]
+            except:
+                current_counts = [5] * new_rows
+
+            # 行数が足りない場合は足し、多い場合は切る
+            if len(current_counts) < new_rows:
+                current_counts += [5] * (new_rows - len(current_counts))
+            elif len(current_counts) > new_rows:
+                current_counts = current_counts[:new_rows]
             
-            # ★追加: 高度なレイアウト設定
-            with st.expander("📐 高度なレイアウト設定", expanded=True):
+            # UIに反映させる値を更新
+            st.session_state.grid_row_counts_str = ",".join(map(str, current_counts))
+
+            st.text_input(
+                "各行の枚数設定 (カンマ区切り)", 
+                key="grid_row_counts_str", 
+                help="例: 3,4,6 と入力すると、1行目3枚、2行目4枚、3行目6枚になります。"
+            )
+
+            # パースしてリスト化（ロジックに渡す用）
+            try:
+                parsed_counts = [int(x.strip()) for x in st.session_state.grid_row_counts_str.split(",") if x.strip()]
+            except:
+                st.error("数値とカンマで入力してください")
+                parsed_counts = [5] * new_rows
+
+            # 最大列数を計算（キャンバス幅の基準）
+            max_col_in_config = max(parsed_counts) if parsed_counts else 5
+
+            # --- レイアウト詳細設定 ---
+            with st.expander("📐 レイアウト調整 (揃え・モード)", expanded=True):
                 c_lay1, c_lay2 = st.columns(2)
                 with c_lay1:
-                    st.checkbox("交互配置 (5-4-5...)", key="grid_stagger", help="偶数行の列数を1つ減らして互い違いにします")
-                with c_lay2:
-                    # ラジオボタンでモード選択
                     st.radio(
                         "配置モード", 
                         ["レンガ (サイズ統一)", "両端揃え (拡大縮小)"], 
                         key="grid_layout_mode",
+                        horizontal=True
+                    )
+                with c_lay2:
+                    # レンガモードの時だけ意味がある
+                    disabled = (st.session_state.grid_layout_mode == "両端揃え (拡大縮小)")
+                    st.radio(
+                        "行の配置 (レンガモード時)", 
+                        ["左揃え", "中央揃え", "右揃え"], 
+                        key="grid_alignment",
                         horizontal=True,
-                        help="レンガ: 全て同じサイズで中央揃え / 両端揃え: 端まで埋まるようにサイズを自動調整"
+                        disabled=disabled
                     )
 
             # --- 並び替えエリア ---
@@ -91,23 +138,17 @@ def render_grid_page():
             if sort_items:
                 grid_ui = []
                 curr = 0
-                rows = st.session_state.grid_rows
-                cols = st.session_state.grid_cols
-                stagger = st.session_state.grid_stagger
                 
-                for r in range(rows):
-                    # ★ここもプレビューに合わせて個数を変える
-                    current_row_cols = cols
-                    if stagger and (r % 2 == 1): # 偶数行(indexは奇数)は1つ減らす
-                        current_row_cols = max(1, cols - 1)
-
+                # 指定された枚数に従ってバケツ（行）を作る
+                for r_idx, count in enumerate(parsed_counts):
                     items = []
-                    for c in range(current_row_cols):
+                    for c in range(count):
                         if curr < len(st.session_state.grid_order):
                             items.append(st.session_state.grid_order[curr])
                             curr += 1
-                    grid_ui.append({"header": f"行{r+1} ({len(items)}枠)", "items": items})
+                    grid_ui.append({"header": f"行{r_idx+1} ({len(items)}/{count})", "items": items})
                 
+                # 余ったアーティストがいれば予備へ
                 while curr < len(st.session_state.grid_order):
                     grid_ui.append({"header": "予備", "items": [st.session_state.grid_order[curr]]})
                     curr += 1
@@ -142,16 +183,19 @@ def render_grid_page():
                     st.warning("表示するアーティストデータがありません。")
                 else:
                     try:
-                        # ★パラメータを追加して呼び出し
                         is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
                         
+                        # 揃え位置を英語に変換
+                        align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
+                        align_val = align_map.get(st.session_state.grid_alignment, "center")
+
                         img = generate_grid_image(
                             target_artists, 
                             IMAGE_DIR, 
                             font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
-                            cols=st.session_state.grid_cols,
-                            stagger=st.session_state.grid_stagger,  # 追加
-                            is_brick_mode=is_brick                 # 追加
+                            row_counts=parsed_counts, # ★リストを渡す
+                            is_brick_mode=is_brick,
+                            alignment=align_val       # ★揃え指定を渡す
                         )
                         
                         if img:
