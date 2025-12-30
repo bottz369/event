@@ -16,6 +16,8 @@ try:
 except ImportError:
     sort_items = None
 
+# logic_timetableからのインポートは、ここでは不要になりますが、
+# 将来的な参照のために残しておいても害はありません。
 try:
     from logic_timetable import generate_timetable_image
 except ImportError:
@@ -194,15 +196,12 @@ def render_timetable_page():
             st.error(f"読み込みエラー: {e}")
 
     if st.session_state.tt_current_proj_id:
-        st.divider()
-        col_info1, col_info2 = st.columns([3, 1])
-        with col_info1:
-            st.subheader(f"📅 {st.session_state.tt_event_date} : {st.session_state.tt_title}")
-            st.write(f"**📍 会場:** {st.session_state.tt_venue}")
-        with col_info2:
-            st.info("ℹ️ 基本情報の修正は\n「イベント概要」タブで")
-        st.divider()
         
+        # ==========================================
+        # ★修正: ヘッダー表示(日付/会場/Note)を削除
+        # ==========================================
+
+        # 設定エリア（開場・開演・オフセット）は残します
         col_p1, col_p2, col_p3 = st.columns(3)
         with col_p1: st.selectbox("開場時間", TIME_OPTIONS, key="tt_open_time", on_change=mark_dirty)
         with col_p2: st.selectbox("開演時間", TIME_OPTIONS, key="tt_start_time", on_change=mark_dirty)
@@ -387,42 +386,22 @@ def render_timetable_page():
             calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
             st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], use_container_width=True, hide_index=True)
             
-            st.divider()
+            # ==========================================
+            # ★追加: フライヤー作成画面へデータを渡すための処理
+            # 画像生成ボタンは削除し、計算データをセッションに保存するだけに留める
+            # ==========================================
+            gen_list = []
+            for _, row in calculated_df.iterrows():
+                if row["ARTIST"] == "OPEN / START": continue
+                gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
             
-            # --- 画像生成 & 設定エリア (保存ボタン削除済み) ---
-            col_a1, col_a2 = st.columns(2)
-            with col_a1:
-                all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
-                if not all_fonts: all_fonts = ["keifont.ttf"]
-                
-                # ★修正: エラー回避のため index 引数を削除
-                # キーがある場合は session_state に初期値をセットして任せる
-                if "tt_font" not in st.session_state:
-                    st.session_state.tt_font = all_fonts[0]
-                
-                # 安全策: session_stateの値がリストにない場合のフォールバック
-                if st.session_state.tt_font not in all_fonts:
-                    st.session_state.tt_font = all_fonts[0]
+            # このデータをフライヤー画面で受け取ります
+            st.session_state.tt_gen_list = gen_list
+            
+            # ==========================================
+            # ★削除: 画像生成ボタンエリア (col_a1, col_a2)
+            # ==========================================
 
-                st.selectbox("画像用フォント", all_fonts, key="tt_font")
-
-            with col_a2:
-                if st.button("🚀 画像生成", use_container_width=True):
-                    if generate_timetable_image:
-                        gen_list = []
-                        for _, row in calculated_df.iterrows():
-                            if row["ARTIST"] == "OPEN / START": continue
-                            gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
-                        
-                        if gen_list:
-                            img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
-                            st.image(img, caption="プレビュー", use_container_width=True)
-                            buf = io.BytesIO(); img.save(buf, format="PNG")
-                            st.download_button("画像ダウンロード", buf.getvalue(), "timetable.png", "image/png", use_container_width=True)
-                        else:
-                            st.warning("データがありません")
-                    else:
-                        st.error("ロジックエラー")
     else:
         st.info("👈 上のボックスからプロジェクトを選択してください")
     
