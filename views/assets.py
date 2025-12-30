@@ -1,7 +1,8 @@
 import streamlit as st
 import uuid
 import os
-from database import get_db, Asset, upload_image_to_supabase, get_image_url
+# ★ IMAGE_DIR を追加インポート
+from database import get_db, Asset, upload_image_to_supabase, get_image_url, IMAGE_DIR
 
 def render_assets_page():
     st.title("🗂️ 素材アーカイブ管理")
@@ -22,10 +23,26 @@ def render_assets_page():
             
             if st.form_submit_button("アーカイブに保存"):
                 if name and f:
+                    # 1. ファイル名の決定
                     ext = os.path.splitext(f.name)[1].lower()
                     fname = f"asset_{uuid.uuid4()}{ext}"
+                    
+                    # 2. Supabase へアップロード (既存機能)
+                    # ファイルポインタをリセットしてから渡す
+                    f.seek(0)
                     upload_image_to_supabase(f, fname)
                     
+                    # 3. ★追加: ローカルの IMAGE_DIR にも保存する (フライヤー生成用)
+                    # これにより、画像生成時に「ファイルが見つからない」エラーを防ぎます
+                    local_path = os.path.join(IMAGE_DIR, fname)
+                    try:
+                        f.seek(0) # 再度リセット
+                        with open(local_path, "wb") as local_f:
+                            local_f.write(f.read())
+                    except Exception as e:
+                        st.error(f"ローカル保存エラー: {e}")
+
+                    # 4. DB登録
                     new_asset = Asset(name=name, asset_type=a_type, image_filename=fname)
                     db.add(new_asset)
                     db.commit()
@@ -39,7 +56,7 @@ def render_assets_page():
     # --- 一覧表示 ---
     tabs = st.tabs(["ロゴ一覧", "背景一覧"])
     
-    # 1. ロゴ一覧 (従来通り画像全体を表示)
+    # 1. ロゴ一覧
     with tabs[0]:
         assets = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
         if not assets:
@@ -51,7 +68,6 @@ def render_assets_page():
                     with st.container(border=True):
                         u = get_image_url(asset.image_filename)
                         if u:
-                            # ロゴは形が様々なので、アスペクト比固定の枠に入れつつ、全体が見えるように (contain)
                             st.markdown(f"""
                             <div style="width:100%; aspect-ratio: 1/1; background-color: #f0f2f6; display:flex; align-items:center; justify-content:center; border-radius:4px; overflow:hidden; margin-bottom:8px;">
                                 <img src="{u}" style="max-width:100%; max-height:100%; object-fit:contain;">
@@ -64,7 +80,7 @@ def render_assets_page():
                             db.commit()
                             st.rerun()
 
-    # 2. 背景一覧 (★ここを変更: A4縦比率で隙間なく埋める)
+    # 2. 背景一覧
     with tabs[1]:
         assets = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
         if not assets:
@@ -76,7 +92,6 @@ def render_assets_page():
                     with st.container(border=True):
                         u = get_image_url(asset.image_filename)
                         if u:
-                            # A4比率 (210:297) で枠を作り、画像を拡大して埋める (cover)
                             st.markdown(f"""
                             <div style="
                                 width: 100%;
