@@ -4,6 +4,7 @@ import io
 import os
 import requests
 import json
+import datetime
 from constants import FONT_DIR
 from database import get_db, TimetableProject, Asset, get_image_url
 
@@ -34,32 +35,42 @@ def load_image_from_source(source):
 
 def resize_image_to_width(img, target_width):
     """幅に合わせてアスペクト比固定でリサイズ"""
+    if not img: return None
     w_percent = (target_width / float(img.size[0]))
     h_size = int((float(img.size[1]) * float(w_percent)))
     return img.resize((target_width, h_size), Image.LANCZOS)
-
-def get_safe_attr(obj, attr_name, default=""):
-    """オブジェクトの属性を安全に取得する（エラー回避用）"""
-    return getattr(obj, attr_name, default) or default
 
 def format_event_date(dt_obj):
     """日付を YYYY.MM.DD.WDY 形式にする"""
     if not dt_obj: return ""
     if isinstance(dt_obj, str): return dt_obj
-    weekdays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-    return f"{dt_obj.strftime('%Y.%m.%d')}.{weekdays[dt_obj.weekday()]}"
+    
+    try:
+        # datetime.date または datetime.datetime の場合
+        weekdays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+        return f"{dt_obj.strftime('%Y.%m.%d')}.{weekdays[dt_obj.weekday()]}"
+    except:
+        return str(dt_obj)
 
 def format_time_str(t_val):
-    """時間を HH:MM 形式にする"""
+    """時間を HH:MM 形式にする (intの0やNoneも安全に処理)"""
     if not t_val: return ""
-    if isinstance(t_val, str): return t_val[:5]
-    try: return t_val.strftime("%H:%M")
-    except: return str(t_val)
-
-# --- フォントプレビュー生成 (ローカル関数) ---
-def local_create_font_preview(font_path, text="Preview", width=400, height=50):
+    if t_val == 0 or t_val == "0": return ""
+    
+    if isinstance(t_val, str):
+        # "10:30:00" -> "10:30"
+        return t_val[:5]
+    
     try:
-        img = Image.new("RGBA", (width, height), (0,0,0,0)) # 透明背景
+        # timeオブジェクトの場合
+        return t_val.strftime("%H:%M")
+    except:
+        return str(t_val)
+
+def local_create_font_preview(font_path, text="Preview", width=400, height=50):
+    """フォントプレビュー画像を生成"""
+    try:
+        img = Image.new("RGBA", (width, height), (0,0,0,0))
         draw = ImageDraw.Draw(img)
         try:
             font_size = int(height * 0.8)
@@ -71,7 +82,7 @@ def local_create_font_preview(font_path, text="Preview", width=400, height=50):
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
         x = (width - text_w) // 2
-        y = (height - text_h) // 2 - bbox[1] # bbox補正
+        y = (height - text_h) // 2 - bbox[1]
         
         draw.text((x, y), text, font=font, fill="white")
         return img
@@ -80,7 +91,7 @@ def local_create_font_preview(font_path, text="Preview", width=400, height=50):
         return None
 
 # ==========================================
-# 2. UI コンポーネント (画像選択)
+# 2. UI コンポーネント
 # ==========================================
 
 def render_visual_selector(label, assets, key_prefix, current_id, allow_none=False):
@@ -88,7 +99,9 @@ def render_visual_selector(label, assets, key_prefix, current_id, allow_none=Fal
     st.markdown(f"**{label}**")
     
     if allow_none:
-        if st.button("🚫 設定なし", key=f"btn_none_{key_prefix}", type="secondary" if current_id == 0 else "primary"):
+        # IDが0またはNoneなら「設定なし」が選択状態
+        is_none_selected = (not current_id or current_id == 0)
+        if st.button("🚫 設定なし", key=f"btn_none_{key_prefix}", type="primary" if is_none_selected else "secondary"):
             st.session_state[key_prefix] = 0
             st.rerun()
 
@@ -155,14 +168,16 @@ def create_flyer_image_v2(
     # B. 日時・会場・OPEN/START
     info_y_start = current_y
     
-    # 左側
+    # 日時
     draw.text((padding_x, info_y_start), str(date_text), fill=text_color, font=f_date, anchor="la", stroke_width=2, stroke_fill=stroke_color)
     date_bbox = draw.textbbox((0, 0), str(date_text), font=f_date)
     date_h = date_bbox[3] - date_bbox[1]
+    
+    # 会場
     venue_y = info_y_start + date_h + int(H * 0.01)
     draw.text((padding_x, venue_y), str(venue_text), fill=text_color, font=f_venue, anchor="la", stroke_width=2, stroke_fill=stroke_color)
 
-    # 右側
+    # 右側 (OPEN/START)
     right_x = W - padding_x
     o_time_str = str(open_time) if open_time else ""
     s_time_str = str(start_time) if start_time else ""
@@ -177,7 +192,7 @@ def create_flyer_image_v2(
 
     current_y = max(venue_y + int(H * 0.05), start_y + int(H * 0.05)) + int(H * 0.02)
 
-    # C. アー写グリッド
+    # C. アー写グリッド (またはTT画像)
     main_img = load_image_from_source(main_source)
     if main_img:
         grid_target_w = int(W * 0.95)
@@ -188,15 +203,17 @@ def create_flyer_image_v2(
 
     # D. チケット & 注釈
     for ticket in ticket_info_list:
-        line = f"{ticket['name']} {ticket['price']}"
-        if ticket.get('note'): line += f" ({ticket['note']})"
+        line = f"{ticket.get('name','')} {ticket.get('price','')}"
+        if ticket.get('note'): line += f" ({ticket.get('note')})"
+        
         draw.text((W//2, current_y), line, fill=text_color, font=f_ticket_name, anchor="ma", stroke_width=2, stroke_fill=stroke_color)
         current_y += int(H * 0.05)
 
     current_y += int(H * 0.01)
     for txt in free_text_list:
-        if txt.get('content'):
-            draw.text((W//2, current_y), txt.get('content'), fill=text_color, font=f_note, anchor="ma")
+        content = txt.get('content', '')
+        if content:
+            draw.text((W//2, current_y), content, fill=text_color, font=f_note, anchor="ma")
             current_y += int(H * 0.03)
 
     return base_img
@@ -219,22 +236,22 @@ def render_flyer_editor(project_id):
 
     st.subheader("📑 フライヤー生成 (NEWデザイン)")
 
-    # --- 保存された設定があればロード（JSONカラムがあると想定、なければスキップ） ---
+    # --- 保存された設定のロード (flyer_jsonカラムを使用) ---
     saved_config = {}
-    if hasattr(proj, "flyer_config") and proj.flyer_config:
+    if getattr(proj, "flyer_json", None): # ★CSVに合わせてカラム名をflyer_jsonに変更
         try:
-            if isinstance(proj.flyer_config, str):
-                saved_config = json.loads(proj.flyer_config)
-            elif isinstance(proj.flyer_config, dict):
-                saved_config = proj.flyer_config
+            if isinstance(proj.flyer_json, str):
+                saved_config = json.loads(proj.flyer_json)
+            elif isinstance(proj.flyer_json, dict):
+                saved_config = proj.flyer_json
         except:
             pass
-
-    # セッション初期化 (保存された設定を優先)
+    
+    # セッション初期化 (保存値があればそれを使用)
     if "flyer_bg_id" not in st.session_state:
-        st.session_state.flyer_bg_id = saved_config.get("bg_id", bgs[0].id if bgs else 0)
+        st.session_state.flyer_bg_id = int(saved_config.get("bg_id", bgs[0].id if bgs else 0))
     if "flyer_logo_id" not in st.session_state:
-        st.session_state.flyer_logo_id = saved_config.get("logo_id", 0)
+        st.session_state.flyer_logo_id = int(saved_config.get("logo_id", 0))
     if "flyer_basic_font" not in st.session_state:
         st.session_state.flyer_basic_font = saved_config.get("font", "keifont.ttf")
     if "flyer_text_color" not in st.session_state:
@@ -262,10 +279,9 @@ def render_flyer_editor(project_id):
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["default"]
 
-            # 現在の選択がリストにない場合のケア
             current_font = st.session_state.flyer_basic_font
             if current_font not in all_fonts: current_font = all_fonts[0]
-
+            
             font_choice = st.selectbox("フォント", all_fonts, index=all_fonts.index(current_font), key="flyer_basic_font")
             
             # プレビュー
@@ -282,10 +298,9 @@ def render_flyer_editor(project_id):
         # --- アクションボタン ---
         c_act1, c_act2 = st.columns(2)
         
-        # ★設定保存ボタン
+        # ★保存ボタン
         with c_act1:
             if st.button("💾 設定を保存する", use_container_width=True):
-                # JSONとして保存するデータを構築
                 config_data = {
                     "bg_id": st.session_state.flyer_bg_id,
                     "logo_id": st.session_state.flyer_logo_id,
@@ -294,21 +309,20 @@ def render_flyer_editor(project_id):
                     "stroke_color": st.session_state.flyer_stroke_color
                 }
                 
-                # DBのカラムがあるか確認して保存
-                if hasattr(proj, "flyer_config"):
+                # ★flyer_jsonカラムに保存
+                if hasattr(proj, "flyer_json"):
                     try:
-                        proj.flyer_config = json.dumps(config_data)
+                        proj.flyer_json = json.dumps(config_data)
                         db.commit()
-                        st.success("設定をデータベースに保存しました！")
+                        st.success("設定を保存しました！")
                     except Exception as e:
                         st.error(f"保存エラー: {e}")
                 else:
-                    st.warning("このプロジェクトは設定保存に対応していません（DBカラム未実装）")
+                    st.warning("DBカラム 'flyer_json' が見つかりません")
 
         # ★生成ボタン
         with c_act2:
             if st.button("🚀 画像を生成する", type="primary", use_container_width=True):
-                # Asset
                 bg_id = st.session_state.flyer_bg_id
                 logo_id = st.session_state.flyer_logo_id
                 
@@ -324,10 +338,12 @@ def render_flyer_editor(project_id):
                 
                 font_path = os.path.join(FONT_DIR, st.session_state.flyer_basic_font)
                 
-                # DB情報 (★エラー回避: get_safe_attrを使用)
-                # venue, place, venue_name のいずれかを取得試行
-                v_text = get_safe_attr(proj, "venue") or get_safe_attr(proj, "place") or get_safe_attr(proj, "venue_name") or ""
-                
+                # ★データ取得の安全化 (CSVの構造に対応)
+                # venue_name を使用
+                v_text = getattr(proj, "venue_name", "") or "" 
+                if not v_text: # venue_nameがない場合、念のためvenueも探す
+                    v_text = getattr(proj, "venue", "") or ""
+
                 args = {
                     "bg_source": bg_url,
                     "logo_source": logo_url,
@@ -335,12 +351,21 @@ def render_flyer_editor(project_id):
                     "text_color": st.session_state.flyer_text_color,
                     "stroke_color": st.session_state.flyer_stroke_color,
                     "date_text": format_event_date(proj.event_date),
-                    "venue_text": v_text, # 安全な取得結果を使用
+                    "venue_text": v_text, # ★修正済み
                     "open_time": format_time_str(proj.open_time),
                     "start_time": format_time_str(proj.start_time),
+                    # DBから直接チケット情報を読む場合のフォールバック
                     "ticket_info_list": st.session_state.get("proj_tickets", []),
                     "free_text_list": st.session_state.get("proj_free_text", [])
                 }
+                
+                # セッションステートが空の場合、DBのJSONから読み込む処理 (念のため)
+                if not args["ticket_info_list"] and getattr(proj, "tickets_json", None):
+                    try: args["ticket_info_list"] = json.loads(proj.tickets_json)
+                    except: pass
+                if not args["free_text_list"] and getattr(proj, "free_text_json", None):
+                    try: args["free_text_list"] = json.loads(proj.free_text_json)
+                    except: pass
 
                 with st.spinner("生成中..."):
                     grid_src = st.session_state.get("last_generated_grid_image")
