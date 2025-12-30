@@ -39,7 +39,13 @@ def render_grid_page():
                     selected_id = p_map[sel_label]
 
         # セッション初期化
-        if "grid_order" not in st.session_state: st.session_state.grid_order = []
+        if "grid_order" not in st.session_state: 
+            st.session_state.grid_order = []
+        else:
+            # ★修正: エラー回避のため、常に重複を排除してユニークにする（順序保持）
+            # これにより「Artist A」が2つある場合に1つに統合され、クラッシュを防ぎます
+            st.session_state.grid_order = list(dict.fromkeys(st.session_state.grid_order))
+
         if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
         if "grid_base_cols" not in st.session_state: st.session_state.grid_base_cols = 5
         if "grid_row_counts_str" not in st.session_state: st.session_state.grid_row_counts_str = "5,5,5,5,5"
@@ -56,7 +62,8 @@ def render_grid_page():
                 try:
                     d = json.loads(proj.data_json)
                     tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
-                    st.session_state.grid_order = list(reversed(tt_artists))
+                    # ★修正: 重複排除
+                    st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                 except: pass
 
             st.divider()
@@ -71,7 +78,9 @@ def render_grid_page():
                 if st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset"):
                     if proj.data_json:
                         d = json.loads(proj.data_json)
-                        st.session_state.grid_order = list(reversed([i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]))
+                        tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+                        # ★修正: 重複排除
+                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         st.rerun()
 
             # --- 行ごとの枚数設定 ---
@@ -161,11 +170,9 @@ def render_grid_page():
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["keifont.ttf"]
             
-            # セッションの値がリストにない場合のガード（リセット防止の核心）
             if "grid_font" not in st.session_state or st.session_state.grid_font not in all_fonts:
                 st.session_state.grid_font = all_fonts[0]
             
-            # ★フォント見本パネル
             with st.expander("🔤 フォント一覧見本を表示"):
                 specimen_img = create_font_specimen_img(FONT_DIR, all_fonts)
                 if specimen_img:
@@ -173,9 +180,7 @@ def render_grid_page():
                 else:
                     st.info("フォントが見つかりません")
 
-            # 現在の選択状態からindexを逆算
             current_font_index = all_fonts.index(st.session_state.grid_font)
-            
             st.selectbox("プレビュー用フォント", all_fonts, index=current_font_index, key="grid_font")
             
             # 設定スナップショット
@@ -188,9 +193,7 @@ def render_grid_page():
                 "rows": st.session_state.grid_rows
             }
 
-            # =================================================================
-            # ★追加: 自動生成ロジック (画像がない場合に実行)
-            # =================================================================
+            # 自動生成ロジック
             if st.session_state.get("last_generated_grid_image") is None:
                 if generate_grid_image:
                     target_artists = []
@@ -212,11 +215,10 @@ def render_grid_page():
                                 is_brick_mode=is_brick,
                                 alignment=align_val
                             )
-                            # 自動生成したものを保存して最新にする
                             st.session_state.last_generated_grid_image = auto_img
                             st.session_state.grid_last_generated_params = current_params
                         except:
-                            pass # 失敗時はサイレント
+                            pass
 
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
                 if generate_grid_image:
