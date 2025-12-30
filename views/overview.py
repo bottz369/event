@@ -2,43 +2,89 @@ import streamlit as st
 from datetime import datetime
 from logic_project import save_current_project
 
+# --- ヘルパー関数 ---
+def get_day_of_week_jp(dt):
+    """日付から日本語の曜日を取得 (月)〜(日)"""
+    w_list = ['(月)', '(火)', '(水)', '(木)', '(金)', '(土)', '(日)']
+    return w_list[dt.weekday()]
+
+def get_circled_number(n):
+    """数値を丸数字の文字に変換 (1->① ... 50->㊿)"""
+    if 1 <= n <= 20:
+        return chr(0x2460 + (n - 1))
+    elif 21 <= n <= 35:
+        return chr(0x3251 + (n - 21))
+    elif 36 <= n <= 50:
+        return chr(0x32B1 + (n - 36))
+    else:
+        return f"({n})"
+
 def generate_event_text():
-    """イベント概要をテキスト形式で生成する（SNS投稿用など）"""
+    """
+    イベント概要を新しいフォーマットで生成する
+    """
+    # 1. 基本情報の取得
     title = st.session_state.get("proj_title", "")
     date_val = st.session_state.get("proj_date")
     venue = st.session_state.get("proj_venue", "")
     url = st.session_state.get("proj_url", "")
     
-    date_str = date_val.strftime("%Y年%m月%d日") if date_val else ""
+    # 日付フォーマット: 2026年2月15日(日)
+    date_str = ""
+    if date_val:
+        date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
+    
     open_t = st.session_state.get("tt_open_time", "10:00")
     start_t = st.session_state.get("tt_start_time", "10:30")
     
-    text = f"""【イベント情報】
+    # 2. テキスト構築開始
+    text = f"""【公演概要】
 {date_str}
 『{title}』
-会場: {venue}
-OPEN {open_t} / START {start_t}
 
-🎫 チケット"""
-    
-    if "proj_tickets" in st.session_state:
+■会場: {venue}"""
+
+    if url:
+        text += f"\n {url}"
+
+    text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
+
+    # 3. チケット情報
+    text += "\n\n■チケット"
+    if "proj_tickets" in st.session_state and st.session_state.proj_tickets:
         for t in st.session_state.proj_tickets:
             name = t.get("name", "")
             price = t.get("price", "")
             note = t.get("note", "")
+            # フォーマット: - Sチケット: ¥6,000 (備考)
             line = f"- {name}: {price}"
-            if note: line += f" ({note})"
-            if name or price: text += "\n" + line
-    
-    if url:
-        text += f"\n\n🔗 詳細・予約:\n{url}"
-        
-    if "proj_free_text" in st.session_state:
+            if note:
+                line += f" ({note})"
+            if name or price:
+                text += "\n" + line
+    else:
+        text += "\n(情報なし)"
+
+    # 4. 出演者リスト (タイムテーブルのデータから取得)
+    artists = st.session_state.get("tt_artists_order", [])
+    # "開演前物販" などを除外する場合のフィルター（必要に応じて有効化）
+    # valid_artists = [a for a in artists if "物販" not in a] 
+    valid_artists = artists
+
+    if valid_artists:
+        text += f"\n\n■出演者（{len(valid_artists)}組予定）"
+        for i, artist_name in enumerate(valid_artists, 1):
+            c_num = get_circled_number(i)
+            text += f"\n{c_num}{artist_name}"
+
+    # 5. 自由記述 (注意事項など)
+    if "proj_free_text" in st.session_state and st.session_state.proj_free_text:
         for f in st.session_state.proj_free_text:
             ft = f.get("title", "")
             fc = f.get("content", "")
             if ft or fc:
-                text += f"\n\n■ {ft}\n{fc}"
+                # フォーマット: ■タイトル \n 内容
+                text += f"\n\n■{ft}\n{fc}"
                 
     return text
 
@@ -125,7 +171,7 @@ def render_overview_page():
     # --- ★追加: 設定反映 & テキストプレビューエリア ---
     st.caption("変更内容は以下のボタンで保存してください。同時に告知用テキストを生成します。")
     
-    # ★自動生成ロジック: まだテキストがない場合は自動で生成する
+    # ページを開いた時に、まだ生成されていなければ生成する
     if "overview_text_preview" not in st.session_state or st.session_state.overview_text_preview is None:
         st.session_state.overview_text_preview = generate_event_text()
 
@@ -136,6 +182,7 @@ def render_overview_page():
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
+                    # ★修正: ボタンを押した瞬間に強制的に再生成して更新
                     st.session_state.overview_text_preview = generate_event_text()
                 else:
                     st.error("保存に失敗しました")
@@ -144,6 +191,14 @@ def render_overview_page():
         else:
             st.error("プロジェクトが選択されていません")
 
-    if "overview_text_preview" in st.session_state and st.session_state.overview_text_preview:
+    # ★修正: セッションの値を確実に表示するために、text_areaのvalueに直接渡す
+    # (keyを指定しつつvalueを動的に変える場合、Streamlitの挙動に注意が必要だが、
+    #  ボタン押下でrerunがかかるため、session_stateが更新されていれば反映されるはず)
+    if st.session_state.get("overview_text_preview"):
         st.subheader("📝 告知用テキストプレビュー")
-        st.text_area("コピーしてSNSなどで使用できます", value=st.session_state.overview_text_preview, height=300, key="txt_preview_area")
+        st.text_area(
+            "コピーしてSNSなどで使用できます", 
+            value=st.session_state.overview_text_preview, 
+            height=400, 
+            key="txt_overview_preview_area" # key名を変更してキャッシュ干渉を回避
+        )
