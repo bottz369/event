@@ -1,7 +1,9 @@
 import streamlit as st
-from datetime import date
 
 def render_overview_page():
+    """イベント概要（基本情報・チケット・自由記述）の編集画面"""
+    
+    # --- 基本情報 ---
     st.subheader("基本情報")
     c_basic1, c_basic2 = st.columns(2)
     with c_basic1:
@@ -20,7 +22,7 @@ def render_overview_page():
         if "proj_tickets" not in st.session_state:
             st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
         
-        # データ修復
+        # データ修復（辞書型以外が混入した場合のガード）
         clean_tickets = []
         for t in st.session_state.proj_tickets:
             if isinstance(t, dict): clean_tickets.append(t)
@@ -52,6 +54,7 @@ def render_overview_page():
         if "proj_free_text" not in st.session_state:
             st.session_state.proj_free_text = [{"title":"", "content":""}]
         
+        # データ修復
         clean_free = []
         for f in st.session_state.proj_free_text:
             if isinstance(f, dict): clean_free.append(f)
