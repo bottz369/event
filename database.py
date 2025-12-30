@@ -47,13 +47,13 @@ class Artist(Base):
     is_deleted = Column(Boolean, default=False)
 
 class TimetableProject(Base):
-    # ★重要修正: テーブル名を v4 に変更して、新しいカラム構成で再作成させます
+    # ★CSVのテーブル名と一致
     __tablename__ = "projects_v4"
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
     event_date = Column(String)
-    venue_name = Column(String)
+    venue_name = Column(String) # ★修正ポイント: venue ではなく venue_name
     venue_url = Column(String)
     
     open_time = Column(String)
@@ -65,12 +65,12 @@ class TimetableProject(Base):
     
     tickets_json = Column(Text)    # チケット情報
     free_text_json = Column(Text)  # 自由入力欄
-    flyer_json = Column(Text)      # フライヤー設定
+    flyer_json = Column(Text)      # ★修正ポイント: フライヤー設定保存用
     
-    # ★追加された設定保存用カラム
+    # ★設定保存用カラム (CSVにあったため定義)
     settings_json = Column(Text)
 
-# ★追加: 素材アーカイブ用テーブル
+# ★素材アーカイブ用テーブル
 class Asset(Base):
     __tablename__ = "assets"
     id = Column(Integer, primary_key=True, index=True)
