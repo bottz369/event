@@ -16,6 +16,7 @@ except ImportError:
     generate_grid_image = None
 
 def render_grid_page():
+    # ワークスペース内ではタイトル非表示
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("🖼️ アー写グリッド作成")
 
@@ -57,7 +58,7 @@ def render_grid_page():
             # --- 設定エリア ---
             c_set1, c_set2, c_set3 = st.columns(3)
             
-            # ★修正: value引数を削除し、keyだけで管理 (エラー回避)
+            # ★修正: 数値変更時に自動で再描画(rerun)させるため、st.session_stateのキーを使うだけでOK
             with c_set1: st.number_input("行数", min_value=1, key="grid_rows")
             with c_set2: st.number_input("列数", min_value=1, key="grid_cols")
             
@@ -70,6 +71,10 @@ def render_grid_page():
 
             # --- 並び替えエリア ---
             st.caption("ドラッグ&ドロップで配置調整")
+            
+            # 並び替えが発生したかどうかのフラグ
+            order_changed = False
+            
             if sort_items:
                 grid_ui = []
                 curr = 0
@@ -94,50 +99,61 @@ def render_grid_page():
                 
                 if new_flat != st.session_state.grid_order:
                     st.session_state.grid_order = new_flat
-                    st.rerun()
+                    order_changed = True # 変更検知
+
+            # 並び替え直後であればリランして反映（次回描画で画像生成される）
+            if order_changed:
+                st.rerun()
 
             st.divider()
             
-            # --- 画像生成エリア ---
-            c_gen1, c_gen2 = st.columns(2)
-            with c_gen1:
-                all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
-                if not all_fonts: all_fonts = ["keifont.ttf"]
-                
-                if "grid_font" not in st.session_state:
-                    st.session_state.grid_font = all_fonts[0]
-                
-                # ★修正: ここも value/index を削除し key のみに
-                st.selectbox("フォント", all_fonts, key="grid_font")
+            # --- 画像生成・プレビューエリア ---
             
-            with c_gen2:
-                if st.button("🚀 グリッド画像を生成", type="primary"):
-                    if generate_grid_image:
-                        target_artists = []
-                        missing_artists = []
-                        for n in st.session_state.grid_order:
-                            a = db.query(Artist).filter(Artist.name == n).first()
-                            if a: target_artists.append(a)
-                            else: missing_artists.append(n)
+            # 1. フォント選択 (プレビュー用)
+            all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
+            if not all_fonts: all_fonts = ["keifont.ttf"]
+            
+            if "grid_font" not in st.session_state:
+                st.session_state.grid_font = all_fonts[0]
+            
+            # フォントを変えたら即時反映したいので key を指定
+            st.selectbox("プレビュー用フォント", all_fonts, key="grid_font")
+            
+            # 2. 自動生成ロジック (ボタンなしで常に実行)
+            if generate_grid_image:
+                target_artists = []
+                missing_artists = []
+                for n in st.session_state.grid_order:
+                    a = db.query(Artist).filter(Artist.name == n).first()
+                    if a: target_artists.append(a)
+                    else: missing_artists.append(n)
+                
+                if not target_artists:
+                    st.warning("表示するアーティストデータがありません。")
+                else:
+                    # エラーハンドリングしつつ生成
+                    try:
+                        # 毎回生成すると重くなる可能性があるため、本来はキャッシュすべきだが
+                        # Streamlitの動作モデル上、ここを通る＝何かが変更された時なので生成する
+                        img = generate_grid_image(
+                            target_artists, IMAGE_DIR, 
+                            font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
+                            cols=st.session_state.grid_cols
+                        )
                         
-                        if not target_artists:
-                            st.warning("表示するアーティストデータがありません。")
+                        if img:
+                            # ★重要: 生成した画像をセッションに保存 (フライヤー画面への連携)
+                            st.session_state.last_generated_grid_image = img
+                            
+                            st.caption("👇 現在のプレビュー (フライヤー作成画面にも反映されます)")
+                            st.image(img, use_container_width=True)
                         else:
-                            with st.spinner("生成中..."):
-                                try:
-                                    img = generate_grid_image(
-                                        target_artists, IMAGE_DIR, 
-                                        font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
-                                        cols=st.session_state.grid_cols
-                                    )
-                                    if img:
-                                        st.image(img, caption="プレビュー", use_container_width=True)
-                                        b = io.BytesIO()
-                                        img.save(b, format="PNG")
-                                        st.download_button("画像をダウンロード", b.getvalue(), "grid.png", "image/png")
-                                    else: st.error("生成失敗")
-                                except Exception as e: st.error(f"エラー: {e}")
-                    else: st.error("ロジックエラー")
+                            st.error("画像の生成に失敗しました")
+                    except Exception as e:
+                        st.error(f"プレビュー生成エラー: {e}")
+            else:
+                st.error("ロジックエラー: generate_grid_image がロードされていません")
+
     except Exception as main_e:
         st.error(f"予期せぬエラー: {main_e}")
     finally:
