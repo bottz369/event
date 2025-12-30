@@ -18,8 +18,8 @@ MARGIN = 25
 MAX_FONT_SIZE = 80     
 MIN_FONT_SIZE = 25     
 
-BASE_COLUMNS = 5      
-MAX_COLUMNS = 6       
+# デフォルト値（引数で渡されない場合の保険）
+DEFAULT_COLS = 5      
 # ============================================
 
 def get_face_center_y_from_cv_img(cv_img):
@@ -84,40 +84,20 @@ def create_no_image_placeholder(width, height):
     img = Image.new("RGBA", (width, height), (30, 30, 30, 255))
     draw = ImageDraw.Draw(img)
     
-    # テキスト描画 "No Image"
     text = "No Image"
     try:
-        # デフォルトフォントより少し大きいフォントを使いたいが、
-        # 汎用性を考慮してここではデフォルトを使用（本来はfonts/keifont.ttfなどを読み込むと良い）
         font = ImageFont.load_default()
     except:
         pass
         
-    # 中央に配置
-    # 文字サイズが小さいので、枠線などで装飾
     draw.rectangle([(10, 10), (width-10, height-10)], outline=(100, 100, 100), width=2)
     
-    # 中心座標計算 (簡易的)
     bbox = draw.textbbox((0, 0), text)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
     draw.text(((width - tw) / 2, (height - th) / 2), text, fill="white")
     
     return img
-
-def get_row_distribution(total, base_cols, max_cols):
-    """自動レイアウト計算"""
-    if total == 0: return []
-    rows = math.ceil(total / base_cols)
-    if rows <= 1: return [total]
-    if math.ceil(total / (rows - 1)) <= max_cols: rows -= 1
-    base_count = total // rows
-    remainder = total % rows
-    distribution = []
-    for i in range(rows):
-        if i >= (rows - remainder): distribution.append(base_count + 1)
-        else: distribution.append(base_count)
-    return distribution
 
 def load_image_from_url(url):
     try:
@@ -127,122 +107,148 @@ def load_image_from_url(url):
     except:
         return None
 
-def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf", cols=None):
+# =========================================================
+# ★修正: 引数に stagger(交互配置) と is_brick_mode(レンガモード) を追加
+# =========================================================
+def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf", cols=5, stagger=False, is_brick_mode=True):
     """
-    grid画像を生成する（Supabase対応 & No Image対応）
+    grid画像を生成する（Supabase対応 & No Image対応 & 高度なレイアウト対応）
+    :param cols: 基本の列数
+    :param stagger: Trueなら交互配置 (例: 5, 4, 5, 4...)
+    :param is_brick_mode: Trueならレンガ(サイズ固定・中央寄せ)、Falseなら両端揃え(サイズ可変)
     """
-    # ★変更: 画像がないアーティストも除外せず、全て対象にする
     target_artists = artists 
     total_images = len(target_artists)
     
     if total_images == 0:
         return None
 
-    # --- 行ごとの枚数とレイアウトモードの決定 ---
-    if cols and cols > 0:
-        row_counts = []
-        temp_total = total_images
-        while temp_total > 0:
-            take = min(cols, temp_total)
-            row_counts.append(take)
-            temp_total -= take
-        reference_cols = cols  
-        fixed_grid_mode = True 
-    else:
-        row_counts = get_row_distribution(total_images, BASE_COLUMNS, MAX_COLUMNS)
-        reference_cols = BASE_COLUMNS
-        fixed_grid_mode = False
+    if not cols: cols = DEFAULT_COLS
 
-    # キャンバス全体の幅を計算
-    canvas_total_width = (TILE_WIDTH * reference_cols) + (MARGIN * (reference_cols + 1))
+    # 1. アーティストリストを行ごとに分割する
+    rows_data = []
+    current_idx = 0
+    row_iter = 0
     
-    # 行ごとの設定を計算
+    while current_idx < total_images:
+        # この行の定員を決定
+        capacity = cols
+        
+        # 交互配置がON かつ 偶数行(indexは奇数 1, 3, 5...)の場合、列数を1減らす
+        if stagger and (row_iter % 2 == 1):
+            capacity = max(1, cols - 1)
+            
+        chunk = target_artists[current_idx : current_idx + capacity]
+        if not chunk: break
+        
+        rows_data.append(chunk)
+        current_idx += len(chunk)
+        row_iter += 1
+
+    # 2. キャンバス全体の幅を計算 (最大列数を基準にする)
+    # 幅 = (タイル幅 * 列数) + (マージン * (列数+1))
+    canvas_total_width = (TILE_WIDTH * cols) + (MARGIN * (cols + 1))
+    
+    # 3. 各行のレイアウト設定を計算
+    row_configs = []
     total_canvas_height = MARGIN 
-    row_configs = [] 
-    
-    for count in row_counts:
-        if fixed_grid_mode:
-            divisor = reference_cols
-            margin_deduction = MARGIN * (reference_cols + 1)
-        else:
-            divisor = count
-            margin_deduction = MARGIN * (count + 1)
 
-        available_width = canvas_total_width - margin_deduction
-        this_tile_width = available_width / divisor
+    for chunk in rows_data:
+        count = len(chunk)
+        if count == 0: continue
         
-        scale = this_tile_width / TILE_WIDTH
-        
-        this_tile_height = int(TILE_HEIGHT * scale)
-        this_text_height = int(TEXT_AREA_HEIGHT * scale)
+        if is_brick_mode:
+            # === レンガモード (サイズ統一・中央寄せ) ===
+            this_w = int(TILE_WIDTH)
+            scale = 1.0 # 拡大縮小なし
+            
+            # コンテンツの幅 = (タイル幅 * 個数) + (隙間 * (個数-1))
+            content_width = (this_w * count) + (MARGIN * (count - 1))
+            
+            # 中央寄せのための開始位置X
+            start_x = (canvas_total_width - content_width) / 2
+            
+        else:
+            # === 両端揃えモード (拡大縮小して埋める) ===
+            # 利用可能幅 = 全体幅 - (両端のマージン + 画像間のマージン)
+            # 画像間のマージンは (count - 1) 個ではなく、全体のマージン数 (count + 1) で計算して均等割付
+            # ここではシンプルに「左右のマージン」と「画像間のマージン」を全て引いた残りを等分する
+            
+            total_margins = MARGIN * (count + 1)
+            available_width = canvas_total_width - total_margins
+            
+            this_w = available_width / count
+            scale = this_w / TILE_WIDTH # 拡大率
+            
+            start_x = MARGIN # 左端からスタート
+
+        # 高さとフォントサイズをスケールに合わせて調整
+        this_h = int(TILE_HEIGHT * scale)
+        this_th = int(TEXT_AREA_HEIGHT * scale)
         this_font_max = int(MAX_FONT_SIZE * scale)
         
         row_configs.append({
-            "count": count,
-            "w": int(this_tile_width),
-            "h": this_tile_height,
-            "th": this_text_height,
-            "font_max": this_font_max
+            "artists": chunk,
+            "w": int(this_w),
+            "h": this_h,
+            "th": this_th,
+            "font_max": this_font_max,
+            "start_x": start_x
         })
-        total_canvas_height += (this_tile_height + this_text_height + MARGIN)
+        
+        # 行の高さを加算
+        total_canvas_height += (this_h + this_th + MARGIN)
 
-    # キャンバス作成
+    # 4. キャンバス描画
     canvas = Image.new('RGBA', (int(canvas_total_width), int(total_canvas_height)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    current_img_idx = 0
     current_y = MARGIN 
-
     default_font = ImageFont.load_default()
 
     for config in row_configs:
-        count = config["count"]
+        chunk = config["artists"]
         w = config["w"]
         h = config["h"]
         th = config["th"]
         font_max = config["font_max"]
+        start_x = config["start_x"]
         
-        for col_idx in range(count):
-            if current_img_idx >= total_images: break
-            
-            target_artist = target_artists[current_img_idx]
+        for col_idx, target_artist in enumerate(chunk):
             artist_name = target_artist.name
             
-            # X座標の計算
-            x = MARGIN + (col_idx * (w + MARGIN))
+            # X座標: 行の開始位置 + (インデックス * (幅 + マージン))
+            x = start_x + (col_idx * (w + MARGIN))
             
             try:
-                # 1. 画像読み込みを試みる
+                # 画像処理 (ここは以前と同じ)
                 img = None
                 if target_artist.image_filename:
                     img_url = get_image_url(target_artist.image_filename)
                     if img_url:
                         img = load_image_from_url(img_url)
                 
-                # 2. クロップまたはNo Image生成
                 if img:
-                    # 画像がある場合: スマートクロップ
                     cropped = crop_smart(img)
                 else:
-                    # 画像がない場合: プレースホルダ生成
                     cropped = create_no_image_placeholder(TILE_WIDTH, TILE_HEIGHT)
                 
-                # 3. グリッドのセルサイズに合わせてリサイズして貼り付け
+                # 計算した幅(w, h)にリサイズして配置
                 resized_final = cropped.resize((w, h), Image.LANCZOS)
                 canvas.paste(resized_final, (int(x), int(current_y)))
 
-                # 4. テキストエリア描画
+                # テキストエリア描画
                 text_bg_y = current_y + h
                 draw.rectangle([(x, text_bg_y), (x + w, text_bg_y + th)], fill="white")
 
-                # フォントサイズ調整
+                # フォントサイズ調整ループ
                 current_font_size = font_max
-                target_font = default_font # 初期値
+                target_font = default_font
                 
                 while current_font_size > MIN_FONT_SIZE:
                     try:
                         if font_path and os.path.exists(font_path):
-                            target_font = ImageFont.truetype(font_path, current_font_size)
+                            target_font = ImageFont.truetype(font_path, int(current_font_size))
                         else:
                             target_font = default_font
                             break
@@ -268,9 +274,8 @@ def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf"
                     
             except Exception as e:
                 print(f"Error processing artist {artist_name}: {e}")
-            
-            current_img_idx += 1
         
+        # 次の行へ
         current_y += (h + th + MARGIN)
 
     return canvas
