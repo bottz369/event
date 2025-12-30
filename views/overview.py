@@ -45,10 +45,8 @@ OPEN {open_t} / START {start_t}
 def render_overview_page():
     """イベント概要（基本情報・チケット・自由記述）の編集画面"""
     
-    # プロジェクトIDの取得（保存用）
     project_id = st.session_state.get("ws_active_project_id")
-    db = next(get_db_session_helper()) # DBセッション取得用のヘルパーが必要ですが、ここでは簡易的にimport元を想定
-
+    
     # --- 基本情報 ---
     st.subheader("基本情報")
     c_basic1, c_basic2 = st.columns(2)
@@ -68,7 +66,6 @@ def render_overview_page():
         if "proj_tickets" not in st.session_state:
             st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
         
-        # データ修復
         clean_tickets = []
         for t in st.session_state.proj_tickets:
             if isinstance(t, dict): clean_tickets.append(t)
@@ -126,19 +123,19 @@ def render_overview_page():
     st.divider()
 
     # --- ★追加: 設定反映 & テキストプレビューエリア ---
-    # レイアウトを他のタブに合わせる
     st.caption("変更内容は以下のボタンで保存してください。同時に告知用テキストを生成します。")
     
+    # ★自動生成ロジック: まだテキストがない場合は自動で生成する
+    if "overview_text_preview" not in st.session_state or st.session_state.overview_text_preview is None:
+        st.session_state.overview_text_preview = generate_event_text()
+
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
         if project_id:
-            # DB接続を取得して保存実行
             from database import get_db
             db = next(get_db())
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
-                    
-                    # テキスト生成してセッションに保存（再描画後も表示するため）
                     st.session_state.overview_text_preview = generate_event_text()
                 else:
                     st.error("保存に失敗しました")
@@ -147,12 +144,6 @@ def render_overview_page():
         else:
             st.error("プロジェクトが選択されていません")
 
-    # 生成されたテキストがあれば表示
     if "overview_text_preview" in st.session_state and st.session_state.overview_text_preview:
         st.subheader("📝 告知用テキストプレビュー")
         st.text_area("コピーしてSNSなどで使用できます", value=st.session_state.overview_text_preview, height=300, key="txt_preview_area")
-
-# ヘルパー関数 (DBセッション取得用)
-def get_db_session_helper():
-    from database import get_db
-    return get_db()
