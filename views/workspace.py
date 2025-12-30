@@ -164,6 +164,16 @@ def load_project_to_session(proj):
             st.session_state.grid_row_counts_str = "5,5,5,5,5"
         except: pass
 
+    # ★重要: プロジェクト読み込み時にプレビュー用キャッシュをリセットする
+    # これにより、各ページを開いた時に「まだ画像がない」と判断され、最新データで自動生成が走るようになる
+    st.session_state.last_generated_tt_image = None
+    st.session_state.tt_last_generated_params = None
+    
+    st.session_state.last_generated_grid_image = None
+    st.session_state.grid_last_generated_params = None
+    
+    st.session_state.overview_text_preview = None
+
 
 # --- メイン描画 ---
 def render_workspace_page():
@@ -244,12 +254,10 @@ def render_workspace_page():
 
         st.markdown("---")
         
-        # ★修正: 「上書き保存」ボタンを削除。複製ボタンだけ残す。
-        # 必要に応じて複製ボタンの配置を調整
+        # 複製ボタン
         col_dummy, col_act = st.columns([4, 1])
         with col_act:
             if st.button("📄 複製して編集", use_container_width=True, key="btn_proj_duplicate"):
-                # 複製前にも一応現状を保存しておく
                 save_current_project(db, project_id)
                 new_proj = duplicate_project(db, project_id)
                 if new_proj:
