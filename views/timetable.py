@@ -9,9 +9,7 @@ from constants import (
     TIME_OPTIONS, DURATION_OPTIONS, ADJUSTMENT_OPTIONS, 
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
-from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img # ★追加
-
-# 保存ロジックをインポート
+from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img
 from logic_project import save_current_project
 
 try:
@@ -409,7 +407,7 @@ def render_timetable_page():
 
             # 現在の選択状態からindexを逆算
             current_font_index = all_fonts.index(st.session_state.tt_font)
-                
+            
             st.selectbox("プレビュー用フォント", all_fonts, index=current_font_index, key="tt_font")
             
             # 設定スナップショット
@@ -419,6 +417,21 @@ def render_timetable_page():
             }
             if "tt_last_generated_params" not in st.session_state: st.session_state.tt_last_generated_params = None
 
+            # =================================================================
+            # ★追加: 自動生成ロジック (画像がない場合に実行)
+            # =================================================================
+            if st.session_state.get("last_generated_tt_image") is None:
+                if generate_timetable_image and gen_list:
+                    try:
+                        # 自動生成
+                        auto_img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
+                        # 保存して最新状態にする
+                        st.session_state.last_generated_tt_image = auto_img
+                        st.session_state.tt_last_generated_params = current_tt_params
+                    except Exception as e:
+                        pass # 自動生成失敗時は何もしない（手動ボタンでエラーを見せる）
+
+            # ボタン式
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
                 if generate_timetable_image:
                     if gen_list:
@@ -444,16 +457,13 @@ def render_timetable_page():
                 else:
                     st.error("ロジックエラー: generate_timetable_image がロードされていません")
 
-            # =================================================================
-            # ★判定ロジック
-            # =================================================================
+            # 判定ロジック
             is_outdated = False
             if st.session_state.tt_last_generated_params is None:
                 is_outdated = True
             elif st.session_state.tt_last_generated_params != current_tt_params:
                 is_outdated = True
 
-            # 生成済みの画像がある場合（最優先で表示）
             if st.session_state.get("last_generated_tt_image"):
                 if is_outdated:
                     st.warning("⚠️ 設定が変更されています。最新の状態にするには「設定反映」ボタンを押してください。")
