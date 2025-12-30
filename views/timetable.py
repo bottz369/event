@@ -11,7 +11,7 @@ from constants import (
 )
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf
 
-# ★重要: 保存ロジックをインポート
+# 保存ロジックをインポート
 from logic_project import save_current_project
 
 try:
@@ -25,7 +25,6 @@ except ImportError:
     generate_timetable_image = None
 
 def render_timetable_page():
-    # ワークスペース内ではタイトル非表示
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("⏱️ タイムテーブル作成")
     
@@ -399,33 +398,30 @@ def render_timetable_page():
             if "tt_font" not in st.session_state: st.session_state.tt_font = all_fonts[0]
             st.selectbox("プレビュー用フォント", all_fonts, key="tt_font")
             
-            # =================================================================
-            # ★現在の設定値をまとめる（変更検知用）
-            # =================================================================
+            # 設定スナップショット (フォント変更などの検知用)
             current_tt_params = {
                 "gen_list": gen_list,
                 "font": st.session_state.tt_font
             }
             if "tt_last_generated_params" not in st.session_state: st.session_state.tt_last_generated_params = None
 
-            # ボタン式に変更
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
                 if generate_timetable_image:
                     if gen_list:
                         with st.spinner("画像を生成＆保存中..."):
                             try:
-                                # 1. 画像生成
+                                # 画像生成
                                 img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
-                                st.session_state.last_generated_tt_image = img
                                 
-                                # 2. 設定の保存 (比較用)
+                                # セッションに保存
+                                st.session_state.last_generated_tt_image = img
                                 st.session_state.tt_last_generated_params = current_tt_params
                                 
-                                # 3. DBへ保存
+                                # ★DBへも保存
                                 if save_current_project(db, selected_id):
                                     st.toast("保存＆プレビュー更新完了！", icon="✅")
                                 else:
-                                    st.error("保存に失敗しました")
+                                    st.error("DB保存に失敗しました")
                                     
                             except Exception as e:
                                 st.error(f"生成エラー: {e}")
@@ -435,7 +431,7 @@ def render_timetable_page():
                     st.error("ロジックエラー: generate_timetable_image がロードされていません")
 
             # =================================================================
-            # ★判定ロジック: 赤字警告の表示
+            # ★判定ロジック改善: 画像があるなら常に表示する
             # =================================================================
             is_outdated = False
             if st.session_state.tt_last_generated_params is None:
@@ -443,16 +439,18 @@ def render_timetable_page():
             elif st.session_state.tt_last_generated_params != current_tt_params:
                 is_outdated = True
 
-            if is_outdated:
-                st.markdown("""
-                    <div style="background-color: #ffebee; border: 1px solid #ef5350; padding: 10px; border-radius: 5px; text-align: center; color: #c62828; font-weight: bold;">
-                        ⚠️ 設定が変更されています。<br>
-                        プレビューを更新するには、上の「設定反映」ボタンを押してください。
-                    </div>
-                """, unsafe_allow_html=True)
-            elif st.session_state.get("last_generated_tt_image"):
-                st.caption("👇 現在のプレビュー")
+            # 生成済みの画像がある場合（最優先で表示）
+            if st.session_state.get("last_generated_tt_image"):
+                if is_outdated:
+                    st.warning("⚠️ 設定が変更されています。最新の状態にするには「設定反映」ボタンを押してください。")
+                    st.caption("👇 前回生成時のプレビュー")
+                else:
+                    st.caption("👇 現在のプレビュー")
+                
                 st.image(st.session_state.last_generated_tt_image, use_container_width=True)
+            
+            elif is_outdated:
+                 st.info("👆 「設定反映」ボタンを押してプレビューを生成してください。")
 
     else:
         st.info("👈 上のボックスからプロジェクトを選択してください")
