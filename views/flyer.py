@@ -3,9 +3,10 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import os
 import requests
-import math
+import datetime
 from constants import FONT_DIR
 from database import get_db, TimetableProject, Asset, get_image_url
+from utils import create_font_specimen_img  # ★追加: フォントプレビュー用
 
 # --- ヘルパー関数: 画像読み込み ---
 def load_image_from_source(source):
@@ -37,12 +38,34 @@ def resize_image_to_width(img, target_width):
     h_size = int((float(img.size[1]) * float(w_percent)))
     return img.resize((target_width, h_size), Image.LANCZOS)
 
-# --- ヘルパー関数: 日付フォーマット (YYYY.MM.DD.SUN) ---
+# --- ヘルパー関数: 安全な日付・時間フォーマット ---
 def format_event_date(dt_obj):
+    """日付オブジェクトまたは文字列を 'YYYY.MM.DD.WDY' 形式にする"""
     if not dt_obj:
         return ""
+    
+    # すでに文字列の場合
+    if isinstance(dt_obj, str):
+        return dt_obj
+        
+    # 日付オブジェクトの場合
     weekdays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
     return f"{dt_obj.strftime('%Y.%m.%d')}.{weekdays[dt_obj.weekday()]}"
+
+def format_time_str(t_val):
+    """時間オブジェクトまたは文字列を 'HH:MM' 形式にする"""
+    if not t_val:
+        return ""
+    
+    # 文字列の場合 (例: "10:30:00" -> "10:30")
+    if isinstance(t_val, str):
+        return t_val[:5]
+    
+    # 時間オブジェクトの場合
+    try:
+        return t_val.strftime("%H:%M")
+    except:
+        return str(t_val)
 
 # --- ★新フライヤー画像合成ロジック (ROCK FIELD風) ---
 def create_flyer_image_v2(
@@ -112,6 +135,7 @@ def create_flyer_image_v2(
     # --- 右側: OPEN / START ---
     right_x = W - padding_x
     
+    # データ整形
     o_time_str = str(open_time) if open_time else ""
     s_time_str = str(start_time) if start_time else ""
 
@@ -192,12 +216,20 @@ def render_flyer_editor(project_id):
                 st.session_state.flyer_bg_id = list(bg_opts.keys())[0]
             st.selectbox("背景画像", bg_opts.keys(), format_func=lambda x: bg_opts[x], key="flyer_bg_id")
 
-        # 2. フォント設定
+        # 2. フォント設定 (プレビュー機能付き)
         with st.expander("2. フォント・色設定", expanded=True):
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["default"]
 
-            st.selectbox("基本フォント (日時/会場など)", all_fonts, key="flyer_basic_font")
+            font_choice = st.selectbox("基本フォント (日時/会場など)", all_fonts, key="flyer_basic_font")
+            
+            # ★フォントプレビュー追加
+            if font_choice != "default":
+                preview_path = os.path.join(FONT_DIR, font_choice)
+                prev_img = create_font_specimen_img(preview_path, text="OPEN 18:30 / START 19:00")
+                if prev_img:
+                    st.image(prev_img, use_container_width=True)
+
             c_col1, c_col2 = st.columns(2)
             with c_col1: st.color_picker("文字色", "#FFFFFF", key="flyer_text_color")
             with c_col2: st.color_picker("縁取り色", "#000000", key="flyer_stroke_color")
@@ -219,9 +251,9 @@ def render_flyer_editor(project_id):
             tickets = st.session_state.get("proj_tickets", [])
             free_texts = st.session_state.get("proj_free_text", [])
             
-            # 時間オブジェクトを文字列化
-            o_time = proj.open_time.strftime("%H:%M") if proj.open_time else ""
-            s_time = proj.start_time.strftime("%H:%M") if proj.start_time else ""
+            # ★安全な時間フォーマット関数を使用
+            o_time = format_time_str(proj.open_time)
+            s_time = format_time_str(proj.start_time)
             d_text = format_event_date(proj.event_date)
 
             args = {
@@ -231,10 +263,10 @@ def render_flyer_editor(project_id):
                 "artist_font_path": basic_font_path,
                 "text_color": st.session_state.flyer_text_color,
                 "stroke_color": st.session_state.flyer_stroke_color,
-                "date_text": d_text,      # DBから自動取得
-                "venue_text": proj.venue, # DBから自動取得
-                "open_time": o_time,      # DBから自動取得
-                "start_time": s_time,     # DBから自動取得
+                "date_text": d_text,      
+                "venue_text": proj.venue, 
+                "open_time": o_time,      
+                "start_time": s_time,     
                 "ticket_info_list": tickets,
                 "free_text_list": free_texts
             }
@@ -260,7 +292,7 @@ def render_flyer_editor(project_id):
         with tab1:
             if st.session_state.flyer_result_grid:
                 st.image(st.session_state.flyer_result_grid, use_container_width=True)
-                # ★修正: PNG形式で保存 (JPEGエラー回避のため)
+                # PNG形式で保存
                 buf = io.BytesIO()
                 st.session_state.flyer_result_grid.save(buf, format="PNG")
                 st.download_button("画像をダウンロード", buf.getvalue(), "flyer_grid.png", "image/png", type="primary")
@@ -270,7 +302,7 @@ def render_flyer_editor(project_id):
         with tab2:
             if st.session_state.flyer_result_tt:
                 st.image(st.session_state.flyer_result_tt, use_container_width=True)
-                # ★修正: PNG形式で保存
+                # PNG形式で保存
                 buf = io.BytesIO()
                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                 st.download_button("画像をダウンロード", buf.getvalue(), "flyer_tt.png", "image/png", type="primary")
