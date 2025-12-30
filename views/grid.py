@@ -44,6 +44,9 @@ def render_grid_page():
         if "grid_alignment" not in st.session_state: st.session_state.grid_alignment = "中央揃え"
         if "grid_layout_mode" not in st.session_state: st.session_state.grid_layout_mode = "レンガ (サイズ統一)"
         
+        # ★追加: 生成時の設定を保存する変数を初期化
+        if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
+        
         if selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             
@@ -64,7 +67,6 @@ def render_grid_page():
                 new_rows = st.number_input("行数", min_value=1, key="grid_rows")
                 
             with c_set2:
-                # ★修正: keyを追加して重複エラーを回避
                 if st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset"):
                     if proj.data_json:
                         d = json.loads(proj.data_json)
@@ -87,12 +89,11 @@ def render_grid_page():
 
             st.text_input(
                 "各行の枚数設定 (カンマ区切り)", 
-                key="grid_row_counts_str_input", # key名を変更して安全策
+                key="grid_row_counts_str_input", 
                 value=st.session_state.grid_row_counts_str,
                 help="例: 3,4,6 と入力すると、1行目3枚、2行目4枚、3行目6枚になります。"
             )
             
-            # 入力値をセッションに反映
             st.session_state.grid_row_counts_str = st.session_state.grid_row_counts_str_input
 
             try:
@@ -162,7 +163,19 @@ def render_grid_page():
             if "grid_font" not in st.session_state: st.session_state.grid_font = all_fonts[0]
             st.selectbox("プレビュー用フォント", all_fonts, key="grid_font")
             
-            # ★修正: keyを追加して重複エラーを回避
+            # =================================================================
+            # ★現在の設定値をまとめる（変更検知用）
+            # =================================================================
+            current_params = {
+                "order": st.session_state.grid_order,
+                "row_counts": st.session_state.grid_row_counts_str,
+                "layout_mode": st.session_state.grid_layout_mode,
+                "alignment": st.session_state.grid_alignment,
+                "font": st.session_state.grid_font,
+                "rows": st.session_state.grid_rows
+            }
+            # =================================================================
+
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
                 if generate_grid_image:
                     target_artists = []
@@ -190,6 +203,8 @@ def render_grid_page():
                                 
                                 if img:
                                     st.session_state.last_generated_grid_image = img
+                                    # ★生成成功時に、現在の設定を「最終生成設定」として保存
+                                    st.session_state.grid_last_generated_params = current_params
                                     st.toast("プレビューを更新しました！", icon="✅")
                                 else:
                                     st.error("生成失敗")
@@ -198,7 +213,29 @@ def render_grid_page():
                 else:
                     st.error("ロジックエラー")
 
-            if st.session_state.get("last_generated_grid_image"):
+            # =================================================================
+            # ★判定ロジック: 現在の設定と、最後に生成した時の設定が一致するか？
+            # =================================================================
+            is_outdated = False
+            
+            # まだ一度も生成していない場合
+            if st.session_state.get("grid_last_generated_params") is None:
+                is_outdated = True
+            # 生成後に何か変更があった場合
+            elif st.session_state.grid_last_generated_params != current_params:
+                is_outdated = True
+            
+            # --- 表示切り替え ---
+            if is_outdated:
+                # 変更がある場合: 画像を隠して赤字で警告
+                st.markdown("""
+                    <div style="background-color: #ffebee; border: 1px solid #ef5350; padding: 10px; border-radius: 5px; text-align: center; color: #c62828; font-weight: bold;">
+                        ⚠️ 設定が変更されています。<br>
+                        プレビューを更新するには、上の「設定反映」ボタンを押してください。
+                    </div>
+                """, unsafe_allow_html=True)
+            elif st.session_state.get("last_generated_grid_image"):
+                # 最新の場合: 画像を表示
                 st.caption("👇 現在のプレビュー")
                 st.image(st.session_state.last_generated_grid_image, use_container_width=True)
 
