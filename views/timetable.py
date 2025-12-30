@@ -9,7 +9,9 @@ from constants import (
     TIME_OPTIONS, DURATION_OPTIONS, ADJUSTMENT_OPTIONS, 
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
-from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf
+from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img # ★追加
+
+# 保存ロジックをインポート
 from logic_project import save_current_project
 
 try:
@@ -393,12 +395,20 @@ def render_timetable_page():
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
             if not all_fonts: all_fonts = ["keifont.ttf"]
             
-            if "tt_font" not in st.session_state: st.session_state.tt_font = all_fonts[0]
+            # セッションの値がリストにない場合のガード（リセット防止の核心）
+            if "tt_font" not in st.session_state or st.session_state.tt_font not in all_fonts:
+                st.session_state.tt_font = all_fonts[0]
             
-            # ★修正ポイント: 現在のフォントがリストの何番目にあるかを探し、indexを指定する
-            current_font_index = 0
-            if st.session_state.tt_font in all_fonts:
-                current_font_index = all_fonts.index(st.session_state.tt_font)
+            # ★フォント見本パネル
+            with st.expander("🔤 フォント一覧見本を表示"):
+                specimen_img = create_font_specimen_img(FONT_DIR, all_fonts)
+                if specimen_img:
+                    st.image(specimen_img, use_container_width=True)
+                else:
+                    st.info("フォントが見つかりません")
+
+            # 現在の選択状態からindexを逆算
+            current_font_index = all_fonts.index(st.session_state.tt_font)
                 
             st.selectbox("プレビュー用フォント", all_fonts, index=current_font_index, key="tt_font")
             
