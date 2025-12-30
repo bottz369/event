@@ -16,8 +16,6 @@ try:
 except ImportError:
     sort_items = None
 
-# logic_timetableからのインポートは、ここでは不要になりますが、
-# 将来的な参照のために残しておいても害はありません。
 try:
     from logic_timetable import generate_timetable_image
 except ImportError:
@@ -197,11 +195,7 @@ def render_timetable_page():
 
     if st.session_state.tt_current_proj_id:
         
-        # ==========================================
-        # ★修正: ヘッダー表示(日付/会場/Note)を削除
-        # ==========================================
-
-        # 設定エリア（開場・開演・オフセット）は残します
+        # 設定エリア
         col_p1, col_p2, col_p3 = st.columns(3)
         with col_p1: st.selectbox("開場時間", TIME_OPTIONS, key="tt_open_time", on_change=mark_dirty)
         with col_p2: st.selectbox("開演時間", TIME_OPTIONS, key="tt_start_time", on_change=mark_dirty)
@@ -386,21 +380,44 @@ def render_timetable_page():
             calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
             st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], use_container_width=True, hide_index=True)
             
-            # ==========================================
-            # ★追加: フライヤー作成画面へデータを渡すための処理
-            # 画像生成ボタンは削除し、計算データをセッションに保存するだけに留める
-            # ==========================================
+            # --- フライヤー連携用データ準備 ---
             gen_list = []
             for _, row in calculated_df.iterrows():
                 if row["ARTIST"] == "OPEN / START": continue
                 gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
-            
-            # このデータをフライヤー画面で受け取ります
             st.session_state.tt_gen_list = gen_list
             
-            # ==========================================
-            # ★削除: 画像生成ボタンエリア (col_a1, col_a2)
-            # ==========================================
+            st.divider()
+
+            # --- ★追加: 画像生成・プレビューエリア (Grid画面と統一) ---
+            all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
+            if not all_fonts: all_fonts = ["keifont.ttf"]
+            
+            if "tt_font" not in st.session_state: st.session_state.tt_font = all_fonts[0]
+            st.selectbox("プレビュー用フォント", all_fonts, key="tt_font")
+            
+            # ボタン式に変更
+            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True):
+                if generate_timetable_image:
+                    if gen_list:
+                        with st.spinner("画像を生成中..."):
+                            try:
+                                img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
+                                
+                                # セッションに保存
+                                st.session_state.last_generated_tt_image = img
+                                st.toast("プレビューを更新しました！", icon="✅")
+                            except Exception as e:
+                                st.error(f"生成エラー: {e}")
+                    else:
+                        st.warning("データがありません")
+                else:
+                    st.error("ロジックエラー: generate_timetable_image がロードされていません")
+
+            # セッションに画像があれば表示
+            if st.session_state.get("last_generated_tt_image"):
+                st.caption("👇 現在のプレビュー")
+                st.image(st.session_state.last_generated_tt_image, use_container_width=True)
 
     else:
         st.info("👈 上のボックスからプロジェクトを選択してください")
