@@ -2,304 +2,286 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import io
 import os
-import requests  # ★追加: URLから画像を読み込むために必要
+import requests
+import math
 from constants import FONT_DIR
 from database import get_db, TimetableProject, Asset, get_image_url
-from utils import create_font_specimen_img
 
-# --- ヘルパー関数: 画像読み込みの強化 ---
+# --- ヘルパー関数: 画像読み込み ---
 def load_image_from_source(source):
-    """
-    パス(str), URL(str), Imageオブジェクト, アップロードファイルなど
-    あらゆる形式から PIL.Image を生成する万能関数
-    """
+    """パス(str), URL(str), ImageオブジェクトなどからRGBA画像を生成"""
     if source is None:
         return None
-
     try:
-        # 1. すでにPIL画像の場合
         if isinstance(source, Image.Image):
             return source.convert("RGBA")
         
-        # 2. 文字列（パス または URL）の場合
         if isinstance(source, str):
-            # URLの場合 (Supabase対応)
             if source.startswith("http"):
                 response = requests.get(source, timeout=10)
                 response.raise_for_status()
                 return Image.open(io.BytesIO(response.content)).convert("RGBA")
-            # ローカルパスの場合
             else:
                 return Image.open(source).convert("RGBA")
-
-        # 3. アップロードされたファイル (BytesIO) の場合
+        
+        # UploadedFileなど
         return Image.open(source).convert("RGBA")
-
     except Exception as e:
         print(f"Image Load Error: {e}")
         return None
 
-# --- 描画ヘルパー関数 ---
-def draw_text_centered(draw, text, x, y, font, fill, stroke_width=0, stroke_fill=None, anchor="ma"):
-    draw.text((x, y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill, anchor=anchor)
+# --- ヘルパー関数: リサイズ ---
+def resize_image_to_width(img, target_width):
+    """幅に合わせてアスペクト比固定でリサイズ"""
+    w_percent = (target_width / float(img.size[0]))
+    h_size = int((float(img.size[1]) * float(w_percent)))
+    return img.resize((target_width, h_size), Image.LANCZOS)
 
-def draw_multiline_text_centered(draw, text, x, y, font, fill, line_spacing_ratio=1.2, stroke_width=0, stroke_fill=None, anchor="ma"):
-    lines = text.split('\n')
-    bbox = draw.textbbox((0, 0), "A", font=font)
-    line_height = (bbox[3] - bbox[1]) * line_spacing_ratio
-    
-    current_y = y
-    for line in lines:
-        draw_text_centered(draw, line, x, current_y, font, fill, stroke_width, stroke_fill, anchor)
-        current_y += line_height
-    return current_y
-
-def resize_image_to_fit(img, max_width, max_height):
-    width_ratio = max_width / img.width
-    height_ratio = max_height / img.height
-    ratio = min(width_ratio, height_ratio)
-    new_size = (int(img.width * ratio), int(img.height * ratio))
-    return img.resize(new_size, Image.LANCZOS)
-
-# --- フライヤー画像合成ロジック ---
-def create_flyer_image(
-    bg_source, logo_source, main_source, 
-    sub_title, input_1, bottom_left, bottom_right, 
-    font_path, text_color, stroke_color
+# --- ★新フライヤー画像合成ロジック (ROCK FIELD風) ---
+def create_flyer_image_v2(
+    bg_source, logo_source, main_source,
+    basic_font_path, artist_font_path,
+    text_color, stroke_color,
+    # 新しいレイアウト用パラメータ
+    date_text, venue_text, open_time, start_time,
+    ticket_info_list, free_text_list
 ):
-    # 背景読み込み (URL対応版)
+    # 1. 背景読み込み
     base_img = load_image_from_source(bg_source)
-    if base_img is None:
-        return None
-        
-    width, height = base_img.size
+    if base_img is None: return None
+    
+    W, H = base_img.size
     draw = ImageDraw.Draw(base_img)
     
-    # フォント設定
+    # 2. フォント設定 (サイズはキャンバス幅に対する比率で計算)
     try:
-        font_sub = ImageFont.truetype(font_path, int(width * 0.08))
-        font_in1 = ImageFont.truetype(font_path, int(width * 0.04))
-        font_btm = ImageFont.truetype(font_path, int(width * 0.05))
-        font_ticket = ImageFont.truetype(font_path, int(width * 0.045))
-        font_free = ImageFont.truetype(font_path, int(width * 0.025))
-    except:
-        font_sub = font_in1 = font_btm = font_ticket = font_free = ImageFont.load_default()
-    
-    current_y = height * 0.05
-    center_x = width / 2
-    stroke_w = int(width * 0.003)
+        # 基本フォント（日時・会場・チケット）
+        f_date = ImageFont.truetype(basic_font_path, int(W * 0.09))   # 日付:大
+        f_venue = ImageFont.truetype(basic_font_path, int(W * 0.05))  # 会場:中
+        f_label = ImageFont.truetype(basic_font_path, int(W * 0.04))  # OPEN/STARTラベル
+        f_time = ImageFont.truetype(basic_font_path, int(W * 0.06))   # 時間
+        
+        # チケット情報用（少し小さめ）
+        f_ticket_name = ImageFont.truetype(basic_font_path, int(W * 0.05))
+        f_ticket_note = ImageFont.truetype(basic_font_path, int(W * 0.03))
+        
+        # 注釈用
+        f_note = ImageFont.truetype(basic_font_path, int(W * 0.025))
 
-    # 1. ロゴ配置 (URL対応版)
+    except:
+        f_date = f_venue = f_label = f_time = f_ticket_name = f_ticket_note = f_note = ImageFont.load_default()
+
+    # パディング設定
+    padding_x = int(W * 0.05)
+    current_y = int(H * 0.05)
+
+    # ==========================================
+    # A. ロゴ配置 (最上部)
+    # ==========================================
     logo_img = load_image_from_source(logo_source)
     if logo_img:
-        try:
-            logo_img = resize_image_to_fit(logo_img, width * 0.8, height * 0.2)
-            logo_x = int((width - logo_img.width) / 2)
-            base_img.paste(logo_img, (logo_x, int(current_y)), logo_img)
-            current_y += logo_img.height + (height * 0.02)
-        except: pass
+        # ロゴは横幅の80%くらいに収める
+        logo_w = int(W * 0.8)
+        logo_img = resize_image_to_width(logo_img, logo_w)
+        logo_x = (W - logo_img.width) // 2
+        base_img.paste(logo_img, (logo_x, current_y), logo_img)
+        current_y += logo_img.height + int(H * 0.02)
     else:
-        current_y += height * 0.1
+        # ロゴがない場合スペースだけ空ける
+        current_y += int(H * 0.15)
 
-    # 2. 上部テキスト
-    if sub_title:
-        draw_text_centered(draw, sub_title, center_x, current_y, font_sub, text_color, stroke_w, stroke_color)
-        bbox = draw.textbbox((0, 0), sub_title, font=font_sub)
-        current_y += (bbox[3] - bbox[1]) + (height * 0.01)
+    # ==========================================
+    # B. 日時・会場 (左) / OPEN・START (右)
+    # ==========================================
+    info_y_start = current_y
     
-    if input_1:
-        draw_text_centered(draw, input_1, center_x, current_y, font_in1, text_color, stroke_w, stroke_color)
-        bbox = draw.textbbox((0, 0), input_1, font=font_in1)
-        current_y += (bbox[3] - bbox[1]) + (height * 0.02)
+    # --- 左側: 日付と会場 ---
+    draw.text((padding_x, info_y_start), date_text, fill=text_color, font=f_date, anchor="la", stroke_width=2, stroke_fill=stroke_color)
+    
+    # 会場名は日付の下
+    date_bbox = draw.textbbox((0, 0), date_text, font=f_date)
+    date_h = date_bbox[3] - date_bbox[1]
+    venue_y = info_y_start + date_h + int(H * 0.01)
+    draw.text((padding_x, venue_y), venue_text, fill=text_color, font=f_venue, anchor="la", stroke_width=2, stroke_fill=stroke_color)
 
-    time_str = f"{bottom_left}   {bottom_right}"
-    if time_str.strip():
-        draw_text_centered(draw, time_str, center_x, current_y, font_btm, text_color, stroke_w, stroke_color)
-        bbox = draw.textbbox((0, 0), time_str, font=font_btm)
-        current_y += (bbox[3] - bbox[1]) + (height * 0.03)
+    # --- 右側: OPEN / START ---
+    right_x = W - padding_x
+    
+    # OPEN
+    draw.text((right_x, info_y_start), open_time, fill=text_color, font=f_time, anchor="ra", stroke_width=2, stroke_fill=stroke_color)
+    time_bbox = draw.textbbox((0,0), open_time, font=f_time)
+    # "OPEN ▶" ラベルを時間の左に配置
+    draw.text((right_x - (time_bbox[2]-time_bbox[0]) - 20, info_y_start + 10), "OPEN ▶", fill=text_color, font=f_label, anchor="ra", stroke_width=1, stroke_fill=stroke_color)
 
-    # 3. メイン画像 (URL対応版)
+    # START (OPENの下)
+    start_y = info_y_start + (time_bbox[3] - time_bbox[1]) + int(H * 0.01)
+    draw.text((right_x, start_y), start_time, fill=text_color, font=f_time, anchor="ra", stroke_width=2, stroke_fill=stroke_color)
+    draw.text((right_x - (time_bbox[2]-time_bbox[0]) - 20, start_y + 10), "START ▶", fill=text_color, font=f_label, anchor="ra", stroke_width=1, stroke_fill=stroke_color)
+
+    # 次のセクションの開始位置 (会場名かSTART時刻の低い方に合わせる)
+    current_y = max(venue_y + int(H * 0.05), start_y + int(H * 0.05)) + int(H * 0.02)
+
+    # ==========================================
+    # C. アー写グリッド (中央)
+    # ==========================================
     main_img = load_image_from_source(main_source)
     if main_img:
-        try:
-            available_height = (height * 0.95) - current_y - (height * 0.25)
-            if available_height > 100:
-                main_img = resize_image_to_fit(main_img, width * 0.95, available_height)
-                main_x = int((width - main_img.width) / 2)
-                base_img.paste(main_img, (main_x, int(current_y)), main_img)
-                current_y += main_img.height + (height * 0.03)
-        except: pass
+        # グリッド画像を読み込み、幅いっぱいにリサイズ（マージン考慮）
+        grid_target_w = int(W * 0.95)
+        main_img = resize_image_to_width(main_img, grid_target_w)
+        grid_x = (W - main_img.width) // 2
+        
+        base_img.paste(main_img, (grid_x, current_y), main_img)
+        current_y += main_img.height + int(H * 0.03)
 
-    # 4. 下部情報
-    ticket_str = ""
-    if "proj_tickets" in st.session_state:
-        lines = []
-        for t in st.session_state.proj_tickets:
-            line = f"{t.get('name','')} {t.get('price','')}"
-            if t.get("note"): line += f" ({t.get('note')})"
-            if line.strip(): lines.append(line)
-        ticket_str = "\n".join(lines)
-
-    notes_str = ""
-    if "proj_free_text" in st.session_state:
-        lines = []
-        for f in st.session_state.proj_free_text:
-            if f.get("title"): lines.append(f"【{f.get('title')}】")
-            if f.get("content"): lines.append(f.get("content"))
-        notes_str = "\n".join(lines)
-
-    if ticket_str:
-        current_y = draw_multiline_text_centered(draw, ticket_str, center_x, current_y, font_ticket, text_color, 1.2, stroke_w, stroke_color)
-        current_y += height * 0.02
+    # ==========================================
+    # D. チケット情報 & 注釈 (下部中央揃え)
+    # ==========================================
     
-    if notes_str:
-        draw_multiline_text_centered(draw, notes_str, center_x, current_y, font_free, text_color, 1.3, 0, None)
+    # チケット
+    for ticket in ticket_info_list:
+        line = f"{ticket['name']} {ticket['price']}"
+        if ticket.get('note'):
+            line += f" ({ticket['note']})"
+        
+        # チケット名は少し大きく
+        draw.text((W//2, current_y), line, fill=text_color, font=f_ticket_name, anchor="ma", stroke_width=2, stroke_fill=stroke_color)
+        current_y += int(H * 0.05)
+
+    # 注釈（自由入力欄の内容など）
+    current_y += int(H * 0.01)
+    for txt in free_text_list:
+        content = txt.get('content', '')
+        if content:
+            draw.text((W//2, current_y), content, fill=text_color, font=f_note, anchor="ma")
+            current_y += int(H * 0.03)
 
     return base_img
 
 # --- 画面描画 ---
 def render_flyer_editor(project_id):
     db = next(get_db())
-    
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     logos = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
     bgs = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
     
     if not proj:
-        st.error("プロジェクトが見つかりません")
-        db.close()
+        st.error("プロジェクトエラー")
         return
 
-    st.subheader("📑 フライヤーセット生成")
-    
-    if not bgs:
-        st.warning("⚠️ 「素材アーカイブ」で背景画像を登録してください。")
-        db.close()
-        return
+    st.subheader("📑 フライヤー生成 (NEWデザイン)")
 
-    # --- セッション初期化（生成済み画像保持用） ---
+    # --- セッション初期化 ---
     if "flyer_result_grid" not in st.session_state: st.session_state.flyer_result_grid = None
     if "flyer_result_tt" not in st.session_state: st.session_state.flyer_result_tt = None
-    if "flyer_result_custom" not in st.session_state: st.session_state.flyer_result_custom = None
-
-    # --- レイアウト ---
+    
+    # --- レイアウト設定 ---
     c_conf, c_prev = st.columns([1, 1])
 
     with c_conf:
-        with st.expander("1. 素材選択 (共通)", expanded=True):
+        # 1. 素材
+        with st.expander("1. 画像素材", expanded=True):
+            # ロゴ選択
             logo_opts = {0: "(なし)"}
             for a in logos: logo_opts[a.id] = a.name
-            current_logo_id = st.session_state.get("flyer_logo_id", 0)
-            if current_logo_id not in logo_opts: current_logo_id = 0
-            st.selectbox("ロゴ画像", options=logo_opts.keys(), format_func=lambda x: logo_opts[x], key="flyer_logo_id")
+            st.selectbox("ロゴ画像", logo_opts.keys(), format_func=lambda x: logo_opts[x], key="flyer_logo_id")
             
+            # 背景選択
             bg_opts = {a.id: a.name for a in bgs}
-            current_bg_id = st.session_state.get("flyer_bg_id")
-            if current_bg_id not in bg_opts and bg_opts:
+            if "flyer_bg_id" not in st.session_state and bg_opts:
                 st.session_state.flyer_bg_id = list(bg_opts.keys())[0]
-            st.selectbox("背景画像", options=bg_opts.keys(), format_func=lambda x: bg_opts[x], key="flyer_bg_id")
+            st.selectbox("背景画像", bg_opts.keys(), format_func=lambda x: bg_opts[x], key="flyer_bg_id")
 
-        with st.expander("2. テキスト情報 (共通)", expanded=True):
-            st.text_input("サブタイトル", key="flyer_sub_title")
-            st.text_input("入力1", key="flyer_input_1")
-            c1, c2 = st.columns(2)
-            with c1: st.text_input("左下", key="flyer_bottom_left")
-            with c2: st.text_input("右下", key="flyer_bottom_right")
+        # 2. イベント情報 (新レイアウト対応)
+        with st.expander("2. イベント情報", expanded=True):
+            st.text_input("開催日 (例: 2025.11.30.SUN)", value="2025.xx.xx", key="flyer_date_text")
+            st.text_input("会場名", value="会場名を入力", key="flyer_venue_text")
+            c_t1, c_t2 = st.columns(2)
+            with c_t1: st.text_input("OPEN", value="10:30", key="flyer_open_time")
+            with c_t2: st.text_input("START", value="11:00", key="flyer_start_time")
 
-        with st.expander("3. デザイン (共通)", expanded=False):
+        # 3. フォント設定 (2種類)
+        with st.expander("3. フォント・色設定", expanded=True):
             all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
-            if not all_fonts: all_fonts = ["keifont.ttf"]
+            if not all_fonts: all_fonts = ["default"]
+
+            st.markdown("**基本フォント** (日時・会場・チケット)")
+            st.selectbox("選択", all_fonts, key="flyer_basic_font")
             
-            if "flyer_font" not in st.session_state or st.session_state.flyer_font not in all_fonts:
-                st.session_state.flyer_font = all_fonts[0]
-            
-            st.selectbox("フォント", all_fonts, key="flyer_font")
-            st.color_picker("文字色", key="flyer_text_color")
-            st.color_picker("縁取り色", key="flyer_stroke_color")
-            
+            st.markdown("**アーティスト名フォント** (グリッド生成時に使用)")
+            st.info("※アーティスト名のフォントは「アー写グリッド生成」タブの設定が反映されています。ここでは変更できません。")
+
+            c_col1, c_col2 = st.columns(2)
+            with c_col1: st.color_picker("文字色", "#FFFFFF", key="flyer_text_color")
+            with c_col2: st.color_picker("縁取り色", "#000000", key="flyer_stroke_color")
+
         st.divider()
-        
-        # --- ★ここがポイント: 生成ボタン ---
+
         if st.button("🚀 画像を生成する", type="primary", use_container_width=True):
+            # データ準備
             bg_id = st.session_state.get("flyer_bg_id")
             logo_id = st.session_state.get("flyer_logo_id")
             
-            # URLを取得 (ローカルファイルパスではなくURL)
-            bg_url = None
-            if bg_id:
-                bg_asset = db.query(Asset).filter(Asset.id == bg_id).first()
-                if bg_asset: bg_url = get_image_url(bg_asset.image_filename)
+            bg_url = get_image_url(db.query(Asset).get(bg_id).image_filename) if bg_id else None
+            logo_url = get_image_url(db.query(Asset).get(logo_id).image_filename) if logo_id and logo_id != 0 else None
             
-            logo_url = None
-            if logo_id and logo_id != 0:
-                logo_asset = db.query(Asset).filter(Asset.id == logo_id).first()
-                if logo_asset: logo_url = get_image_url(logo_asset.image_filename)
+            basic_font_path = os.path.join(FONT_DIR, st.session_state.get("flyer_basic_font", "keifont.ttf"))
             
-            font_path = os.path.join(FONT_DIR, st.session_state.get("flyer_font", "keifont.ttf"))
-            
-            if not bg_url:
-                st.error("背景画像のURL取得に失敗しました")
-            else:
-                common_args = {
-                    "bg_source": bg_url, # ★URLを渡す
-                    "logo_source": logo_url, # ★URLを渡す
-                    "sub_title": st.session_state.get("flyer_sub_title", ""),
-                    "input_1": st.session_state.get("flyer_input_1", ""),
-                    "bottom_left": st.session_state.get("flyer_bottom_left", ""),
-                    "bottom_right": st.session_state.get("flyer_bottom_right", ""),
-                    "font_path": font_path,
-                    "text_color": st.session_state.get("flyer_text_color", "#FFFFFF"),
-                    "stroke_color": st.session_state.get("flyer_stroke_color", "#000000")
-                }
+            # チケット情報取得
+            tickets = st.session_state.get("proj_tickets", [])
+            free_texts = st.session_state.get("proj_free_text", [])
 
-                with st.spinner("画像をダウンロード & 生成中..."):
-                    # 1. Grid
-                    grid_source = st.session_state.get("last_generated_grid_image")
-                    if grid_source:
-                        st.session_state.flyer_result_grid = create_flyer_image(main_source=grid_source, **common_args)
-                    
-                    # 2. TT
-                    tt_source = st.session_state.get("last_generated_tt_image")
-                    if tt_source:
-                        st.session_state.flyer_result_tt = create_flyer_image(main_source=tt_source, **common_args)
-                    
-                    # 3. Custom (もしファイルがあれば)
-                    custom_file = st.session_state.get("flyer_custom_file_uploader")
-                    if custom_file:
-                        st.session_state.flyer_result_custom = create_flyer_image(main_source=custom_file, **common_args)
+            # 引数まとめ
+            args = {
+                "bg_source": bg_url,
+                "logo_source": logo_url,
+                "basic_font_path": basic_font_path,
+                "artist_font_path": basic_font_path, # 今回は基本フォントを仮で渡す（グリッドは画像化済みのため）
+                "text_color": st.session_state.flyer_text_color,
+                "stroke_color": st.session_state.flyer_stroke_color,
+                "date_text": st.session_state.flyer_date_text,
+                "venue_text": st.session_state.flyer_venue_text,
+                "open_time": st.session_state.flyer_open_time,
+                "start_time": st.session_state.flyer_start_time,
+                "ticket_info_list": tickets,
+                "free_text_list": free_texts
+            }
+
+            with st.spinner("生成中..."):
+                # グリッド版生成
+                grid_src = st.session_state.get("last_generated_grid_image")
+                if grid_src:
+                    st.session_state.flyer_result_grid = create_flyer_image_v2(main_source=grid_src, **args)
                 
-                st.success("生成完了！右側で確認・ダウンロードできます 👉")
+                # タイムテーブル版生成
+                tt_src = st.session_state.get("last_generated_tt_image")
+                if tt_src:
+                    st.session_state.flyer_result_tt = create_flyer_image_v2(main_source=tt_src, **args)
 
-    # --- プレビュー & ダウンロードエリア ---
+            st.success("生成完了！")
+
+    # --- プレビュー ---
     with c_prev:
-        st.markdown("##### 生成結果 & ダウンロード")
+        st.markdown("##### 生成結果")
+        tab1, tab2 = st.tabs(["アー写グリッド版", "タイムテーブル版"])
         
-        tab_grid, tab_tt, tab_custom = st.tabs(["🖼️ アー写グリッド", "⏱️ タイムテーブル", "📁 カスタム"])
-
-        with tab_grid:
+        with tab1:
             if st.session_state.flyer_result_grid:
                 st.image(st.session_state.flyer_result_grid, use_container_width=True)
+                # ダウンロードボタン
                 buf = io.BytesIO()
-                st.session_state.flyer_result_grid.save(buf, format="PNG")
-                st.download_button("画像をダウンロード", buf.getvalue(), "flyer_grid.png", "image/png", type="primary", use_container_width=True, key="dl_grid")
+                st.session_state.flyer_result_grid.save(buf, format="JPEG", quality=95)
+                st.download_button("画像をダウンロード", buf.getvalue(), "flyer_grid.jpg", "image/jpeg", type="primary")
             else:
-                st.info("左側の「画像を生成する」ボタンを押してください。")
+                st.info("「アー写グリッド」タブでグリッドを作成してから生成してください。")
 
-        with tab_tt:
+        with tab2:
             if st.session_state.flyer_result_tt:
                 st.image(st.session_state.flyer_result_tt, use_container_width=True)
                 buf = io.BytesIO()
-                st.session_state.flyer_result_tt.save(buf, format="PNG")
-                st.download_button("画像をダウンロード", buf.getvalue(), "flyer_tt.png", "image/png", type="primary", use_container_width=True, key="dl_tt")
+                st.session_state.flyer_result_tt.save(buf, format="JPEG", quality=95)
+                st.download_button("画像をダウンロード", buf.getvalue(), "flyer_tt.jpg", "image/jpeg", type="primary")
             else:
-                st.info("左側の「画像を生成する」ボタンを押してください。")
-
-        with tab_custom:
-            st.file_uploader("手動画像 (任意)", type=['png','jpg'], key="flyer_custom_file_uploader")
-            if st.session_state.flyer_result_custom:
-                st.image(st.session_state.flyer_result_custom, use_container_width=True)
-                buf = io.BytesIO()
-                st.session_state.flyer_result_custom.save(buf, format="PNG")
-                st.download_button("画像をダウンロード", buf.getvalue(), "flyer_custom.png", "image/png", type="primary", use_container_width=True, key="dl_custom")
+                st.info("「タイムテーブル」タブで画像を生成してから実行してください。")
 
     db.close()
