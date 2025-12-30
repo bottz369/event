@@ -3,7 +3,8 @@ import pandas as pd
 import json
 from datetime import date
 from database import TimetableProject
-from utils import safe_int, safe_str, get_default_row_settings
+from utils import safe_int, safe_str
+from constants import get_default_row_settings  # ★修正: ここからインポート
 
 # --- 保存処理 (共通化) ---
 def save_current_project(db, project_id):
