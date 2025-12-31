@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-from database import init_db
+from sqlalchemy import text # ★追加
+from database import init_db, engine # ★engineを追加
+
 from constants import get_default_row_settings
 
 # --- 各画面の読み込み ---
-from views.workspace import render_workspace_page  # 統合ワークスペース
+from views.workspace import render_workspace_page   # 統合ワークスペース
 from views.projects import render_projects_page    # プロジェクト管理
 from views.assets import render_assets_page        # 素材アーカイブ
 from views.artists import render_artists_page      # アーティスト管理
@@ -35,8 +37,6 @@ if "tt_goods_offset" not in st.session_state: st.session_state.tt_goods_offset =
 if "request_calc" not in st.session_state: st.session_state.request_calc = False
 if "tt_current_proj_id" not in st.session_state: st.session_state.tt_current_proj_id = None
 
-# ※ tt_unsaved_changes はもう使いませんが、他のファイルで参照している可能性があるため
-# エラー防止のために定義だけ残しておいても無害です（False固定）
 if "tt_unsaved_changes" not in st.session_state: st.session_state.tt_unsaved_changes = False
 
 # デフォルトメニュー設定
@@ -51,7 +51,23 @@ menu_items = ["ワークスペース", "プロジェクト管理", "素材アー
 menu_selection = st.sidebar.radio("機能を選択", menu_items, key="sb_menu")
 
 # ==========================================
-# ★修正: 保存確認ロジックを削除し、単純な遷移に変更
+# ★ 緊急メンテナンス用ボタン (ここに追加)
+# ==========================================
+st.sidebar.markdown("---")
+with st.sidebar.expander("🔧 データベース緊急対応", expanded=True):
+    st.caption("「共通備考」が保存されない場合のみ押してください")
+    if st.button("DB修復: カラム追加", type="primary"):
+        try:
+            with engine.connect() as conn:
+                # projects_v4 テーブルに ticket_notes_json カラムを追加
+                conn.execute(text("ALTER TABLE projects_v4 ADD COLUMN IF NOT EXISTS ticket_notes_json TEXT;"))
+                conn.commit()
+            st.success("✅ 修復成功！カラムを追加しました。")
+        except Exception as e:
+            st.error(f"エラー: {e}")
+
+# ==========================================
+# ページ遷移
 # ==========================================
 st.session_state.last_menu = menu_selection
 current_page = menu_selection
