@@ -100,6 +100,17 @@ def load_project_to_session(proj):
     if not tickets_data: tickets_data = [{"name":"", "price":"", "note":""}]
     st.session_state.proj_tickets = tickets_data
 
+    # ★追加修正: チケット共通備考のロード（ここが抜けていました！）
+    notes_data = []
+    # 万が一カラム認識前でもエラーにならないよう getattr を使用
+    raw_notes = getattr(proj, "ticket_notes_json", None)
+    if raw_notes:
+        try:
+            data = json.loads(raw_notes)
+            if isinstance(data, list): notes_data = data
+        except: pass
+    st.session_state.proj_ticket_notes = notes_data
+
     # 自由記述のロード
     free_data = []
     if proj.free_text_json:
@@ -164,14 +175,11 @@ def load_project_to_session(proj):
             st.session_state.grid_row_counts_str = "5,5,5,5,5"
         except: pass
 
-    # ★重要: プロジェクト読み込み時にプレビュー用キャッシュをリセットする
-    # これにより、各ページを開いた時に「まだ画像がない」と判断され、最新データで自動生成が走るようになる
+    # キャッシュリセット
     st.session_state.last_generated_tt_image = None
     st.session_state.tt_last_generated_params = None
-    
     st.session_state.last_generated_grid_image = None
     st.session_state.grid_last_generated_params = None
-    
     st.session_state.overview_text_preview = None
 
 
