@@ -316,15 +316,11 @@ def create_project_assets_zip(project, db, Asset):
     return zip_buffer
 
 # =========================================================
-# ★重要: フォントリストをソートして取得する共通関数
+# フォントリスト取得関数 (既存維持)
 # =========================================================
 def get_sorted_font_list(db):
     """
-    DBからフォント情報を取得し、以下の順序で並べ替えたリスト(辞書形式)を返す
-    1. 標準フォント
-    2. お気に入りフォント (登録順)
-    3. その他のフォント (アルファベット -> 日本語順)
-    返り値: [{"name": "表示名", "filename": "ファイル名", "type": "standard/fav/other"}, ...]
+    DBからフォント情報を取得し、優先順位付きのリスト(辞書形式)を返す
     """
     # 1. 全フォント取得
     all_fonts = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
@@ -342,17 +338,16 @@ def get_sorted_font_list(db):
     fav_items = []
     other_items = []
     
-    # 重複防止用セット
     processed_files = set()
     
-    # 標準フォントの特定
+    # 標準フォント
     if std_filename:
         found = next((f for f in all_fonts if f.image_filename == std_filename), None)
         if found:
             std_item = {"name": f"★ {found.name} (標準)", "filename": found.image_filename, "type": "standard"}
             processed_files.add(found.image_filename)
     
-    # お気に入りフォントの特定 (標準と重複しないように)
+    # お気に入りフォント
     for fav_file in fav_filenames:
         if fav_file in processed_files: continue
         found = next((f for f in all_fonts if f.image_filename == fav_file), None)
@@ -360,16 +355,14 @@ def get_sorted_font_list(db):
             fav_items.append({"name": f"⭐ {found.name}", "filename": found.image_filename, "type": "fav"})
             processed_files.add(found.image_filename)
             
-    # その他のフォント
+    # その他
     temp_others = []
     for f in all_fonts:
         if f.image_filename not in processed_files:
             temp_others.append({"name": f.name, "filename": f.image_filename, "type": "other"})
             
-    # その他のフォントをソート (Pythonの標準ソートで 英数字 -> 日本語 の順になる)
     temp_others.sort(key=lambda x: x["name"])
     
-    # 結合
     result = []
     if std_item: result.append(std_item)
     result.extend(fav_items)
@@ -378,73 +371,101 @@ def get_sorted_font_list(db):
     return result
 
 # =========================================================
-# ★修正: フォント一覧画像生成 (DBから標準フォントを取得)
+# ★修正: フォント一覧画像生成 (3点セット表示・詳細化)
 # =========================================================
-def create_font_specimen_img(font_dir, font_list):
+def create_font_specimen_img(session, font_assets):
     """
-    指定されたフォントリストの見本画像を生成する
-    左側にファイル名(標準フォント)、右側にサンプル(対象フォント)を描画
+    フォント見本画像を作成する関数
+    
+    Args:
+        session: DBセッション (SystemFontConfig取得用)
+        font_assets: Assetモデルのリスト、または辞書リスト({'name':..., 'filename':...})
+    
+    Returns:
+        Imageオブジェクト
     """
-    if not font_list:
-        return None
+    if not font_assets:
+        # フォントがない場合は適当な空白画像を返す
+        return Image.new("RGB", (800, 100), (255, 255, 255))
 
-    # 設定
-    row_height = 60
-    margin_left = 20
+    # --- キャンバス設定 ---
     img_width = 800
-    img_height = (row_height * len(font_list)) + 20
-    text_sample = "あいう ABC 123" 
+    row_height = 80  # 1行の高さ（表示名+ファイル名が入るため広めに）
+    margin = 20
+    header_height = 40
     
-    img = Image.new("RGB", (img_width, img_height), (255, 255, 255))
+    total_height = header_height + (len(font_assets) * row_height) + margin
+    img = Image.new("RGB", (img_width, total_height), (255, 255, 255))
     draw = ImageDraw.Draw(img)
+
+    # --- ラベル描画用フォントの準備 ---
+    # DBからシステムフォント設定を取得
+    system_font_config = session.query(SystemFontConfig).first()
+    label_font_path = os.path.join(FONT_DIR, "keifont.ttf") # デフォルト
     
-    # ★DBから標準フォントの設定を読み込む
-    db = next(get_db())
-    label_font_path = None
+    if system_font_config and system_font_config.filename:
+        # システムフォント設定がある場合
+        check_path = os.path.join(FONT_DIR, system_font_config.filename)
+        if os.path.exists(check_path):
+            label_font_path = check_path
+
     try:
-        conf = db.query(SystemFontConfig).first()
-        if conf and conf.filename:
-            path = os.path.join(font_dir, conf.filename)
-            if os.path.exists(path):
-                label_font_path = path
-    finally:
-        db.close()
+        # 表示名用（少し大きく）
+        label_font_large = ImageFont.truetype(label_font_path, 20)
+        # ファイル名用（小さく）
+        label_font_small = ImageFont.truetype(label_font_path, 14)
+    except OSError:
+        # 読み込み失敗時はデフォルトフォント
+        label_font_large = ImageFont.load_default()
+        label_font_small = ImageFont.load_default()
 
-    # 標準フォントがない場合のフォールバック (リストの最初のフォントを使う)
-    if not label_font_path and font_list:
-        for f in font_list:
-            p = os.path.join(font_dir, f)
-            if os.path.exists(p):
-                label_font_path = p
-                break
-    
-    label_font = None
-    if label_font_path:
-        try:
-            label_font = ImageFont.truetype(label_font_path, 24)
-        except:
-            pass
-            
-    if label_font is None:
-        label_font = ImageFont.load_default()
+    # --- ヘッダー描画 ---
+    draw.text((margin, 10), "Font List Specimen", fill=(50, 50, 50), font=label_font_large)
+    draw.line((margin, header_height - 5, img_width - margin, header_height - 5), fill=(200, 200, 200), width=1)
 
-    y = 10
-    for fname in font_list:
-        font_path = os.path.join(font_dir, fname)
+    # --- 各フォントの描画 ---
+    current_y = header_height
+
+    for asset in font_assets:
+        # Assetモデルオブジェクトか辞書(get_sorted_font_list由来)か判定して値を取得
+        if isinstance(asset, dict):
+            name = asset.get("name", "No Name")
+            filename = asset.get("filename", "")
+        else:
+            name = asset.name if asset.name else "No Name"
+            filename = asset.image_filename if asset.image_filename else ""
+
+        # 1. 表示名 (黒)
+        draw.text((margin, current_y + 15), str(name), fill="black", font=label_font_large)
+
+        # 2. ファイル名 (グレー / 表示名の下)
+        draw.text((margin, current_y + 45), str(filename), fill="gray", font=label_font_small)
+
+        # 3. 見本テキスト (右側)
+        preview_text = "ABC 123 あいう イベント"
+        font_file_path = os.path.join(FONT_DIR, filename)
         
-        # 1. 左側: ファイル名を描画
-        draw.text((margin_left, y + 15), fname, font=label_font, fill=(50, 50, 50))
-
-        # 2. 右側: そのフォントでのサンプル描画
-        try:
-            target_font = ImageFont.truetype(font_path, 32)
-            draw.text((400, y + 10), text_sample, font=target_font, fill=(0, 0, 0))
-        except:
-            draw.text((400, y + 15), "Load Error", font=label_font, fill=(255, 0, 0))
-            
-        y += row_height
+        preview_font_size = 32
+        preview_font = None
         
+        if os.path.exists(font_file_path):
+            try:
+                preview_font = ImageFont.truetype(font_file_path, preview_font_size)
+            except Exception:
+                preview_font = None
+        
+        # 見本描画エリア（左から300px地点より開始）
+        preview_x = 300
+        preview_y = current_y + 20
+        
+        if preview_font:
+            draw.text((preview_x, preview_y), preview_text, fill="black", font=preview_font)
+        else:
+            draw.text((preview_x, preview_y + 5), "Preview Not Available", fill="red", font=label_font_small)
+
         # 区切り線
-        draw.line((0, y, img_width, y), fill=(220, 220, 220), width=1)
+        draw.line((margin, current_y + row_height - 1, img_width - margin, current_y + row_height - 1), fill=(230, 230, 230), width=1)
+        
+        current_y += row_height
 
     return img
