@@ -28,7 +28,6 @@ def get_circled_number(n):
 def generate_event_text():
     """イベント概要テキストを生成"""
     try:
-        # 基本情報
         title = st.session_state.get("proj_title", "")
         date_val = st.session_state.get("proj_date")
         venue = st.session_state.get("proj_venue", "")
@@ -38,17 +37,13 @@ def generate_event_text():
         if date_val:
             date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
         
-        # 時間情報（ここが消えやすいため注意）
         open_t = st.session_state.get("tt_open_time", "10:00")
         start_t = st.session_state.get("tt_start_time", "10:30")
         
-        # テキスト構築
         text = f"【公演概要】\n{date_str}\n『{title}』\n\n■会場: {venue}"
-        if url:
-            text += f"\n {url}"
+        if url: text += f"\n {url}"
         text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
 
-        # チケット情報
         text += "\n\n■チケット"
         if "proj_tickets" in st.session_state and st.session_state.proj_tickets:
             for t in st.session_state.proj_tickets:
@@ -61,7 +56,7 @@ def generate_event_text():
         else:
             text += "\n(情報なし)"
 
-        # チケット共通備考
+        # 共通備考
         if "proj_ticket_notes" in st.session_state and st.session_state.proj_ticket_notes:
             for note in st.session_state.proj_ticket_notes:
                 if note and str(note).strip():
@@ -70,7 +65,6 @@ def generate_event_text():
         # 出演者
         artists = st.session_state.get("grid_order") or st.session_state.get("tt_artists_order", [])
         valid_artists = list(dict.fromkeys(artists))
-
         if valid_artists:
             text += f"\n\n■出演者（{len(valid_artists)}組予定）"
             for i, artist_name in enumerate(valid_artists, 1):
@@ -89,32 +83,25 @@ def generate_event_text():
         return f"エラー: {e}"
 
 # ==========================================
-# ★重要: 強制同期ロジック (入力をリストへ反映)
+# ★重要: コールバック関数 (入力即反映)
 # ==========================================
-def sync_overview_inputs():
-    """
-    画面上の入力ウィジェットの値を、st.session_state内のデータリストに強制的に反映させる。
-    ボタン(Add/Delete/Save)を押した瞬間にこれを呼ばないと、入力中の文字が消える。
-    """
-    # 1. チケット情報
-    if "proj_tickets" in st.session_state:
-        for i, ticket in enumerate(st.session_state.proj_tickets):
-            if f"t_name_{i}" in st.session_state: ticket["name"] = st.session_state[f"t_name_{i}"]
-            if f"t_price_{i}" in st.session_state: ticket["price"] = st.session_state[f"t_price_{i}"]
-            if f"t_note_{i}" in st.session_state: ticket["note"] = st.session_state[f"t_note_{i}"]
+def update_ticket(i, field):
+    """チケット情報の入力内容を即座にリストへ反映"""
+    key = f"t_{field}_{i}"
+    if key in st.session_state and "proj_tickets" in st.session_state:
+        st.session_state.proj_tickets[i][field] = st.session_state[key]
 
-    # 2. チケット共通備考
-    if "proj_ticket_notes" in st.session_state:
-        for i in range(len(st.session_state.proj_ticket_notes)):
-            widget_key = f"t_common_note_{i}"
-            if widget_key in st.session_state:
-                st.session_state.proj_ticket_notes[i] = st.session_state[widget_key]
+def update_note(i):
+    """共通備考の入力内容を即座にリストへ反映"""
+    key = f"t_common_note_{i}"
+    if key in st.session_state and "proj_ticket_notes" in st.session_state:
+        st.session_state.proj_ticket_notes[i] = st.session_state[key]
 
-    # 3. 自由記述
-    if "proj_free_text" in st.session_state:
-        for i, item in enumerate(st.session_state.proj_free_text):
-            if f"f_title_{i}" in st.session_state: item["title"] = st.session_state[f"f_title_{i}"]
-            if f"f_content_{i}" in st.session_state: item["content"] = st.session_state[f"f_content_{i}"]
+def update_free(i, field):
+    """自由記述の入力内容を即座にリストへ反映"""
+    key = f"f_{field}_{i}"
+    if key in st.session_state and "proj_free_text" in st.session_state:
+        st.session_state.proj_free_text[i][field] = st.session_state[key]
 
 # ==========================================
 # メイン描画関数
@@ -124,11 +111,7 @@ def render_overview_page():
     
     project_id = st.session_state.get("ws_active_project_id")
 
-    # ==========================================
-    # ★重要: 時間データ消失対策 (復旧ロジック)
-    # ==========================================
-    # タブ移動などでWidgetが消え、st.session_stateから時間が消えている場合、
-    # DBから再取得して復旧させます。
+    # --- 時間データ復旧 (セッション切れ対策) ---
     if project_id:
         should_restore = False
         if "tt_open_time" not in st.session_state: should_restore = True
@@ -145,12 +128,12 @@ def render_overview_page():
                 db.close()
     
     # --- データロード (初回のみ) ---
-    # すでにタイトル等がロード済みならスキップ (workspace.pyでロード済みを想定)
     if project_id:
         if "proj_title" not in st.session_state:
             db = next(get_db())
             try:
                 load_project_data(db, project_id)
+                # 保存済み状態のスナップショット作成
                 st.session_state.overview_last_saved_params = {
                     "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                     "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -182,7 +165,7 @@ def render_overview_page():
         if "proj_tickets" not in st.session_state:
             st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
         
-        # 型補正
+        # データ型補正
         clean_tickets = []
         for t in st.session_state.proj_tickets:
             if isinstance(t, dict): clean_tickets.append(t)
@@ -192,18 +175,25 @@ def render_overview_page():
         for i, ticket in enumerate(st.session_state.proj_tickets):
             with st.container(border=True):
                 cols = st.columns([3, 2, 4, 1])
-                with cols[0]: ticket["name"] = st.text_input("チケット名", value=ticket.get("name",""), key=f"t_name_{i}", label_visibility="collapsed", placeholder="Sチケット")
-                with cols[1]: ticket["price"] = st.text_input("金額", value=ticket.get("price",""), key=f"t_price_{i}", label_visibility="collapsed", placeholder="¥3,000")
-                with cols[2]: ticket["note"] = st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", label_visibility="collapsed", placeholder="D代別")
+                with cols[0]: 
+                    st.text_input("チケット名", value=ticket.get("name",""), key=f"t_name_{i}", 
+                                  label_visibility="collapsed", placeholder="Sチケット",
+                                  on_change=update_ticket, args=(i, "name"))
+                with cols[1]: 
+                    st.text_input("金額", value=ticket.get("price",""), key=f"t_price_{i}", 
+                                  label_visibility="collapsed", placeholder="¥3,000",
+                                  on_change=update_ticket, args=(i, "price"))
+                with cols[2]: 
+                    st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", 
+                                  label_visibility="collapsed", placeholder="D代別",
+                                  on_change=update_ticket, args=(i, "note"))
                 with cols[3]:
                     if i > 0:
                         if st.button("🗑️", key=f"del_t_{i}"):
-                            sync_overview_inputs() # ★削除前同期
                             st.session_state.proj_tickets.pop(i)
                             st.rerun()
         
         if st.button("＋ 新しいチケットを追加"):
-            sync_overview_inputs() # ★追加前同期
             st.session_state.proj_tickets.append({"name":"", "price":"", "note":""})
             st.rerun()
 
@@ -214,22 +204,24 @@ def render_overview_page():
         if "proj_ticket_notes" not in st.session_state: st.session_state.proj_ticket_notes = []
         if not isinstance(st.session_state.proj_ticket_notes, list): st.session_state.proj_ticket_notes = []
 
-        current_notes = st.session_state.proj_ticket_notes
-        for i in range(len(current_notes)):
+        # ★ここが重要: 参照渡しではなく値を操作するためループで処理
+        for i in range(len(st.session_state.proj_ticket_notes)):
             c_note_in, c_note_del = st.columns([8, 1])
             with c_note_in:
-                # 入力欄
-                val = st.text_input("共通備考", value=current_notes[i], key=f"t_common_note_{i}", label_visibility="collapsed", placeholder="例：別途1ドリンク代が必要です")
-                # ここでの代入は念のため
-                current_notes[i] = val 
+                st.text_input(
+                    "共通備考",
+                    value=st.session_state.proj_ticket_notes[i],
+                    key=f"t_common_note_{i}",
+                    label_visibility="collapsed",
+                    placeholder="例：別途1ドリンク代が必要です",
+                    on_change=update_note, args=(i,) # ★変更時に即座に同期
+                )
             with c_note_del:
                 if st.button("🗑️", key=f"del_t_common_{i}"):
-                    sync_overview_inputs() # ★削除前同期
                     st.session_state.proj_ticket_notes.pop(i)
                     st.rerun()
 
         if st.button("＋ チケット共通備考を追加"):
-            sync_overview_inputs() # ★追加前同期 (これで入力中の文字が消えない)
             st.session_state.proj_ticket_notes.append("")
             st.rerun()
 
@@ -248,17 +240,21 @@ def render_overview_page():
         for i, item in enumerate(st.session_state.proj_free_text):
             with st.container(border=True):
                 c_head, c_btn = st.columns([5, 1])
-                with c_head: item["title"] = st.text_input("タイトル", value=item.get("title",""), key=f"f_title_{i}", placeholder="注意事項")
+                with c_head: 
+                    st.text_input("タイトル", value=item.get("title",""), key=f"f_title_{i}", 
+                                  placeholder="注意事項",
+                                  on_change=update_free, args=(i, "title"))
                 with c_btn:
                     if i > 0:
                         if st.button("🗑️", key=f"del_f_{i}"):
-                            sync_overview_inputs() # ★削除前同期
                             st.session_state.proj_free_text.pop(i)
                             st.rerun()
-                item["content"] = st.text_area("内容", value=item.get("content",""), key=f"f_content_{i}", height=100)
+                
+                st.text_area("内容", value=item.get("content",""), key=f"f_content_{i}", 
+                             height=100,
+                             on_change=update_free, args=(i, "content"))
 
         if st.button("＋ 新しい項目を追加"):
-            sync_overview_inputs() # ★追加前同期
             st.session_state.proj_free_text.append({"title":"", "content":""})
             st.rerun()
 
@@ -286,16 +282,19 @@ def render_overview_page():
 
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
         
-        sync_overview_inputs() # ★保存前にも同期
+        # 念のための最終同期 (on_changeが走らなかったケースの救済)
+        if "proj_ticket_notes" in st.session_state:
+            for i in range(len(st.session_state.proj_ticket_notes)):
+                key = f"t_common_note_{i}"
+                if key in st.session_state: st.session_state.proj_ticket_notes[i] = st.session_state[key]
         
-        # 保存実行
         if project_id:
             db = next(get_db())
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
                     
-                    # 保存後の状態をスナップショット更新
+                    # 保存後スナップショット更新
                     updated_params = {
                         "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -306,7 +305,6 @@ def render_overview_page():
                         "date": str(st.session_state.get("proj_date", ""))
                     }
                     st.session_state.overview_last_saved_params = updated_params
-                    # リロードして警告を消す
                     st.rerun()
                 else:
                     st.error("保存に失敗しました")
@@ -318,7 +316,7 @@ def render_overview_page():
         else:
             st.error("プロジェクトIDが不明です")
 
-    # プレビュー生成 (常に最新の状態で行う)
+    # プレビュー生成
     st.session_state.txt_overview_preview_area = generate_event_text()
 
     st.subheader("📝 告知用テキストプレビュー")
