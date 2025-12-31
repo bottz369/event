@@ -1,48 +1,20 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-from sqlalchemy import text, inspect # ★inspectを追加
-from database import init_db, engine, TimetableProject # ★TimetableProjectを追加
+from sqlalchemy import text, inspect
+from database import init_db, engine, TimetableProject
 
 from constants import get_default_row_settings
 
 # --- 各画面の読み込み ---
 from views.workspace import render_workspace_page   # 統合ワークスペース
 from views.projects import render_projects_page    # プロジェクト管理
-from views.assets import render_assets_page        # 素材アーカイブ
+from views.assets import render_assets_page        # 素材アーカイブ（アセット管理）
 from views.artists import render_artists_page      # アーティスト管理
 
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
 init_db()
-
-# ==========================================
-# 🔍 システム内部診断 (Step 3)
-# ==========================================
-st.markdown("### 🔍 システム内部診断")
-st.caption("※確認が終わったらこのブロックは削除してOKです")
-col1, col2 = st.columns(2)
-
-# 1. Pythonの設計図に項目があるかチェック
-with col1:
-    if hasattr(TimetableProject, 'ticket_notes_json'):
-        st.success("✅ Python設計図: OK (ticket_notes_json あり)")
-    else:
-        st.error("❌ Python設計図: NG (database.py が反映されていません)")
-
-# 2. データベースの実物に項目があるかチェック
-with col2:
-    try:
-        inspector = inspect(engine)
-        columns = [c['name'] for c in inspector.get_columns('projects_v4')]
-        if 'ticket_notes_json' in columns:
-            st.success("✅ データベース実物: OK (カラムあり)")
-        else:
-            st.error("❌ データベース実物: NG (カラムが追加されていません)")
-    except Exception as e:
-        st.error(f"DB接続エラー: {e}")
-
-st.divider()
 
 # ==========================================
 # ★重要: セッションステートの初期化
@@ -65,6 +37,10 @@ if "tt_goods_offset" not in st.session_state: st.session_state.tt_goods_offset =
 if "request_calc" not in st.session_state: st.session_state.request_calc = False
 if "tt_current_proj_id" not in st.session_state: st.session_state.tt_current_proj_id = None
 
+# チケット関連の安全策（初期化漏れ防止）
+if "tt_tickets" not in st.session_state: st.session_state.tt_tickets = []
+if "tt_ticket_notes" not in st.session_state: st.session_state.tt_ticket_notes = []
+
 if "tt_unsaved_changes" not in st.session_state: st.session_state.tt_unsaved_changes = False
 
 # デフォルトメニュー設定
@@ -75,7 +51,8 @@ if "last_menu" not in st.session_state: st.session_state.last_menu = "ワーク�
 # ==========================================
 st.sidebar.title("メニュー")
 
-menu_items = ["ワークスペース", "プロジェクト管理", "素材アーカイブ", "アーティスト管理"]
+# メニュー構成の変更
+menu_items = ["ワークスペース", "プロジェクト管理", "アーティスト管理", "アセット管理"]
 menu_selection = st.sidebar.radio("機能を選択", menu_items, key="sb_menu")
 
 # ==========================================
@@ -93,8 +70,9 @@ if current_page == "ワークスペース":
 elif current_page == "プロジェクト管理":
     render_projects_page()
 
-elif current_page == "素材アーカイブ":
-    render_assets_page()
-
 elif current_page == "アーティスト管理":
     render_artists_page()
+
+elif current_page == "アセット管理":
+    # 以前の「素材アーカイブ」を表示
+    render_assets_page()
