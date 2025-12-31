@@ -3,7 +3,7 @@ from datetime import datetime
 import traceback # エラー詳細表示用
 
 # データベース関連
-from database import get_db
+from database import get_db, TimetableProject # ★TimetableProjectを追加
 from logic_project import save_current_project, load_project_data
 
 # ==========================================
@@ -52,6 +52,7 @@ def generate_event_text():
         if date_val:
             date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
         
+        # ★ここでの取得時に、session_stateに値が戻っていることを期待
         open_t = st.session_state.get("tt_open_time", "10:00")
         start_t = st.session_state.get("tt_start_time", "10:30")
         
@@ -108,19 +109,41 @@ def generate_event_text():
 # メイン描画関数
 # ==========================================
 def render_overview_page():
-    """イベント概要の編集画面 (Debug Mode + Preview Fix)"""
+    """イベント概要の編集画面 (Debug Mode + Preview Fix + Time Restore)"""
     
     st.title("🛠️ イベント概要編集 (Debug Mode)")
     
+    project_id = st.session_state.get("ws_active_project_id")
+
+    # ==========================================
+    # ★追加修正: 時間データ消失時の復旧ロジック
+    # ==========================================
+    # タイムテーブルタブが表示されていない時、tt_open_time等がメモリから消えることがあるため
+    # ここでDBから再取得して補完します。
+    if project_id:
+        should_restore = False
+        if "tt_open_time" not in st.session_state: should_restore = True
+        if "tt_start_time" not in st.session_state: should_restore = True
+        
+        if should_restore:
+            db = next(get_db())
+            try:
+                proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+                if proj:
+                    st.session_state.tt_open_time = proj.open_time or "10:00"
+                    st.session_state.tt_start_time = proj.start_time or "10:30"
+                    debug_log("⚠️ 時間データが消えていたためDBから復旧しました")
+            finally:
+                db.close()
+
     # サイドバーに現在のデータ状態を表示（デバッグ用）
     st.sidebar.markdown("---")
     st.sidebar.warning("📊 データ監視中")
     if st.sidebar.checkbox("生データを表示", value=False):
         st.sidebar.write("Project ID:", st.session_state.get("ws_active_project_id"))
         st.sidebar.write("Notes List:", st.session_state.get("proj_ticket_notes"))
+        st.sidebar.write("Open Time:", st.session_state.get("tt_open_time")) # 時間も監視
         st.sidebar.write("Tickets:", st.session_state.get("proj_tickets"))
-
-    project_id = st.session_state.get("ws_active_project_id")
     
     # --- データ読み込み ---
     if project_id:
@@ -310,8 +333,6 @@ def render_overview_page():
     # ==========================================
     # ★修正ポイント: 常に最新のデータでテキストを生成する
     # ==========================================
-    # これにより、追加ボタン押下などの単純なリロード時も、
-    # セッション内の最新時間データ(OPEN 10:10など)を使ってプレビューを表示します。
     st.session_state.txt_overview_preview_area = generate_event_text()
 
     st.subheader("📝 告知用テキストプレビュー")
