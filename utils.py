@@ -1,5 +1,8 @@
 import pandas as pd
 import io
+import os
+import json
+import zipfile
 from datetime import datetime, timedelta
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -7,7 +10,9 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.ttfonts import TTFont
 from PIL import Image, ImageDraw, ImageFont
+from constants import FONT_DIR
 
 def safe_int(val, default=0):
     try:
@@ -40,6 +45,7 @@ def get_duration_minutes(start_str, end_str):
         return 0
 
 def create_font_preview(text, font_path, size=50):
+    """単一のフォントプレビュー画像を生成（素材管理ページ用）"""
     try:
         dummy_img = Image.new("RGBA", (10, 10), (0,0,0,0))
         dummy_draw = ImageDraw.Draw(dummy_img)
@@ -63,7 +69,6 @@ def create_font_preview(text, font_path, size=50):
         return None
 
 def calculate_timetable_flow(df, open_time, start_time):
-    # 元のコードにある calculate_timetable_flow の中身をすべてここに移動
     calculated_rows = []
     
     if open_time and start_time:
@@ -173,7 +178,6 @@ def calculate_timetable_flow(df, open_time, start_time):
     return pd.DataFrame(calculated_rows)
 
 def create_business_pdf(df, title, event_date, venue):
-    # 元のコードにある create_business_pdf の中身をすべてここに移動
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, title="Timetable")
     elements = []
@@ -221,10 +225,6 @@ def create_business_pdf(df, title, event_date, venue):
     doc.build(elements)
     buffer.seek(0)
     return buffer
-
-# --- 以下を utils.py の末尾に追記 ---
-import json
-import zipfile
 
 def create_event_summary_pdf(project):
     """プロジェクトのイベント概要PDFを作成する"""
@@ -287,7 +287,6 @@ def create_event_summary_pdf(project):
 
 def create_project_assets_zip(project, db, Asset):
     """プロジェクトに関連する素材（フライヤー設定で使用した画像）をZIPにする"""
-    # メモリ上にZIPを作成
     zip_buffer = io.BytesIO()
     
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -295,84 +294,75 @@ def create_project_assets_zip(project, db, Asset):
         summary_pdf = create_event_summary_pdf(project)
         zf.writestr(f"event_summary_{project.id}.pdf", summary_pdf.getvalue())
         
-        # 2. フライヤーで使用した素材画像
+        # 2. フライヤーで使用した素材画像 (簡易実装)
         if project.flyer_json:
             try:
                 settings = json.loads(project.flyer_json)
                 logo_id = settings.get("logo_id")
                 bg_id = settings.get("bg_id")
                 
-                assets_to_fetch = []
-                if logo_id: assets_to_fetch.append(logo_id)
-                if bg_id: assets_to_fetch.append(bg_id)
-                
-                for aid in assets_to_fetch:
-                    asset = db.query(Asset).filter(Asset.id == aid).first()
-                    if asset and asset.image_filename:
-                        # ローカルディレクトリから画像を読み込む (supabase版の場合はダウンロードが必要だが、
-                        # 今回の構成では database.py の get_image_url はURLを返すが、
-                        # 実体ファイルを取得するには別途ダウンロードロジックが必要。
-                        # ここでは簡易的に「URLリスト」をテキストで入れるか、ローカル保存版ならファイルを入れます。
-                        # ※ Supabase版のため、URLをまとめたテキストファイルを作成します。
-                        #    (画像の実体をサーバー側でダウンロードしてZIP化するのは少し重いため)
-                        pass 
+                # 画像処理ロジック（Supabaseからのダウンロード等は省略し、情報のみ含める）
+                info_txt = f"Logo ID: {logo_id}\nBackground ID: {bg_id}"
+                zf.writestr("flyer_assets_info.txt", info_txt)
             except:
                 pass
         
-        # ※ Supabase版の場合、画像のバイナリ取得が複雑なため、
-        #    今回は「概要PDF」と「タイムテーブルデータ(CSV)」をまとめる形にします。
+        # 3. データJSON
         if project.data_json:
-             # 簡易的にCSVデータを作成（calculate_timetable_flowを呼ぶにはdfが必要だが...）
-             # ここでは簡易版としてJSONをダンプ
              zf.writestr("timetable_data.json", project.data_json)
 
     zip_buffer.seek(0)
     return zip_buffer
 
-# --- utils.py の末尾に追加 ---
-
-from PIL import Image, ImageDraw, ImageFont
-import os
-
+# =========================================================
+# ★修正: 文字化けしないフォント一覧画像生成
+# =========================================================
 def create_font_specimen_img(font_dir, font_list):
     """
     指定されたフォントリストの見本画像を生成する
+    左側にファイル名(標準フォント)、右側にサンプル(対象フォント)を描画
     """
     if not font_list:
         return None
 
     # 設定
     row_height = 60
-    margin = 20
-    img_width = 600
-    img_height = (row_height * len(font_list)) + (margin * 2)
+    margin_left = 20
+    img_width = 800
+    img_height = (row_height * len(font_list)) + 20
+    text_sample = "あいう ABC 123" # 見本テキスト
     
-    # キャンバス作成
-    canvas = Image.new("RGB", (img_width, img_height), (255, 255, 255))
-    draw = ImageDraw.Draw(canvas)
+    # 画像作成
+    img = Image.new("RGB", (img_width, img_height), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
     
+    # ★重要: ファイル名を描画するための「読めるフォント」をロード
+    # keifont.ttf があれば使い、なければデフォルトを使用
+    label_font = None
     try:
-        # デフォルトのラベル用フォント
-        label_font = ImageFont.load_default()
+        # FONT_DIR内の keifont.ttf を指定
+        label_font = ImageFont.truetype(os.path.join(font_dir, "keifont.ttf"), 24)
     except:
-        label_font = None
+        # 失敗したらデフォルト（これが文字化けの原因だが、keifontがあれば回避できる）
+        label_font = ImageFont.load_default()
 
-    y = margin
-    sample_text = "あいう ABC 123"
+    y = 10
+    for fname in font_list:
+        font_path = os.path.join(font_dir, fname)
+        
+        # 1. 左側: ファイル名を描画 (読めるフォントで)
+        draw.text((margin_left, y + 15), fname, font=label_font, fill=(50, 50, 50))
 
-    for font_filename in font_list:
-        font_path = os.path.join(font_dir, font_filename)
-        
-        # 1. フォント名を描画 (左側・小さめ)
-        draw.text((margin, y + 15), font_filename, fill=(100, 100, 100), font=label_font)
-        
-        # 2. サンプルテキストを描画 (右側・指定フォント)
+        # 2. 右側: そのフォントでのサンプル描画
         try:
-            custom_font = ImageFont.truetype(font_path, 36)
-            draw.text((250, y), sample_text, fill=(0, 0, 0), font=custom_font)
+            target_font = ImageFont.truetype(font_path, 32)
+            draw.text((400, y + 10), text_sample, font=target_font, fill=(0, 0, 0))
         except:
-            draw.text((250, y), "Load Error", fill=(255, 0, 0), font=label_font)
+            draw.text((400, y + 15), "Load Error", font=label_font, fill=(255, 0, 0))
             
         y += row_height
+        
+        # 区切り線
+        draw.line((0, y, img_width, y), fill=(220, 220, 220), width=1)
 
-    return canvas
+    return img
