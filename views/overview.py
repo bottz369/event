@@ -1,13 +1,13 @@
 import streamlit as st
 from datetime import datetime
-import json # 比較用に必要
+import json
 
 # データベース関連
 from database import get_db, TimetableProject
 from logic_project import save_current_project, load_project_data
 
 # ==========================================
-# ヘルパー関数
+# ヘルパー関数 (generate_event_textなど)
 # ==========================================
 def get_day_of_week_jp(dt):
     if not dt: return ""
@@ -55,6 +55,7 @@ def generate_event_text():
         else:
             text += "\n(情報なし)"
 
+        # 共通備考の反映
         if "proj_ticket_notes" in st.session_state and st.session_state.proj_ticket_notes:
             for note in st.session_state.proj_ticket_notes:
                 if note and str(note).strip():
@@ -83,11 +84,11 @@ def generate_event_text():
 # メイン描画関数
 # ==========================================
 def render_overview_page():
-    """イベント概要の編集画面 (変更検知機能付き)"""
+    """イベント概要の編集画面"""
     
     project_id = st.session_state.get("ws_active_project_id")
 
-    # --- 時間データ復旧 ---
+    # --- 時間データ復旧 (セッション切れ対策) ---
     if project_id:
         should_restore = False
         if "tt_open_time" not in st.session_state: should_restore = True
@@ -103,13 +104,13 @@ def render_overview_page():
             finally:
                 db.close()
     
-    # --- データロード ---
+    # --- データロード (workspace.py経由ならスキップされる) ---
     if project_id:
         if "proj_title" not in st.session_state:
             db = next(get_db())
             try:
+                # ここが実行されるのはセッションが飛んだ場合のみ
                 load_project_data(db, project_id)
-                # ★ロード直後の状態を「保存済み」として記録
                 st.session_state.overview_last_saved_params = {
                     "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                     "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -141,7 +142,6 @@ def render_overview_page():
         if "proj_tickets" not in st.session_state:
             st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
         
-        # リスト補正
         clean_tickets = []
         for t in st.session_state.proj_tickets:
             if isinstance(t, dict): clean_tickets.append(t)
@@ -175,7 +175,6 @@ def render_overview_page():
         for i in range(len(current_notes)):
             c_note_in, c_note_del = st.columns([8, 1])
             with c_note_in:
-                # ユーザーが入力した内容を即座にリストへ反映
                 val = st.text_input("共通備考", value=current_notes[i], key=f"t_common_note_{i}", label_visibility="collapsed", placeholder="例：別途1ドリンク代が必要です")
                 current_notes[i] = val 
             with c_note_del:
@@ -185,6 +184,7 @@ def render_overview_page():
 
         if st.button("＋ チケット共通備考を追加"):
             st.session_state.proj_ticket_notes.append("")
+            # ★追加: ここでrerunすると、workspace.pyのload処理が走らないことを確認済み(ID不変のため)
             st.rerun()
 
     # 自由記述
@@ -216,10 +216,7 @@ def render_overview_page():
 
     st.divider()
 
-    # ==========================================
-    # ★変更検知ロジック
-    # ==========================================
-    # 現在の入力内容をスナップショット化
+    # 変更検知ロジック
     current_params = {
         "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -230,11 +227,9 @@ def render_overview_page():
         "date": str(st.session_state.get("proj_date", ""))
     }
 
-    # 初回ロード時などで比較対象がない場合、現在の状態を保存済みとみなす
     if "overview_last_saved_params" not in st.session_state:
         st.session_state.overview_last_saved_params = current_params
 
-    # 比較して警告表示
     is_changed = (st.session_state.overview_last_saved_params != current_params)
     if is_changed:
         st.warning("⚠️ 設定が変更されています。最新の状態にするには「設定反映」ボタンを押してください。")
@@ -242,7 +237,6 @@ def render_overview_page():
     st.caption("変更内容は以下のボタンで保存してください。")
 
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
-        
         # 強制同期
         if "proj_ticket_notes" in st.session_state:
             for i in range(len(st.session_state.proj_ticket_notes)):
@@ -266,11 +260,7 @@ def render_overview_page():
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
-                    new_text = generate_event_text()
-                    st.session_state.txt_overview_preview_area = new_text
-                    
-                    # ★保存成功したら、現在の状態を「保存済み」として更新
-                    # (ここでもう一度最新のスナップショットを作って更新)
+                    # 最新状態をスナップショットに保存
                     updated_params = {
                         "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -281,7 +271,7 @@ def render_overview_page():
                         "date": str(st.session_state.get("proj_date", ""))
                     }
                     st.session_state.overview_last_saved_params = updated_params
-                    st.rerun() # 警告を消すためにリロード
+                    st.rerun()
                 else:
                     st.error("保存に失敗しました")
             except Exception as e:
@@ -296,3 +286,4 @@ def render_overview_page():
 
     st.subheader("📝 告知用テキストプレビュー")
     st.text_area("コピーしてSNSなどで使用できます", height=400, key="txt_overview_preview_area")
+
