@@ -47,7 +47,6 @@ def format_event_date_short(dt_obj):
     if isinstance(dt_obj, str): return dt_obj
     try:
         weekdays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-        # dt_obj.month, dt_obj.day を使うとゼロ埋めされません
         return f"{dt_obj.year}.{dt_obj.month}.{dt_obj.day}.{weekdays[dt_obj.weekday()]}"
     except:
         return str(dt_obj)
@@ -147,8 +146,8 @@ def create_flyer_image_v2(
     bg_source, logo_source, main_source,
     basic_font_path, text_color, stroke_color,
     date_text, venue_text, open_time, start_time,
-    ticket_info_list
-    # ★ free_text_list は引数から削除
+    ticket_info_list,
+    common_notes_list # ★追加: チケット共通備考リスト
 ):
     # 1. 背景
     base_img = load_image_from_source(bg_source)
@@ -162,9 +161,11 @@ def create_flyer_image_v2(
         f_label = ImageFont.truetype(basic_font_path, int(W * 0.04))
         f_time = ImageFont.truetype(basic_font_path, int(W * 0.06))
         f_ticket_name = ImageFont.truetype(basic_font_path, int(W * 0.045))
-        # f_note は不要になったため削除
+        
+        # ★追加: 共通備考用の小さめのフォント
+        f_note_small = ImageFont.truetype(basic_font_path, int(W * 0.03)) 
     except:
-        f_date = f_venue = f_label = f_time = f_ticket_name = ImageFont.load_default()
+        f_date = f_venue = f_label = f_time = f_ticket_name = f_note_small = ImageFont.load_default()
 
     padding_x = int(W * 0.05)
     current_y = int(H * 0.05)
@@ -221,17 +222,23 @@ def create_flyer_image_v2(
     header_end_y = max(header_end_y, start_y + int(H*0.08)) + int(H * 0.02)
 
     # ==========================
-    # D. フッター高さ計算 (チケット情報のみ)
+    # D. フッター高さ計算
     # ==========================
     footer_lines = []
-    # チケット
+    
+    # 1. チケット情報
     for ticket in ticket_info_list:
         line = f"{ticket.get('name','')} {ticket.get('price','')}"
         if ticket.get('note'): line += f" ({ticket.get('note')})"
         footer_lines.append({"text": line, "font": f_ticket_name, "gap": int(H * 0.05)})
     
-    # ★自由入力(free_text)のループは削除しました
+    # 2. ★追加: チケット共通備考 (小さめ、下部)
+    for note in common_notes_list:
+        if note and str(note).strip():
+            # 注釈などは少し行間を狭める
+            footer_lines.append({"text": str(note).strip(), "font": f_note_small, "gap": int(H * 0.02)})
 
+    # フッターの総高さを計算
     footer_total_h = int(H * 0.05)
     for item in reversed(footer_lines):
         bbox = draw.textbbox((0,0), item["text"], font=item["font"])
@@ -241,19 +248,17 @@ def create_flyer_image_v2(
     footer_start_y = H - footer_total_h
     
     # ==========================
-    # E. メイン画像 (ヘッダーとフッターの間に中央配置)
+    # E. メイン画像 (中央配置)
     # ==========================
     
-    available_h = footer_start_y - header_end_y - int(H * 0.04) # 上下少し余裕を持たせる
+    available_h = footer_start_y - header_end_y - int(H * 0.04)
     
     main_img = load_image_from_source(main_source)
     if main_img and available_h > 100:
         target_w = int(W * 0.95)
-        # 枠内に収める
         main_img = resize_image_contain(main_img, target_w, available_h)
         
         grid_x = (W - main_img.width) // 2
-        # ★垂直方向中央配置
         grid_y = header_end_y + (available_h - main_img.height) // 2 + int(H * 0.02)
         
         base_img.paste(main_img, (grid_x, int(grid_y)), main_img)
@@ -282,6 +287,19 @@ def render_flyer_editor(project_id):
     logos = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
     bgs = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
     
+    # ★追加: フォント一覧をDBから取得
+    fonts_db = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
+    
+    # ★追加: 表示名でソート (アルファベット順 -> 日本語)
+    # Pythonの標準ソートはASCII順が先に来るので、そのままnameでソートすればOK
+    fonts_db.sort(key=lambda x: x.name)
+    
+    # セレクトボックス用の辞書作成 (表示名 -> ファイル名)
+    # デフォルトフォントも含める
+    font_options = {"標準フォント": "keifont.ttf"}
+    for f in fonts_db:
+        font_options[f.name] = f.image_filename
+    
     if not proj:
         st.error("プロジェクトエラー")
         db.close()
@@ -302,6 +320,7 @@ def render_flyer_editor(project_id):
     if "flyer_logo_id" not in st.session_state:
         st.session_state.flyer_logo_id = int(saved_config.get("logo_id", 0))
     if "flyer_basic_font" not in st.session_state:
+        # 保存されているのはファイル名
         st.session_state.flyer_basic_font = saved_config.get("font", "keifont.ttf")
     if "flyer_text_color" not in st.session_state:
         st.session_state.flyer_text_color = saved_config.get("text_color", "#FFFFFF")
@@ -321,15 +340,35 @@ def render_flyer_editor(project_id):
             render_visual_selector("ロゴ", logos, "flyer_logo_id", st.session_state.flyer_logo_id, allow_none=True)
 
         with st.expander("3. フォント・色設定", expanded=True):
-            all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
-            if not all_fonts: all_fonts = ["default"]
+            # ★変更: DBから取得したフォントリストでセレクトボックスを作成
+            # 現在の選択状態 (ファイル名) から、表示名を探す
+            current_filename = st.session_state.flyer_basic_font
+            current_display_name = "標準フォント"
             
-            cur_font = st.session_state.flyer_basic_font
-            if cur_font not in all_fonts: cur_font = all_fonts[0]
+            # ファイル名から表示名を逆引き
+            for name, filename in font_options.items():
+                if filename == current_filename:
+                    current_display_name = name
+                    break
             
-            font_choice = st.selectbox("フォント", all_fonts, index=all_fonts.index(cur_font), key="flyer_basic_font")
-            if font_choice != "default":
-                prev_img = local_create_font_preview(os.path.join(FONT_DIR, font_choice), "OPEN 18:30 / START 19:00")
+            # セレクトボックス (キーは表示名のリスト)
+            display_names = list(font_options.keys())
+            
+            # 選択された表示名
+            selected_display_name = st.selectbox(
+                "フォント", 
+                display_names, 
+                index=display_names.index(current_display_name) if current_display_name in display_names else 0,
+                key="flyer_font_selectbox" 
+            )
+            
+            # 選択された表示名からファイル名を決定してセッションステートに保存
+            st.session_state.flyer_basic_font = font_options[selected_display_name]
+            
+            # ★追加: フォントプレビュー
+            selected_filename = st.session_state.flyer_basic_font
+            if selected_filename:
+                prev_img = local_create_font_preview(os.path.join(FONT_DIR, selected_filename), "OPEN 18:30 / START 19:00")
                 if prev_img: st.image(prev_img, use_container_width=True)
 
             c1, c2 = st.columns(2)
@@ -379,13 +418,12 @@ def render_flyer_editor(project_id):
                     "basic_font_path": font_path,
                     "text_color": st.session_state.flyer_text_color,
                     "stroke_color": st.session_state.flyer_stroke_color,
-                    # ★ここで日付フォーマットを変更
                     "date_text": format_event_date_short(proj.event_date),
                     "venue_text": v_text,
                     "open_time": format_time_str(proj.open_time),
                     "start_time": format_time_str(proj.start_time),
-                    "ticket_info_list": st.session_state.get("proj_tickets", [])
-                    # ★ free_text_list は渡さない
+                    "ticket_info_list": st.session_state.get("proj_tickets", []),
+                    "common_notes_list": st.session_state.get("proj_ticket_notes", []) # ★追加
                 }
                 
                 if not args["ticket_info_list"] and getattr(proj, "tickets_json", None):
