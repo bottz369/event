@@ -65,9 +65,15 @@ def generate_event_text():
     else:
         text += "\n(情報なし)"
 
+    # ★追加: チケット共通備考
+    if "proj_ticket_notes" in st.session_state and st.session_state.proj_ticket_notes:
+        for note in st.session_state.proj_ticket_notes:
+            if note.strip():
+                # 備考らしく「※」を頭につけて改行
+                text += f"\n※{note}"
+
     # 4. 出演者リスト
     # ★重要: アー写グリッドの並び順 (grid_order) を最優先で使用
-    # グリッド画面で一度でも並び替え等の操作が行われていれば、session_state.grid_order に最新順序が入っている
     if "grid_order" in st.session_state and st.session_state.grid_order:
         artists = st.session_state.grid_order
     else:
@@ -142,6 +148,38 @@ def render_overview_page():
             st.session_state.proj_tickets.append({"name":"", "price":"", "note":""})
             st.rerun()
 
+        # --- ★追加: チケット共通備考エリア ---
+        st.markdown("---") # 区切り線
+        st.markdown("**チケット共通備考**") # ラベル
+
+        # データ初期化
+        if "proj_ticket_notes" not in st.session_state:
+            st.session_state.proj_ticket_notes = [] # 空リストで初期化
+        
+        # リストのクリーニング（万が一Noneが入っていた場合など）
+        st.session_state.proj_ticket_notes = [n for n in st.session_state.proj_ticket_notes if n is not None]
+
+        # 入力フォームループ
+        for i, note in enumerate(st.session_state.proj_ticket_notes):
+            c_note_in, c_note_del = st.columns([8, 1])
+            with c_note_in:
+                st.session_state.proj_ticket_notes[i] = st.text_input(
+                    "共通備考",
+                    value=note,
+                    key=f"t_common_note_{i}",
+                    label_visibility="collapsed",
+                    placeholder="例：別途1ドリンク代が必要です"
+                )
+            with c_note_del:
+                if st.button("🗑️", key=f"del_t_common_{i}"):
+                    st.session_state.proj_ticket_notes.pop(i)
+                    st.rerun()
+
+        # 追加ボタン
+        if st.button("＋ チケット共通備考を追加"):
+            st.session_state.proj_ticket_notes.append("")
+            st.rerun()
+
     # --- 自由記述入力 ---
     with c_free:
         st.subheader("自由記述 (注意事項など)")
@@ -173,7 +211,7 @@ def render_overview_page():
 
     st.divider()
 
-    # --- ★追加: 設定反映 & テキストプレビューエリア ---
+    # --- 設定反映 & テキストプレビューエリア ---
     st.caption("変更内容は以下のボタンで保存してください。同時に告知用テキストを生成します。")
     
     # 初回表示時の自動生成
@@ -187,7 +225,7 @@ def render_overview_page():
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
-                    # ★修正: ボタンを押したタイミングで再生成し、強制的に更新
+                    # ボタンを押したタイミングで再生成し、強制的に更新
                     st.session_state.overview_text_preview = generate_event_text()
                 else:
                     st.error("保存に失敗しました")
