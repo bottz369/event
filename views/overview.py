@@ -6,6 +6,8 @@ import traceback
 # データベース関連
 from database import get_db, TimetableProject
 from logic_project import save_current_project, load_project_data
+# ★追加: 時間の選択肢をインポート
+from constants import TIME_OPTIONS
 
 # ==========================================
 # ヘルパー関数
@@ -37,13 +39,16 @@ def generate_event_text():
         if date_val:
             date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
         
+        # 時間情報 (画面上のウィジェットから同期された最新の値を使用)
         open_t = st.session_state.get("tt_open_time", "10:00")
         start_t = st.session_state.get("tt_start_time", "10:30")
         
         text = f"【公演概要】\n{date_str}\n『{title}』\n\n■会場: {venue}"
-        if url: text += f"\n {url}"
+        if url:
+            text += f"\n {url}"
         text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
 
+        # チケット情報
         text += "\n\n■チケット"
         if "proj_tickets" in st.session_state and st.session_state.proj_tickets:
             for t in st.session_state.proj_tickets:
@@ -83,22 +88,24 @@ def generate_event_text():
         return f"エラー: {e}"
 
 # ==========================================
-# ★重要: コールバック関数 (入力即反映)
+# コールバック関数 (入力即反映)
 # ==========================================
+def update_time_sync(key_name):
+    """概要ページでの時間変更をメインの変数に同期"""
+    # ov_tt_open_time -> tt_open_time
+    st.session_state[key_name] = st.session_state[f"ov_{key_name}"]
+
 def update_ticket(i, field):
-    """チケット情報の入力内容を即座にリストへ反映"""
     key = f"t_{field}_{i}"
     if key in st.session_state and "proj_tickets" in st.session_state:
         st.session_state.proj_tickets[i][field] = st.session_state[key]
 
 def update_note(i):
-    """共通備考の入力内容を即座にリストへ反映"""
     key = f"t_common_note_{i}"
     if key in st.session_state and "proj_ticket_notes" in st.session_state:
         st.session_state.proj_ticket_notes[i] = st.session_state[key]
 
 def update_free(i, field):
-    """自由記述の入力内容を即座にリストへ反映"""
     key = f"f_{field}_{i}"
     if key in st.session_state and "proj_free_text" in st.session_state:
         st.session_state.proj_free_text[i][field] = st.session_state[key]
@@ -111,29 +118,21 @@ def render_overview_page():
     
     project_id = st.session_state.get("ws_active_project_id")
 
-    # --- 時間データ復旧 (セッション切れ対策) ---
+    # --- 時間データなどのロード (初回のみ) ---
     if project_id:
-        should_restore = False
-        if "tt_open_time" not in st.session_state: should_restore = True
-        if "tt_start_time" not in st.session_state: should_restore = True
-        
-        if should_restore:
+        # まだセッションにロードされていない場合のみDBから取得
+        if "proj_title" not in st.session_state or "tt_open_time" not in st.session_state:
             db = next(get_db())
             try:
+                # 念のための再ロード
+                load_project_data(db, project_id)
+                # 時間がロードされていない場合のフォールバック
                 proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
                 if proj:
                     st.session_state.tt_open_time = proj.open_time or "10:00"
                     st.session_state.tt_start_time = proj.start_time or "10:30"
-            finally:
-                db.close()
-    
-    # --- データロード (初回のみ) ---
-    if project_id:
-        if "proj_title" not in st.session_state:
-            db = next(get_db())
-            try:
-                load_project_data(db, project_id)
-                # 保存済み状態のスナップショット作成
+                
+                # スナップショット初期化
                 st.session_state.overview_last_saved_params = {
                     "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                     "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -141,12 +140,14 @@ def render_overview_page():
                     "title": st.session_state.get("proj_title", ""),
                     "venue": st.session_state.get("proj_venue", ""),
                     "url": st.session_state.get("proj_url", ""),
-                    "date": str(st.session_state.get("proj_date", ""))
+                    "date": str(st.session_state.get("proj_date", "")),
+                    "open": st.session_state.get("tt_open_time", ""),
+                    "start": st.session_state.get("tt_start_time", "")
                 }
             finally:
                 db.close()
 
-    # --- UI描画 ---
+    # --- UI描画: 基本情報 ---
     st.subheader("基本情報")
     c_basic1, c_basic2 = st.columns(2)
     with c_basic1:
@@ -156,6 +157,24 @@ def render_overview_page():
         st.text_input("会場名", key="proj_venue")
         st.text_input("会場URL", key="proj_url")
     
+    # --- UI描画: 時間設定 (★追加機能: ここで時間を維持する) ---
+    c_time1, c_time2 = st.columns(2)
+    
+    # 現在の値を安全に取得
+    curr_open = st.session_state.get("tt_open_time", "10:00")
+    curr_start = st.session_state.get("tt_start_time", "10:30")
+    
+    # リストにない場合(手入力等)の対策
+    if curr_open not in TIME_OPTIONS: curr_open = TIME_OPTIONS[0]
+    if curr_start not in TIME_OPTIONS: curr_start = TIME_OPTIONS[1]
+
+    with c_time1:
+        st.selectbox("OPEN", TIME_OPTIONS, index=TIME_OPTIONS.index(curr_open), 
+                     key="ov_tt_open_time", on_change=update_time_sync, args=("tt_open_time",))
+    with c_time2:
+        st.selectbox("START", TIME_OPTIONS, index=TIME_OPTIONS.index(curr_start), 
+                     key="ov_tt_start_time", on_change=update_time_sync, args=("tt_start_time",))
+
     st.divider()
     c_tic, c_free = st.columns(2)
     
@@ -165,7 +184,7 @@ def render_overview_page():
         if "proj_tickets" not in st.session_state:
             st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
         
-        # データ型補正
+        # 型補正
         clean_tickets = []
         for t in st.session_state.proj_tickets:
             if isinstance(t, dict): clean_tickets.append(t)
@@ -204,7 +223,6 @@ def render_overview_page():
         if "proj_ticket_notes" not in st.session_state: st.session_state.proj_ticket_notes = []
         if not isinstance(st.session_state.proj_ticket_notes, list): st.session_state.proj_ticket_notes = []
 
-        # ★ここが重要: 参照渡しではなく値を操作するためループで処理
         for i in range(len(st.session_state.proj_ticket_notes)):
             c_note_in, c_note_del = st.columns([8, 1])
             with c_note_in:
@@ -214,7 +232,7 @@ def render_overview_page():
                     key=f"t_common_note_{i}",
                     label_visibility="collapsed",
                     placeholder="例：別途1ドリンク代が必要です",
-                    on_change=update_note, args=(i,) # ★変更時に即座に同期
+                    on_change=update_note, args=(i,)
                 )
             with c_note_del:
                 if st.button("🗑️", key=f"del_t_common_{i}"):
@@ -268,7 +286,9 @@ def render_overview_page():
         "title": st.session_state.get("proj_title", ""),
         "venue": st.session_state.get("proj_venue", ""),
         "url": st.session_state.get("proj_url", ""),
-        "date": str(st.session_state.get("proj_date", ""))
+        "date": str(st.session_state.get("proj_date", "")),
+        "open": st.session_state.get("tt_open_time", ""),
+        "start": st.session_state.get("tt_start_time", "")
     }
 
     if "overview_last_saved_params" not in st.session_state:
@@ -282,7 +302,7 @@ def render_overview_page():
 
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
         
-        # 念のための最終同期 (on_changeが走らなかったケースの救済)
+        # 念のための同期 (on_change漏れ対策)
         if "proj_ticket_notes" in st.session_state:
             for i in range(len(st.session_state.proj_ticket_notes)):
                 key = f"t_common_note_{i}"
@@ -291,6 +311,12 @@ def render_overview_page():
         if project_id:
             db = next(get_db())
             try:
+                # ここで時間をDBに保存するために、プロジェクトオブジェクトも更新する
+                proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+                if proj:
+                    proj.open_time = st.session_state.tt_open_time
+                    proj.start_time = st.session_state.tt_start_time
+                    
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
                     
@@ -302,7 +328,9 @@ def render_overview_page():
                         "title": st.session_state.get("proj_title", ""),
                         "venue": st.session_state.get("proj_venue", ""),
                         "url": st.session_state.get("proj_url", ""),
-                        "date": str(st.session_state.get("proj_date", ""))
+                        "date": str(st.session_state.get("proj_date", "")),
+                        "open": st.session_state.get("tt_open_time", ""),
+                        "start": st.session_state.get("tt_start_time", "")
                     }
                     st.session_state.overview_last_saved_params = updated_params
                     st.rerun()
