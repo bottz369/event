@@ -1,10 +1,88 @@
 import streamlit as st
 import pandas as pd
 import json
+import datetime
 from datetime import date
 from database import TimetableProject
 from utils import safe_int, safe_str
-from constants import get_default_row_settings  # ★修正: ここからインポート
+from constants import get_default_row_settings
+
+# --- 読み込み処理 (★追加) ---
+def load_project_data(db, project_id):
+    """
+    DBからプロジェクト情報を取得し、st.session_state に展開する
+    """
+    proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+    if not proj:
+        return False
+    
+    # 1. 基本情報
+    st.session_state.proj_title = proj.title or ""
+    st.session_state.proj_venue = proj.venue_name or ""
+    st.session_state.proj_url = proj.venue_url or ""
+    
+    # 日付変換 (String -> date)
+    if proj.event_date:
+        try:
+            st.session_state.proj_date = datetime.datetime.strptime(proj.event_date, "%Y-%m-%d").date()
+        except:
+            st.session_state.proj_date = None
+    else:
+        st.session_state.proj_date = None
+
+    # 時間
+    st.session_state.tt_open_time = proj.open_time or "10:00"
+    st.session_state.tt_start_time = proj.start_time or "10:30"
+    st.session_state.tt_goods_offset = proj.goods_start_offset or 0
+
+    # 2. JSONデータ (リスト/辞書系)
+    try:
+        st.session_state.tt_data = json.loads(proj.data_json) if proj.data_json else []
+    except:
+        st.session_state.tt_data = []
+
+    try:
+        # grid_order_json は辞書形式で保存されている場合があるため調整
+        grid_data = json.loads(proj.grid_order_json) if proj.grid_order_json else {}
+        if isinstance(grid_data, dict):
+            st.session_state.grid_order = grid_data.get("order", [])
+            st.session_state.grid_row_counts_str = grid_data.get("row_counts_str", "5,5,5,5,5")
+            st.session_state.grid_alignment = grid_data.get("alignment", "中央揃え")
+            st.session_state.grid_layout_mode = grid_data.get("layout_mode", "レンガ (サイズ統一)")
+        else:
+            st.session_state.grid_order = []
+    except:
+        st.session_state.grid_order = []
+
+    try:
+        st.session_state.proj_tickets = json.loads(proj.tickets_json) if proj.tickets_json else []
+    except:
+        st.session_state.proj_tickets = []
+
+    try:
+        st.session_state.proj_free_text = json.loads(proj.free_text_json) if proj.free_text_json else []
+    except:
+        st.session_state.proj_free_text = []
+
+    # ★追加: チケット共通備考の読み込み
+    try:
+        st.session_state.proj_ticket_notes = json.loads(proj.ticket_notes_json) if proj.ticket_notes_json else []
+    except:
+        st.session_state.proj_ticket_notes = []
+    
+    # フライヤー設定の読み込み
+    try:
+        flyer_conf = json.loads(proj.flyer_json) if proj.flyer_json else {}
+        if flyer_conf:
+            st.session_state.flyer_bg_id = int(flyer_conf.get("bg_id", 0))
+            st.session_state.flyer_logo_id = int(flyer_conf.get("logo_id", 0))
+            st.session_state.flyer_basic_font = flyer_conf.get("font", "keifont.ttf")
+            st.session_state.flyer_text_color = flyer_conf.get("text_color", "#FFFFFF")
+            st.session_state.flyer_stroke_color = flyer_conf.get("stroke_color", "#000000")
+    except:
+        pass
+
+    return True
 
 # --- 保存処理 (共通化) ---
 def save_current_project(db, project_id):
@@ -16,7 +94,12 @@ def save_current_project(db, project_id):
     
     # 基本情報
     if "proj_title" in st.session_state: proj.title = st.session_state.proj_title
-    if "proj_date" in st.session_state: proj.event_date = st.session_state.proj_date.strftime("%Y-%m-%d")
+    if "proj_date" in st.session_state: 
+        if st.session_state.proj_date:
+            proj.event_date = st.session_state.proj_date.strftime("%Y-%m-%d")
+        else:
+            proj.event_date = None
+            
     if "proj_venue" in st.session_state: proj.venue_name = st.session_state.proj_venue
     if "proj_url" in st.session_state: proj.venue_url = st.session_state.proj_url
     
@@ -25,6 +108,10 @@ def save_current_project(db, project_id):
         proj.tickets_json = json.dumps(st.session_state.proj_tickets, ensure_ascii=False)
     if "proj_free_text" in st.session_state:
         proj.free_text_json = json.dumps(st.session_state.proj_free_text, ensure_ascii=False)
+    
+    # ★追加: チケット共通備考の保存
+    if "proj_ticket_notes" in st.session_state:
+        proj.ticket_notes_json = json.dumps(st.session_state.proj_ticket_notes, ensure_ascii=False)
 
     # タイムテーブルデータ
     save_data = []
@@ -94,14 +181,25 @@ def save_current_project(db, project_id):
     }
     proj.settings_json = json.dumps(settings, ensure_ascii=False)
 
-    # フライヤー情報
+    # フライヤー情報 (NEWデザイン用)
     flyer_data = {}
-    keys = ["flyer_logo_id", "flyer_bg_id", "flyer_sub_title", "flyer_input_1", 
-            "flyer_bottom_left", "flyer_bottom_right", "flyer_font", "flyer_text_color", "flyer_stroke_color"]
+    # 保存したいキーを指定
+    keys = ["flyer_bg_id", "flyer_logo_id", "flyer_basic_font", "flyer_text_color", "flyer_stroke_color"]
     for k in keys:
         if k in st.session_state:
-            flyer_data[k.replace("flyer_", "")] = st.session_state[k]
+            # jsonキーは "bg_id" のように短くする
+            short_key = k.replace("flyer_", "").replace("basic_", "")
+            flyer_data[short_key] = st.session_state[k]
     
+    # 既存のJSONがあればマージする（消さないように）
+    if proj.flyer_json:
+        try:
+            existing_flyer = json.loads(proj.flyer_json)
+            existing_flyer.update(flyer_data)
+            flyer_data = existing_flyer
+        except:
+            pass
+
     proj.flyer_json = json.dumps(flyer_data, ensure_ascii=False)
     
     db.commit()
@@ -123,6 +221,7 @@ def duplicate_project(db, project_id):
         grid_order_json=src.grid_order_json,
         tickets_json=src.tickets_json,
         free_text_json=src.free_text_json,
+        ticket_notes_json=src.ticket_notes_json, # ★追加
         flyer_json=src.flyer_json,
         settings_json=src.settings_json
     )
