@@ -73,11 +73,14 @@ def generate_event_text():
                 text += f"\n※{str(note).strip()}"
 
     # 4. 出演者リスト
+    # ★重要: アー写グリッドの並び順 (grid_order) を最優先で使用
     if "grid_order" in st.session_state and st.session_state.grid_order:
         artists = st.session_state.grid_order
     else:
+        # グリッド順序がまだない場合はタイムテーブル順をバックアップとして使用
         artists = st.session_state.get("tt_artists_order", [])
 
+    # 重複排除しつつ順序を維持（念のため）
     valid_artists = list(dict.fromkeys(artists))
 
     if valid_artists:
@@ -155,10 +158,13 @@ def render_overview_page():
         if not isinstance(st.session_state.proj_ticket_notes, list):
              st.session_state.proj_ticket_notes = []
 
+        # 入力フォームループ
+        # 削除時のインデックスズレを防ぐため、コピーやenumerateを使用
         current_notes = st.session_state.proj_ticket_notes
         for i in range(len(current_notes)):
             c_note_in, c_note_del = st.columns([8, 1])
             with c_note_in:
+                # 入力値をsession_stateに直接反映
                 current_notes[i] = st.text_input(
                     "共通備考",
                     value=current_notes[i],
