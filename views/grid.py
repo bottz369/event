@@ -8,9 +8,6 @@ from logic_project import save_current_project
 # ★ get_sorted_font_list を追加インポート
 from utils import create_font_specimen_img, get_sorted_font_list
 
-# ★この設定は不要になったので削除（DBのSystemFontConfigが優先されるため）
-# DEFAULT_FONT_FILE = "keifont.ttf"
-
 try:
     from streamlit_sortables import sort_items
 except ImportError:
@@ -57,8 +54,7 @@ def render_grid_page():
         
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
-        # フォント設定の初期化
-        # とりあえずデフォルトを入れておくが、後でソート済みリストの先頭で上書きする
+        # フォント設定の初期化 (ここでは仮の値を入れておき、下でリストの先頭で上書きする)
         if "grid_font" not in st.session_state:
             st.session_state.grid_font = "keifont.ttf"
 
