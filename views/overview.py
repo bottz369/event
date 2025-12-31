@@ -6,8 +6,13 @@ import traceback
 # データベース関連
 from database import get_db, TimetableProject
 from logic_project import save_current_project, load_project_data
-# ★追加: 時間の選択肢をインポート
 from constants import TIME_OPTIONS
+
+# ==========================================
+# ★修正: 選択肢に「※調整中」を追加
+# ==========================================
+# 既存の時間リストの先頭に選択肢を追加します
+EXTENDED_TIME_OPTIONS = ["※調整中"] + TIME_OPTIONS
 
 # ==========================================
 # ヘルパー関数
@@ -39,10 +44,22 @@ def generate_event_text():
         if date_val:
             date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
         
-        # 時間情報 (画面上のウィジェットから同期された最新の値を使用)
-        open_t = st.session_state.get("tt_open_time", "10:00")
-        start_t = st.session_state.get("tt_start_time", "10:30")
+        # ==========================================
+        # ★修正: デフォルト値を「※調整中」に変更
+        # ==========================================
+        if "ov_tt_open_time" in st.session_state:
+            open_t = st.session_state.ov_tt_open_time
+        else:
+            # データがない場合は "※調整中" にする
+            open_t = st.session_state.get("tt_open_time", "※調整中")
+            
+        if "ov_tt_start_time" in st.session_state:
+            start_t = st.session_state.ov_tt_start_time
+        else:
+            # データがない場合は "※調整中" にする
+            start_t = st.session_state.get("tt_start_time", "※調整中")
         
+        # テキスト構築
         text = f"【公演概要】\n{date_str}\n『{title}』\n\n■会場: {venue}"
         if url:
             text += f"\n {url}"
@@ -88,11 +105,9 @@ def generate_event_text():
         return f"エラー: {e}"
 
 # ==========================================
-# コールバック関数 (入力即反映)
+# コールバック関数
 # ==========================================
 def update_time_sync(key_name):
-    """概要ページでの時間変更をメインの変数に同期"""
-    # ov_tt_open_time -> tt_open_time
     st.session_state[key_name] = st.session_state[f"ov_{key_name}"]
 
 def update_ticket(i, field):
@@ -114,25 +129,32 @@ def update_free(i, field):
 # メイン描画関数
 # ==========================================
 def render_overview_page():
-    """イベント概要の編集画面"""
     
     project_id = st.session_state.get("ws_active_project_id")
 
-    # --- 時間データなどのロード (初回のみ) ---
+    # --- 時間データ復旧 ---
     if project_id:
-        # まだセッションにロードされていない場合のみDBから取得
-        if "proj_title" not in st.session_state or "tt_open_time" not in st.session_state:
+        should_restore = False
+        if "tt_open_time" not in st.session_state: should_restore = True
+        if "tt_start_time" not in st.session_state: should_restore = True
+        
+        if should_restore:
             db = next(get_db())
             try:
-                # 念のための再ロード
-                load_project_data(db, project_id)
-                # 時間がロードされていない場合のフォールバック
                 proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
                 if proj:
-                    st.session_state.tt_open_time = proj.open_time or "10:00"
-                    st.session_state.tt_start_time = proj.start_time or "10:30"
-                
-                # スナップショット初期化
+                    # DB値があれば使う、なければ "※調整中"
+                    st.session_state.tt_open_time = proj.open_time or "※調整中"
+                    st.session_state.tt_start_time = proj.start_time or "※調整中"
+            finally:
+                db.close()
+    
+    # --- データロード (初回のみ) ---
+    if project_id:
+        if "proj_title" not in st.session_state:
+            db = next(get_db())
+            try:
+                load_project_data(db, project_id)
                 st.session_state.overview_last_saved_params = {
                     "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                     "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -157,22 +179,22 @@ def render_overview_page():
         st.text_input("会場名", key="proj_venue")
         st.text_input("会場URL", key="proj_url")
     
-    # --- UI描画: 時間設定 (★追加機能: ここで時間を維持する) ---
+    # --- UI描画: 時間設定 (修正版選択肢を使用) ---
     c_time1, c_time2 = st.columns(2)
     
-    # 現在の値を安全に取得
-    curr_open = st.session_state.get("tt_open_time", "10:00")
-    curr_start = st.session_state.get("tt_start_time", "10:30")
+    # 現在の値取得 (なければ ※調整中)
+    curr_open = st.session_state.get("tt_open_time", "※調整中")
+    curr_start = st.session_state.get("tt_start_time", "※調整中")
     
-    # リストにない場合(手入力等)の対策
-    if curr_open not in TIME_OPTIONS: curr_open = TIME_OPTIONS[0]
-    if curr_start not in TIME_OPTIONS: curr_start = TIME_OPTIONS[1]
+    # リストに含まれていない値の場合のフォールバック
+    if curr_open not in EXTENDED_TIME_OPTIONS: curr_open = EXTENDED_TIME_OPTIONS[0]
+    if curr_start not in EXTENDED_TIME_OPTIONS: curr_start = EXTENDED_TIME_OPTIONS[0]
 
     with c_time1:
-        st.selectbox("OPEN", TIME_OPTIONS, index=TIME_OPTIONS.index(curr_open), 
+        st.selectbox("OPEN", EXTENDED_TIME_OPTIONS, index=EXTENDED_TIME_OPTIONS.index(curr_open), 
                      key="ov_tt_open_time", on_change=update_time_sync, args=("tt_open_time",))
     with c_time2:
-        st.selectbox("START", TIME_OPTIONS, index=TIME_OPTIONS.index(curr_start), 
+        st.selectbox("START", EXTENDED_TIME_OPTIONS, index=EXTENDED_TIME_OPTIONS.index(curr_start), 
                      key="ov_tt_start_time", on_change=update_time_sync, args=("tt_start_time",))
 
     st.divider()
@@ -184,7 +206,6 @@ def render_overview_page():
         if "proj_tickets" not in st.session_state:
             st.session_state.proj_tickets = [{"name":"", "price":"", "note":""}]
         
-        # 型補正
         clean_tickets = []
         for t in st.session_state.proj_tickets:
             if isinstance(t, dict): clean_tickets.append(t)
@@ -279,6 +300,12 @@ def render_overview_page():
     st.divider()
 
     # --- 変更検知 ---
+    # プレビュー同期 (ここでも最新の値を入れておく)
+    if "ov_tt_open_time" in st.session_state:
+        st.session_state.tt_open_time = st.session_state.ov_tt_open_time
+    if "ov_tt_start_time" in st.session_state:
+        st.session_state.tt_start_time = st.session_state.ov_tt_start_time
+
     current_params = {
         "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -302,7 +329,7 @@ def render_overview_page():
 
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
         
-        # 念のための同期 (on_change漏れ対策)
+        # 最終同期
         if "proj_ticket_notes" in st.session_state:
             for i in range(len(st.session_state.proj_ticket_notes)):
                 key = f"t_common_note_{i}"
@@ -311,16 +338,16 @@ def render_overview_page():
         if project_id:
             db = next(get_db())
             try:
-                # ここで時間をDBに保存するために、プロジェクトオブジェクトも更新する
+                # 時間の保存
                 proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
                 if proj:
+                    # DBには "※調整中" のまま保存するか、Noneにするかはお好みですが、ここでは文字列として保存します
                     proj.open_time = st.session_state.tt_open_time
                     proj.start_time = st.session_state.tt_start_time
-                    
+
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
                     
-                    # 保存後スナップショット更新
                     updated_params = {
                         "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
