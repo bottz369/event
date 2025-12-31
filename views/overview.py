@@ -108,7 +108,7 @@ def generate_event_text():
 # メイン描画関数
 # ==========================================
 def render_overview_page():
-    """イベント概要の編集画面 (Debug Mode)"""
+    """イベント概要の編集画面 (Debug Mode + Preview Fix)"""
     
     st.title("🛠️ イベント概要編集 (Debug Mode)")
     
@@ -168,8 +168,6 @@ def render_overview_page():
         for i, ticket in enumerate(st.session_state.proj_tickets):
             with st.container(border=True):
                 cols = st.columns([3, 2, 4, 1])
-                # ★修正: ここではリストを直接書き換えず、keyを使って管理させるのが安全だが
-                # 既存ロジックを生かしつつ、入力値をリストに反映
                 with cols[0]:
                     ticket["name"] = st.text_input("チケット名", value=ticket.get("name",""), key=f"t_name_{i}", label_visibility="collapsed", placeholder="Sチケット")
                 with cols[1]:
@@ -186,7 +184,7 @@ def render_overview_page():
             st.session_state.proj_tickets.append({"name":"", "price":"", "note":""})
             st.rerun()
 
-        # --- チケット共通備考エリア (ここが問題の箇所の可能性大) ---
+        # --- チケット共通備考エリア ---
         st.markdown("---") 
         st.markdown("**チケット共通備考**")
 
@@ -201,15 +199,13 @@ def render_overview_page():
         for i in range(len(current_notes)):
             c_note_in, c_note_del = st.columns([8, 1])
             with c_note_in:
-                # ★デバッグ修正ポイント: valueの設定と受け取り方を明確にする
                 val = st.text_input(
                     "共通備考",
                     value=current_notes[i],
-                    key=f"t_common_note_{i}", # ウィジェットのキー
+                    key=f"t_common_note_{i}",
                     label_visibility="collapsed",
                     placeholder="例：別途1ドリンク代が必要です"
                 )
-                # リストを即時更新 (念のため)
                 current_notes[i] = val
                 
             with c_note_del:
@@ -255,13 +251,11 @@ def render_overview_page():
     # --- 設定反映 & デバッグ保存処理 ---
     st.caption("変更内容は以下のボタンで保存してください。")
 
-    # ★ここが最大の修正ポイント：保存ボタン処理
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
         
         debug_log("🚀 保存ボタンが押されました。処理を開始します。")
 
         # 【重要】強制同期: ウィジェット(入力欄)の値を、確実にデータリストに書き戻す
-        # これをやらないと、入力途中のデータが反映されないことがあります
         debug_log("--- 強制同期処理開始 ---")
         
         # 1. チケット共通備考の同期
@@ -269,7 +263,6 @@ def render_overview_page():
             for i in range(len(st.session_state.proj_ticket_notes)):
                 widget_key = f"t_common_note_{i}"
                 if widget_key in st.session_state:
-                    # ウィジェットにある最新の値をリストに格納
                     st.session_state.proj_ticket_notes[i] = st.session_state[widget_key]
         
         # 2. チケット情報の同期
@@ -299,7 +292,7 @@ def render_overview_page():
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
-                    # テキスト生成
+                    # 保存成功時は明示的にテキストを生成
                     new_text = generate_event_text()
                     st.session_state.txt_overview_preview_area = new_text
                     debug_log("✅ 保存成功")
@@ -314,9 +307,12 @@ def render_overview_page():
         else:
             st.error("プロジェクトIDが不明です")
 
-    # テキストプレビュー表示
-    if "txt_overview_preview_area" not in st.session_state:
-        st.session_state.txt_overview_preview_area = generate_event_text()
+    # ==========================================
+    # ★修正ポイント: 常に最新のデータでテキストを生成する
+    # ==========================================
+    # これにより、追加ボタン押下などの単純なリロード時も、
+    # セッション内の最新時間データ(OPEN 10:10など)を使ってプレビューを表示します。
+    st.session_state.txt_overview_preview_area = generate_event_text()
 
     st.subheader("📝 告知用テキストプレビュー")
     st.text_area(
