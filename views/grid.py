@@ -5,14 +5,11 @@ import io
 from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset
 from constants import FONT_DIR
 from logic_project import save_current_project
-from utils import create_font_specimen_img
+# ★ get_sorted_font_list を追加インポート
+from utils import create_font_specimen_img, get_sorted_font_list
 
-# ==========================================
-# ★設定: 標準フォントのファイル名
-# ==========================================
-# fontsフォルダの中に、この名前のファイルが必ず存在する必要があります。
-# 別のフォント（例: NotoSansJP-Bold.ttf）を使いたい場合はここを書き換えてください。
-DEFAULT_FONT_FILE = "keifont.ttf" 
+# ★この設定は不要になったので削除（DBのSystemFontConfigが優先されるため）
+# DEFAULT_FONT_FILE = "keifont.ttf"
 
 try:
     from streamlit_sortables import sort_items
@@ -60,9 +57,10 @@ def render_grid_page():
         
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
-        # フォント設定の初期化（デフォルト値の保証）
+        # フォント設定の初期化
+        # とりあえずデフォルトを入れておくが、後でソート済みリストの先頭で上書きする
         if "grid_font" not in st.session_state:
-            st.session_state.grid_font = DEFAULT_FONT_FILE
+            st.session_state.grid_font = "keifont.ttf"
 
         if selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
@@ -79,10 +77,8 @@ def render_grid_page():
             
             # --- 設定エリア ---
             c_set1, c_set2 = st.columns([1, 2])
-            
             with c_set1: 
                 new_rows = st.number_input("行数", min_value=1, key="grid_rows")
-                
             with c_set2:
                 if st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset"):
                     if proj.data_json:
@@ -111,9 +107,8 @@ def render_grid_page():
                 value=st.session_state.grid_row_counts_str,
                 help="例: 3,4,6 と入力すると、1行目3枚、2行目4枚、3行目6枚になります。"
             )
-            
             st.session_state.grid_row_counts_str = st.session_state.grid_row_counts_str_input
-
+            
             try:
                 parsed_counts = [int(x.strip()) for x in st.session_state.grid_row_counts_str.split(",") if x.strip()]
             except:
@@ -124,31 +119,17 @@ def render_grid_page():
             with st.expander("📐 レイアウト調整 (揃え・モード)", expanded=True):
                 c_lay1, c_lay2 = st.columns(2)
                 with c_lay1:
-                    st.radio(
-                        "配置モード", 
-                        ["レンガ (サイズ統一)", "両端揃え (拡大縮小)"], 
-                        key="grid_layout_mode",
-                        horizontal=True
-                    )
+                    st.radio("配置モード", ["レンガ (サイズ統一)", "両端揃え (拡大縮小)"], key="grid_layout_mode", horizontal=True)
                 with c_lay2:
                     disabled = (st.session_state.grid_layout_mode == "両端揃え (拡大縮小)")
-                    st.radio(
-                        "行の配置 (レンガモード時)", 
-                        ["左揃え", "中央揃え", "右揃え"], 
-                        key="grid_alignment",
-                        horizontal=True,
-                        disabled=disabled
-                    )
+                    st.radio("行の配置 (レンガモード時)", ["左揃え", "中央揃え", "右揃え"], key="grid_alignment", horizontal=True, disabled=disabled)
 
             # --- 並び替えエリア ---
             st.caption("ドラッグ&ドロップで配置調整")
-            
             order_changed = False
-            
             if sort_items:
                 grid_ui = []
                 curr = 0
-                
                 for r_idx, count in enumerate(parsed_counts):
                     items = []
                     for c in range(count):
@@ -169,57 +150,50 @@ def render_grid_page():
                     st.session_state.grid_order = new_flat
                     order_changed = True
 
-            if order_changed:
-                st.rerun()
+            if order_changed: st.rerun()
 
             st.divider()
             
             # --- 画像生成・プレビューエリア ---
-            # DBからフォント一覧を取得し、ソート
-            fonts_db = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
-            fonts_db.sort(key=lambda x: x.name)
             
-            # セレクトボックス用辞書 (表示名 -> ファイル名)
-            font_options = {"標準フォント": DEFAULT_FONT_FILE}
-            for f in fonts_db:
-                # 標準と同じファイルなら重複させない
-                if f.image_filename != DEFAULT_FONT_FILE:
-                    font_options[f.name] = f.image_filename
+            # ★重要: ソート済みのフォントリストを取得
+            # [{"name": "★ Noto (標準)", "filename": "noto.ttf", ...}, ...] の形式
+            sorted_fonts = get_sorted_font_list(db)
             
-            # 選択中のファイル名から表示名を取得
-            current_filename = st.session_state.get("grid_font", DEFAULT_FONT_FILE)
+            # セレクトボックス用: {ファイル名: 表示名} の辞書を作る
+            # 順序を保持するためにリストから作成
+            font_file_list = [item["filename"] for item in sorted_fonts]
+            font_display_map = {item["filename"]: item["name"] for item in sorted_fonts}
             
-            # もし前回の設定ファイルが存在しなくなっていたらデフォルトに戻す
-            if current_filename != DEFAULT_FONT_FILE and current_filename not in [f.image_filename for f in fonts_db]:
-                current_filename = DEFAULT_FONT_FILE
-                st.session_state.grid_font = DEFAULT_FONT_FILE
+            # フォントが一つもない場合のガード
+            if not font_file_list:
+                font_file_list = ["keifont.ttf"]
+                font_display_map = {"keifont.ttf": "標準フォント (未設定)"}
 
-            current_display_name = "標準フォント"
-            for name, fname in font_options.items():
-                if fname == current_filename:
-                    current_display_name = name
-                    break
+            # 現在の選択状態の維持または初期化
+            current_filename = st.session_state.get("grid_font", font_file_list[0])
             
-            # フォント一覧見本
+            # もし前回の選択がリストから消えていたら、先頭（標準フォント）に戻す
+            if current_filename not in font_file_list:
+                current_filename = font_file_list[0]
+                st.session_state.grid_font = current_filename
+
+            # 見本表示 (ソート順で表示)
             with st.expander("🔤 フォント一覧見本を表示"):
                 with st.container(height=300):
-                    # 見本作成用のリスト（標準フォント + DBのフォント）
-                    sorted_filenames = [DEFAULT_FONT_FILE] + [f.image_filename for f in fonts_db if f.image_filename != DEFAULT_FONT_FILE]
-                    
-                    specimen_img = create_font_specimen_img(FONT_DIR, sorted_filenames)
+                    specimen_img = create_font_specimen_img(FONT_DIR, font_file_list)
                     if specimen_img:
                         st.image(specimen_img, use_container_width=True)
                     else:
-                        st.info("フォントが見つかりません。fontsフォルダを確認してください。")
+                        st.info("フォントが見つかりません。")
 
-            # フォント選択
-            display_names = list(font_options.keys())
-            selected_display_name = st.selectbox(
+            # フォント選択ボックス
+            st.selectbox(
                 "プレビュー用フォント", 
-                display_names, 
-                index=display_names.index(current_display_name) if current_display_name in display_names else 0
+                font_file_list,
+                format_func=lambda x: font_display_map.get(x, x),
+                key="grid_font" 
             )
-            st.session_state.grid_font = font_options[selected_display_name]
             
             # 設定スナップショット
             current_params = {
@@ -246,17 +220,13 @@ def render_grid_page():
                             align_val = align_map.get(st.session_state.grid_alignment, "center")
 
                             auto_img = generate_grid_image(
-                                target_artists, 
-                                IMAGE_DIR, 
+                                target_artists, IMAGE_DIR, 
                                 font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
-                                row_counts=parsed_counts, 
-                                is_brick_mode=is_brick,
-                                alignment=align_val
+                                row_counts=parsed_counts, is_brick_mode=is_brick, alignment=align_val
                             )
                             st.session_state.last_generated_grid_image = auto_img
                             st.session_state.grid_last_generated_params = current_params
-                        except:
-                            pass
+                        except: pass
 
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
                 if generate_grid_image:
@@ -275,18 +245,14 @@ def render_grid_page():
                                 align_val = align_map.get(st.session_state.grid_alignment, "center")
 
                                 img = generate_grid_image(
-                                    target_artists, 
-                                    IMAGE_DIR, 
+                                    target_artists, IMAGE_DIR, 
                                     font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
-                                    row_counts=parsed_counts, 
-                                    is_brick_mode=is_brick,
-                                    alignment=align_val
+                                    row_counts=parsed_counts, is_brick_mode=is_brick, alignment=align_val
                                 )
                                 
                                 if img:
                                     st.session_state.last_generated_grid_image = img
                                     st.session_state.grid_last_generated_params = current_params
-                                    
                                     if save_current_project(db, selected_id):
                                         st.toast("保存＆プレビュー更新完了！", icon="✅")
                                     else:
@@ -300,10 +266,8 @@ def render_grid_page():
 
             # 判定ロジック
             is_outdated = False
-            if st.session_state.get("grid_last_generated_params") is None:
-                is_outdated = True
-            elif st.session_state.grid_last_generated_params != current_params:
-                is_outdated = True
+            if st.session_state.get("grid_last_generated_params") is None: is_outdated = True
+            elif st.session_state.grid_last_generated_params != current_params: is_outdated = True
             
             if st.session_state.get("last_generated_grid_image"):
                 if is_outdated:
@@ -311,9 +275,7 @@ def render_grid_page():
                     st.caption("👇 前回生成時のプレビュー")
                 else:
                     st.caption("👇 現在のプレビュー")
-                
                 st.image(st.session_state.last_generated_grid_image, use_container_width=True)
-            
             elif is_outdated:
                  st.info("👆 設定を行ったら「設定反映」ボタンを押してプレビューを生成してください。")
 
