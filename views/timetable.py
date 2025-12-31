@@ -9,7 +9,8 @@ from constants import (
     TIME_OPTIONS, DURATION_OPTIONS, ADJUSTMENT_OPTIONS, 
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
-from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img
+# ★ get_sorted_font_list を追加インポート
+from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
 from logic_project import save_current_project
 
 try:
@@ -51,6 +52,19 @@ def render_timetable_page():
                 st.session_state.tt_start_time = proj.start_time or "10:30"
                 st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
                 
+                # フォント設定のロード (なければデフォルト)
+                # ★修正: デフォルト値は "keifont.ttf" を一旦入れるが、後でソート済みリストの先頭で上書きされる
+                if "tt_font" not in st.session_state:
+                    st.session_state.tt_font = "keifont.ttf"
+                
+                # 設定JSONからのロード (あれば優先)
+                if proj.settings_json:
+                    try:
+                        settings = json.loads(proj.settings_json)
+                        if "tt_font" in settings:
+                            st.session_state.tt_font = settings["tt_font"]
+                    except: pass
+
                 if proj.data_json:
                     try:
                         data = json.loads(proj.data_json)
@@ -389,24 +403,39 @@ def render_timetable_page():
             
             st.divider()
 
-            # --- ★追加: 画像生成・プレビューエリア ---
-            all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
-            if not all_fonts: all_fonts = ["keifont.ttf"]
+            # --- ★追加: 画像生成・プレビューエリア (機能強化) ---
             
-            # セッションの値がリストにない場合のガード
-            if "tt_font" not in st.session_state or st.session_state.tt_font not in all_fonts:
-                st.session_state.tt_font = all_fonts[0]
+            # ソート済みのフォントリストを取得
+            sorted_fonts = get_sorted_font_list(db)
             
-            # ★フォント見本パネル
-            with st.expander("🔤 フォント一覧見本を表示"):
-                specimen_img = create_font_specimen_img(FONT_DIR, all_fonts)
-                if specimen_img:
-                    st.image(specimen_img, use_container_width=True)
-                else:
-                    st.info("フォントが見つかりません")
+            # セレクトボックス用: {ファイル名: 表示名}
+            font_file_list = [item["filename"] for item in sorted_fonts]
+            font_display_map = {item["filename"]: item["name"] for item in sorted_fonts}
+            
+            if not font_file_list:
+                font_file_list = ["keifont.ttf"]
+                font_display_map = {"keifont.ttf": "標準フォント (未設定)"}
+            
+            # 現在の選択状態
+            current_filename = st.session_state.get("tt_font", font_file_list[0])
+            if current_filename not in font_file_list:
+                current_filename = font_file_list[0]
+                st.session_state.tt_font = current_filename
 
-            # ★修正: index引数を削除 (keyと競合するため)
-            st.selectbox("プレビュー用フォント", all_fonts, key="tt_font")
+            # 見本表示 (ソート順)
+            with st.expander("🔤 フォント一覧見本を表示"):
+                with st.container(height=300):
+                    specimen_img = create_font_specimen_img(FONT_DIR, font_file_list)
+                    if specimen_img: st.image(specimen_img, use_container_width=True)
+                    else: st.info("フォントが見つかりません")
+
+            # フォント選択
+            st.selectbox(
+                "プレビュー用フォント", 
+                font_file_list,
+                format_func=lambda x: font_display_map.get(x, x),
+                key="tt_font" # これでセッション変数 tt_font が更新される
+            )
             
             # 設定スナップショット
             current_tt_params = {
@@ -415,19 +444,14 @@ def render_timetable_page():
             }
             if "tt_last_generated_params" not in st.session_state: st.session_state.tt_last_generated_params = None
 
-            # =================================================================
-            # ★追加: 自動生成ロジック (画像がない場合に実行)
-            # =================================================================
+            # 自動生成ロジック
             if st.session_state.get("last_generated_tt_image") is None:
                 if generate_timetable_image and gen_list:
                     try:
-                        # 自動生成
                         auto_img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
-                        # 保存して最新状態にする
                         st.session_state.last_generated_tt_image = auto_img
                         st.session_state.tt_last_generated_params = current_tt_params
-                    except Exception as e:
-                        pass # 自動生成失敗時は何もしない
+                    except Exception as e: pass
 
             # ボタン式
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
@@ -435,14 +459,11 @@ def render_timetable_page():
                     if gen_list:
                         with st.spinner("画像を生成＆保存中..."):
                             try:
-                                # 画像生成
                                 img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
                                 
-                                # セッションに保存
                                 st.session_state.last_generated_tt_image = img
                                 st.session_state.tt_last_generated_params = current_tt_params
                                 
-                                # ★DBへも保存
                                 if save_current_project(db, selected_id):
                                     st.toast("保存＆プレビュー更新完了！", icon="✅")
                                 else:
@@ -457,10 +478,8 @@ def render_timetable_page():
 
             # 判定ロジック
             is_outdated = False
-            if st.session_state.tt_last_generated_params is None:
-                is_outdated = True
-            elif st.session_state.tt_last_generated_params != current_tt_params:
-                is_outdated = True
+            if st.session_state.tt_last_generated_params is None: is_outdated = True
+            elif st.session_state.tt_last_generated_params != current_tt_params: is_outdated = True
 
             if st.session_state.get("last_generated_tt_image"):
                 if is_outdated:
