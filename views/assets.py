@@ -2,7 +2,8 @@ import streamlit as st
 import uuid
 import os
 from PIL import Image, ImageDraw, ImageFont
-from database import get_db, Asset, upload_image_to_supabase, get_image_url, IMAGE_DIR
+# ★ SystemFontConfig, FavoriteFont を追加インポート
+from database import get_db, Asset, FavoriteFont, SystemFontConfig, upload_image_to_supabase, get_image_url, IMAGE_DIR
 from constants import FONT_DIR
 
 # ディレクトリの確実な作成
@@ -46,7 +47,6 @@ def render_asset_card(asset, db, is_font=False):
         else:
             u = get_image_url(asset.image_filename)
             if u:
-                # 背景なら縦長枠、ロゴなら正方形枠など調整しても良いが、一旦共通
                 st.markdown(f"""
                 <div style="width:100%; height:150px; background:#f0f2f6; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:4px; margin-bottom:8px;">
                     <img src="{u}" style="max-width:100%; max-height:100%; object-fit:contain;">
@@ -57,7 +57,7 @@ def render_asset_card(asset, db, is_font=False):
         st.markdown(f"**{asset.name}**")
         st.caption(f"📄 {asset.image_filename}")
 
-        # 3. ★機能追加: 素材名の変更
+        # 3. 素材名の変更
         with st.expander("✏️ 名称変更"):
             new_name = st.text_input("新しい名前", value=asset.name, key=f"rename_input_{asset.id}")
             if st.button("更新", key=f"rename_btn_{asset.id}"):
@@ -96,16 +96,13 @@ def render_assets_page():
             
             if st.form_submit_button("アーカイブに保存"):
                 if f:
-                    # 素材名が空ならファイル名を使う
                     if not name:
                         name = os.path.splitext(f.name)[0]
 
                     # 1. ファイル名の決定
                     if a_type == "font":
-                        # ★フォントの場合は元のファイル名をそのまま使用 (UUID化しない)
                         fname = f.name
                     else:
-                        # 画像の場合は重複回避のためUUIDを使用
                         ext = os.path.splitext(f.name)[1].lower()
                         fname = f"asset_{uuid.uuid4()}{ext}"
                     
@@ -176,9 +173,9 @@ def render_assets_page():
                 with cols[idx % 4]:
                     render_asset_card(asset, db, is_font=False)
 
-    # 3. フォント一覧
+    # 3. フォント一覧 (★ここを機能強化)
     with tabs[2]:
-        # 自動同期処理: フォルダにあるのにDBにないフォントを登録
+        # --- 自動同期処理 ---
         if os.path.exists(FONT_DIR):
             db_filenames = [a.image_filename for a in db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()]
             local_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith((".ttf", ".otf"))]
@@ -194,12 +191,71 @@ def render_assets_page():
                 db.commit()
                 st.rerun()
 
-        assets = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
-        if not assets:
+        # --- ★標準・お気に入りフォント設定エリア ---
+        st.markdown("### ⚙️ フォント設定")
+        st.caption("見本画像の「ファイル名」表示や、システム全体で標準的に使用するフォントを設定します。")
+        
+        # 全フォント取得
+        font_assets = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
+        # ファイル名 -> 表示名のマップ
+        font_options_map = {f.image_filename: f.name for f in font_assets}
+        font_filenames = list(font_options_map.keys())
+        
+        if font_filenames:
+            # DBから現状の設定を取得
+            current_sys = db.query(SystemFontConfig).first()
+            current_sys_val = current_sys.filename if current_sys and current_sys.filename in font_filenames else (font_filenames[0] if font_filenames else None)
+            
+            current_favs = db.query(FavoriteFont).all()
+            current_fav_vals = [f.filename for f in current_favs if f.filename in font_filenames]
+
+            c_sys, c_fav = st.columns([1, 2])
+            
+            # 標準フォント設定 (シングルセレクト)
+            with c_sys:
+                st.caption("標準フォント (システムデフォルト)")
+                new_sys_val = st.selectbox(
+                    "標準フォント", font_filenames, 
+                    index=font_filenames.index(current_sys_val) if current_sys_val in font_filenames else 0,
+                    format_func=lambda x: font_options_map.get(x, x),
+                    key="sys_font_select", label_visibility="collapsed"
+                )
+            
+            # お気に入りフォント設定 (マルチセレクト)
+            with c_fav:
+                st.caption("お気に入りフォント (リスト上位に表示)")
+                new_fav_vals = st.multiselect(
+                    "お気に入り", font_filenames,
+                    default=current_fav_vals,
+                    format_func=lambda x: font_options_map.get(x, x),
+                    key="fav_font_select", label_visibility="collapsed"
+                )
+
+            # 保存ボタン
+            if st.button("設定を保存", type="primary", key="save_font_conf"):
+                # 1. 標準フォント保存
+                db.query(SystemFontConfig).delete()
+                db.add(SystemFontConfig(filename=new_sys_val))
+                
+                # 2. お気に入り保存 (全削除して追加)
+                db.query(FavoriteFont).delete()
+                for f_name in new_fav_vals:
+                    db.add(FavoriteFont(filename=f_name))
+                
+                db.commit()
+                st.success("フォント設定を更新しました！")
+                st.rerun()
+        else:
+            st.warning("フォントが登録されていません")
+
+        st.divider()
+
+        # --- フォント一覧カード表示 ---
+        if not font_assets:
             st.info("登録されているフォントはありません")
         else:
             cols = st.columns(3)
-            for idx, asset in enumerate(assets):
+            for idx, asset in enumerate(font_assets):
                 with cols[idx % 3]:
                     render_asset_card(asset, db, is_font=True)
     
