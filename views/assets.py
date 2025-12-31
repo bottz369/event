@@ -1,16 +1,42 @@
 import streamlit as st
 import uuid
 import os
+import requests
 from PIL import Image, ImageDraw, ImageFont
-# ★ SystemFontConfig, FavoriteFont を追加インポート
 from database import get_db, Asset, FavoriteFont, SystemFontConfig, upload_image_to_supabase, get_image_url, IMAGE_DIR
 from constants import FONT_DIR
-# ★ utilsから画像生成関数をインポート
 from utils import create_font_specimen_img
 
 # ディレクトリの確実な作成
 os.makedirs(IMAGE_DIR, exist_ok=True)
 os.makedirs(FONT_DIR, exist_ok=True)
+
+# --- ヘルパー関数: フォント同期 (Supabase -> ローカル) ---
+def sync_fonts_from_storage(db):
+    """
+    DBにはあるがローカル(FONT_DIR)にないフォントを
+    SupabaseのURLからダウンロードして復元する
+    """
+    fonts = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
+    restored_count = 0
+    
+    for font in fonts:
+        local_path = os.path.join(FONT_DIR, font.image_filename)
+        if not os.path.exists(local_path):
+            # ファイルがない場合、URLから取得を試みる
+            url = get_image_url(font.image_filename)
+            if url:
+                try:
+                    response = requests.get(url, timeout=10)
+                    if response.status_code == 200:
+                        with open(local_path, "wb") as f:
+                            f.write(response.content)
+                        restored_count += 1
+                except Exception as e:
+                    print(f"Font download failed: {font.image_filename} / {e}")
+    
+    if restored_count > 0:
+        st.toast(f"{restored_count}個のフォントをクラウドから復元しました")
 
 # --- ヘルパー関数: フォントプレビュー画像の生成 ---
 def create_font_thumbnail(font_path, text="あいうABC", width=300, height=100):
@@ -45,7 +71,7 @@ def render_asset_card(asset, db, is_font=False):
                 if thumb: st.image(thumb, use_container_width=True)
                 else: st.warning("プレビュー生成失敗")
             else:
-                st.error("ファイル未検出")
+                st.warning("📥 未ダウンロード")
         else:
             u = get_image_url(asset.image_filename)
             if u:
@@ -80,7 +106,10 @@ def render_assets_page():
     st.caption("フライヤー作成で使用する画像素材やフォントを登録します。")
     
     db = next(get_db())
-    # ★重要: アップローダーで許可する拡張子
+    
+    # ★ページを開いたタイミングで、足りないフォントがあればダウンロードする
+    sync_fonts_from_storage(db)
+
     ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'ttf', 'otf']
 
     # --- 新規登録 ---
@@ -105,7 +134,7 @@ def render_assets_page():
                     # 1. ファイル名の決定
                     fname = f.name # デフォルトはそのまま
                     if a_type != "font":
-                        # 画像のみUUID化
+                        # 画像のみUUID化 (フォントはファイル名を変えると内部名とずれる可能性があるのでそのまま推奨)
                         ext = os.path.splitext(f.name)[1].lower()
                         fname = f"asset_{uuid.uuid4()}{ext}"
                     
@@ -133,13 +162,13 @@ def render_assets_page():
                             st.error(f"ローカル保存エラー: {e}")
                             st.stop()
 
-                        # 4. Supabaseへアップロード (画像のみ)
-                        if a_type != "font":
-                            try:
-                                f.seek(0)
-                                upload_image_to_supabase(f, fname)
-                            except:
-                                pass 
+                        # 4. Supabaseへアップロード
+                        # ★修正: フォントも含めてすべてのファイルをアップロード対象にする
+                        try:
+                            f.seek(0)
+                            upload_image_to_supabase(f, fname)
+                        except Exception as e:
+                            print(f"Upload warning: {e}") 
 
                         # 5. DB登録
                         try:
@@ -194,46 +223,25 @@ def render_assets_page():
 
     # 3. フォント一覧
     with tabs[2]:
-        # --- 自動同期処理 ---
-        if os.path.exists(FONT_DIR):
-            local_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith((".ttf", ".otf"))]
-            
-            new_found = False
-            for fname in local_fonts:
-                existing = db.query(Asset).filter(Asset.image_filename == fname).first()
-                
-                if not existing:
-                    try:
-                        new_asset = Asset(name=fname, asset_type="font", image_filename=fname)
-                        db.add(new_asset)
-                        new_found = True
-                    except: pass
-                elif existing.is_deleted:
-                    existing.is_deleted = False
-                    new_found = True
-            
-            if new_found:
-                db.commit()
-                st.rerun()
-
-        # --- ★追加: フォント一覧見本 (ファイル名順) ---
-        st.markdown("### 🔠 フォント一覧見本")
-        
-        # 全フォント取得 & ソート
+        # フォントアセット取得
         font_assets_all = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
         
+        # --- 見本画像表示 ---
+        st.markdown("### 🔠 フォント一覧見本")
         if font_assets_all:
-            # 要件: ファイル名のアルファベット順・五十音順でソート
-            # image_filename が None の場合を考慮
             sorted_fonts = sorted(
                 font_assets_all, 
                 key=lambda x: x.image_filename.lower() if x.image_filename else ""
             )
             
-            # Utilsの関数で画像生成
             try:
+                # ユーティリティで一覧画像を生成
+                # (注意: ここでもローカルにフォントファイルがないとエラーになるため、sync_fonts_from_storage が重要)
                 specimen_img = create_font_specimen_img(db, sorted_fonts)
-                st.image(specimen_img, caption="登録済みフォント一覧 (ファイル名順)", use_container_width=True)
+                if specimen_img:
+                    st.image(specimen_img, caption="登録済みフォント一覧 (ファイル名順)", use_container_width=True)
+                else:
+                    st.warning("見本画像の生成に失敗しました（フォントファイルが見つかりません）")
             except Exception as e:
                 st.error(f"見本画像生成エラー: {e}")
         else:
