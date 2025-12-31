@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import json
 import io
-from database import get_db, TimetableProject, Artist, IMAGE_DIR
+from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset # ★Assetを追加
 from constants import FONT_DIR
 from logic_project import save_current_project
 from utils import create_font_specimen_img
@@ -42,8 +42,6 @@ def render_grid_page():
         if "grid_order" not in st.session_state: 
             st.session_state.grid_order = []
         else:
-            # ★修正: エラー回避のため、常に重複を排除してユニークにする（順序保持）
-            # これにより「Artist A」が2つある場合に1つに統合され、クラッシュを防ぎます
             st.session_state.grid_order = list(dict.fromkeys(st.session_state.grid_order))
 
         if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
@@ -62,7 +60,6 @@ def render_grid_page():
                 try:
                     d = json.loads(proj.data_json)
                     tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
-                    # ★修正: 重複排除
                     st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                 except: pass
 
@@ -79,7 +76,6 @@ def render_grid_page():
                     if proj.data_json:
                         d = json.loads(proj.data_json)
                         tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
-                        # ★修正: 重複排除
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         st.rerun()
 
@@ -166,22 +162,43 @@ def render_grid_page():
 
             st.divider()
             
-            # --- 画像生成・プレビューエリア ---
-            all_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith(".ttf")]
-            if not all_fonts: all_fonts = ["keifont.ttf"]
+            # --- ★変更: 画像生成・プレビューエリア (新フォント管理対応) ---
+            # DBからフォント一覧を取得し、ソート
+            fonts_db = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
+            fonts_db.sort(key=lambda x: x.name)
             
-            if "grid_font" not in st.session_state or st.session_state.grid_font not in all_fonts:
-                st.session_state.grid_font = all_fonts[0]
+            # セレクトボックス用辞書 (表示名 -> ファイル名)
+            font_options = {"標準フォント": "keifont.ttf"}
+            for f in fonts_db:
+                font_options[f.name] = f.image_filename
             
+            # 選択中のファイル名から表示名を取得
+            current_filename = st.session_state.get("grid_font", "keifont.ttf")
+            current_display_name = "標準フォント"
+            for name, fname in font_options.items():
+                if fname == current_filename:
+                    current_display_name = name
+                    break
+            
+            # フォント一覧見本 (スクロール対応)
             with st.expander("🔤 フォント一覧見本を表示"):
-                specimen_img = create_font_specimen_img(FONT_DIR, all_fonts)
-                if specimen_img:
-                    st.image(specimen_img, use_container_width=True)
-                else:
-                    st.info("フォントが見つかりません")
+                # ★修正: スクロールコンテナを使用
+                with st.container(height=300):
+                    sorted_filenames = ["keifont.ttf"] + [f.image_filename for f in fonts_db]
+                    specimen_img = create_font_specimen_img(FONT_DIR, sorted_filenames)
+                    if specimen_img:
+                        st.image(specimen_img, use_container_width=True)
+                    else:
+                        st.info("フォントが見つかりません")
 
-            current_font_index = all_fonts.index(st.session_state.grid_font)
-            st.selectbox("プレビュー用フォント", all_fonts, index=current_font_index, key="grid_font")
+            # フォント選択 (表示名で選択)
+            display_names = list(font_options.keys())
+            selected_display_name = st.selectbox(
+                "プレビュー用フォント", 
+                display_names, 
+                index=display_names.index(current_display_name) if current_display_name in display_names else 0
+            )
+            st.session_state.grid_font = font_options[selected_display_name]
             
             # 設定スナップショット
             current_params = {
