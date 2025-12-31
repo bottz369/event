@@ -15,13 +15,11 @@ def create_font_thumbnail(font_path, text="あいうABC", width=300, height=100)
         img = Image.new("RGB", (width, height), (240, 242, 246)) # 薄いグレー背景
         draw = ImageDraw.Draw(img)
         try:
-            # 高さに合わせたフォントサイズ
             font_size = int(height * 0.6)
             font = ImageFont.truetype(font_path, font_size)
         except:
-            return None # フォント読み込み失敗
+            return None
         
-        # 中央配置
         bbox = draw.textbbox((0, 0), text, font=font)
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
@@ -32,6 +30,48 @@ def create_font_thumbnail(font_path, text="あいうABC", width=300, height=100)
         return img
     except:
         return None
+
+# --- ヘルパー関数: 素材カードの描画 (共通化) ---
+def render_asset_card(asset, db, is_font=False):
+    with st.container(border=True):
+        # 1. プレビュー表示
+        if is_font:
+            font_path = os.path.join(FONT_DIR, asset.image_filename)
+            if os.path.exists(font_path):
+                thumb = create_font_thumbnail(font_path, text="Design 123")
+                if thumb: st.image(thumb, use_container_width=True)
+                else: st.warning("プレビュー生成失敗")
+            else:
+                st.error("ファイル未検出")
+        else:
+            u = get_image_url(asset.image_filename)
+            if u:
+                # 背景なら縦長枠、ロゴなら正方形枠など調整しても良いが、一旦共通
+                st.markdown(f"""
+                <div style="width:100%; height:150px; background:#f0f2f6; display:flex; align-items:center; justify-content:center; overflow:hidden; border-radius:4px; margin-bottom:8px;">
+                    <img src="{u}" style="max-width:100%; max-height:100%; object-fit:contain;">
+                </div>
+                """, unsafe_allow_html=True)
+
+        # 2. ファイル名などの情報
+        st.markdown(f"**{asset.name}**")
+        st.caption(f"📄 {asset.image_filename}")
+
+        # 3. ★機能追加: 素材名の変更
+        with st.expander("✏️ 名称変更"):
+            new_name = st.text_input("新しい名前", value=asset.name, key=f"rename_input_{asset.id}")
+            if st.button("更新", key=f"rename_btn_{asset.id}"):
+                if new_name:
+                    asset.name = new_name
+                    db.commit()
+                    st.success("更新しました")
+                    st.rerun()
+
+        # 4. 削除ボタン
+        if st.button("🗑️ 削除", key=f"del_{asset.id}", type="secondary", use_container_width=True):
+            asset.is_deleted = True
+            db.commit()
+            st.rerun()
 
 def render_assets_page():
     st.title("🗂️ 素材・フォント管理")
@@ -45,7 +85,7 @@ def render_assets_page():
         with st.form("new_asset"):
             c1, c2 = st.columns(2)
             with c1:
-                name = st.text_input("素材名 (例: メインロゴ, ポップ体フォント)")
+                name = st.text_input("素材名 (未入力の場合はファイル名になります)")
                 a_type = st.selectbox(
                     "種類", 
                     ["logo", "background", "font"], 
@@ -55,18 +95,28 @@ def render_assets_page():
                 f = st.file_uploader("ファイル", type=ALLOWED_EXTENSIONS)
             
             if st.form_submit_button("アーカイブに保存"):
-                if name and f:
-                    # 1. 拡張子チェックとファイル名決定
-                    ext = os.path.splitext(f.name)[1].lower()
-                    fname = f"asset_{uuid.uuid4()}{ext}"
+                if f:
+                    # 素材名が空ならファイル名を使う
+                    if not name:
+                        name = os.path.splitext(f.name)[0]
+
+                    # 1. ファイル名の決定
+                    if a_type == "font":
+                        # ★フォントの場合は元のファイル名をそのまま使用 (UUID化しない)
+                        fname = f.name
+                    else:
+                        # 画像の場合は重複回避のためUUIDを使用
+                        ext = os.path.splitext(f.name)[1].lower()
+                        fname = f"asset_{uuid.uuid4()}{ext}"
                     
                     # 簡易バリデーション
-                    if a_type == "font" and ext not in ['.ttf', '.otf']:
+                    ext_check = os.path.splitext(f.name)[1].lower()
+                    if a_type == "font" and ext_check not in ['.ttf', '.otf']:
                         st.error("フォントには .ttf または .otf ファイルを選択してください")
-                    elif a_type != "font" and ext in ['.ttf', '.otf']:
+                    elif a_type != "font" and ext_check in ['.ttf', '.otf']:
                         st.error("画像素材には画像ファイルを選択してください")
                     else:
-                        # 2. 保存先の決定 (画像はIMAGE_DIR, フォントはFONT_DIR)
+                        # 2. 保存先の決定
                         if a_type == "font":
                             save_dir = FONT_DIR
                         else:
@@ -83,7 +133,7 @@ def render_assets_page():
                             st.error(f"ローカル保存エラー: {e}")
                             st.stop()
 
-                        # 4. Supabaseへアップロード (バックアップ用)
+                        # 4. Supabaseへアップロード
                         try:
                             f.seek(0)
                             upload_image_to_supabase(f, fname)
@@ -94,10 +144,10 @@ def render_assets_page():
                         new_asset = Asset(name=name, asset_type=a_type, image_filename=fname)
                         db.add(new_asset)
                         db.commit()
-                        st.success(f"{name} を保存しました")
+                        st.success(f"保存しました: {fname}")
                         st.rerun()
                 else:
-                    st.error("素材名とファイルは必須です")
+                    st.error("ファイルを選択してください")
 
     st.divider()
 
@@ -113,15 +163,7 @@ def render_assets_page():
             cols = st.columns(4)
             for idx, asset in enumerate(assets):
                 with cols[idx % 4]:
-                    with st.container(border=True):
-                        u = get_image_url(asset.image_filename)
-                        if u:
-                            st.image(u, use_container_width=True)
-                        st.caption(asset.name)
-                        if st.button("削除", key=f"del_logo_{asset.id}"):
-                            asset.is_deleted = True
-                            db.commit()
-                            st.rerun()
+                    render_asset_card(asset, db, is_font=False)
 
     # 2. 背景一覧
     with tabs[1]:
@@ -132,73 +174,33 @@ def render_assets_page():
             cols = st.columns(4)
             for idx, asset in enumerate(assets):
                 with cols[idx % 4]:
-                    with st.container(border=True):
-                        u = get_image_url(asset.image_filename)
-                        if u:
-                            st.markdown(f"""
-                            <div style="width:100%; aspect-ratio:210/297; background:#333; overflow:hidden; border-radius:4px; margin-bottom:8px;">
-                                <img src="{u}" style="width:100%; height:100%; object-fit:cover;">
-                            </div>
-                            """, unsafe_allow_html=True)
-                        st.caption(asset.name)
-                        if st.button("削除", key=f"del_bg_{asset.id}"):
-                            asset.is_deleted = True
-                            db.commit()
-                            st.rerun()
+                    render_asset_card(asset, db, is_font=False)
 
     # 3. フォント一覧
     with tabs[2]:
-        # ★同期処理: フォルダにあるのにDBにないフォントを自動登録する
-        # DB上のフォントファイル名リスト
-        assets = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
-        db_filenames = [a.image_filename for a in assets]
-        
-        # フォルダ上のフォントファイル名リスト
+        # 自動同期処理: フォルダにあるのにDBにないフォントを登録
         if os.path.exists(FONT_DIR):
+            db_filenames = [a.image_filename for a in db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()]
             local_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith((".ttf", ".otf"))]
             
             new_found = False
             for fname in local_fonts:
                 if fname not in db_filenames:
-                    # DBに未登録のファイルを発見 -> 自動登録
-                    # 表示名はファイル名をそのまま使う
                     new_asset = Asset(name=fname, asset_type="font", image_filename=fname)
                     db.add(new_asset)
                     new_found = True
             
             if new_found:
                 db.commit()
-                st.rerun() # リロードして表示更新
-                
-        # 改めて取得
-        assets = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
+                st.rerun()
 
+        assets = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
         if not assets:
             st.info("登録されているフォントはありません")
         else:
             cols = st.columns(3)
             for idx, asset in enumerate(assets):
                 with cols[idx % 3]:
-                    with st.container(border=True):
-                        font_path = os.path.join(FONT_DIR, asset.image_filename)
-                        
-                        # プレビュー
-                        if os.path.exists(font_path):
-                            thumb = create_font_thumbnail(font_path, text="Design 123")
-                            if thumb:
-                                st.image(thumb, use_container_width=True)
-                            else:
-                                st.warning("プレビュー生成失敗")
-                        else:
-                            st.error("ファイルが見つかりません")
-
-                        st.caption(f"🅰️ {asset.name}")
-                        # ファイル名も小さく表示
-                        st.caption(f"📄 {asset.image_filename}")
-                        
-                        if st.button("削除", key=f"del_font_{asset.id}"):
-                            asset.is_deleted = True
-                            db.commit()
-                            st.rerun()
+                    render_asset_card(asset, db, is_font=True)
     
     db.close()
