@@ -73,14 +73,11 @@ def generate_event_text():
                 text += f"\n※{str(note).strip()}"
 
     # 4. 出演者リスト
-    # ★重要: アー写グリッドの並び順 (grid_order) を最優先で使用
     if "grid_order" in st.session_state and st.session_state.grid_order:
         artists = st.session_state.grid_order
     else:
-        # グリッド順序がまだない場合はタイムテーブル順をバックアップとして使用
         artists = st.session_state.get("tt_artists_order", [])
 
-    # 重複排除しつつ順序を維持（念のため）
     valid_artists = list(dict.fromkeys(artists))
 
     if valid_artists:
@@ -137,7 +134,7 @@ def render_overview_page():
                 with cols[1]:
                     ticket["price"] = st.text_input("金額", value=ticket.get("price",""), key=f"t_price_{i}", label_visibility="collapsed", placeholder="¥3,000")
                 with cols[2]:
-                    ticket["note"] = st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", label_visibility="collapsed", placeholder="前方エリア 等")
+                    ticket["note"] = st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", label_visibility="collapsed", placeholder="ドリンク代別")
                 with cols[3]:
                     if i > 0:
                         if st.button("🗑️", key=f"del_t_{i}"):
@@ -148,25 +145,20 @@ def render_overview_page():
             st.session_state.proj_tickets.append({"name":"", "price":"", "note":""})
             st.rerun()
 
-        # --- ★追加: チケット共通備考エリア ---
-        st.markdown("---") # 区切り線
-        st.markdown("**チケット共通備考**") # ラベル
+        # --- チケット共通備考エリア ---
+        st.markdown("---") 
+        st.markdown("**チケット共通備考**")
 
-        # データ初期化
         if "proj_ticket_notes" not in st.session_state:
-            st.session_state.proj_ticket_notes = [] # 空リストで初期化
+            st.session_state.proj_ticket_notes = []
         
-        # リストのクリーニング
         if not isinstance(st.session_state.proj_ticket_notes, list):
              st.session_state.proj_ticket_notes = []
 
-        # 入力フォームループ
-        # 削除時のインデックスズレを防ぐため、コピーやenumerateを使用
         current_notes = st.session_state.proj_ticket_notes
         for i in range(len(current_notes)):
             c_note_in, c_note_del = st.columns([8, 1])
             with c_note_in:
-                # 入力値をsession_stateに直接反映
                 current_notes[i] = st.text_input(
                     "共通備考",
                     value=current_notes[i],
@@ -179,7 +171,6 @@ def render_overview_page():
                     st.session_state.proj_ticket_notes.pop(i)
                     st.rerun()
 
-        # 追加ボタン
         if st.button("＋ チケット共通備考を追加"):
             st.session_state.proj_ticket_notes.append("")
             st.rerun()
@@ -218,27 +209,23 @@ def render_overview_page():
     # --- 設定反映 & テキストプレビューエリア ---
     st.caption("変更内容は以下のボタンで保存してください。同時に告知用テキストを生成します。")
     
-    # 初回表示時の自動生成
-    if "overview_text_preview" not in st.session_state or st.session_state.overview_text_preview is None:
-        st.session_state.overview_text_preview = generate_event_text()
+    # 初回表示時のテキスト生成 (キーがなければ)
+    if "txt_overview_preview_area" not in st.session_state:
+        st.session_state.txt_overview_preview_area = generate_event_text()
 
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
         if project_id:
             from database import get_db
             db = next(get_db())
             try:
-                # ※注: 新しい「チケット共通備考」をDBに保存するには、save_current_project側の修正も必要ですが、
-                # ここではまずUIとテキスト生成を優先しています。
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
                     
                     # 1. 新しいテキストを生成
                     new_text = generate_event_text()
-                    st.session_state.overview_text_preview = new_text
                     
-                    # 2. ★重要: テキストエリアのウィジェットキー自体を直接上書きする
-                    # これにより、st.text_areaの表示を強制的に更新します
-                    st.session_state["txt_overview_preview_area"] = new_text
+                    # 2. ★修正: ウィジェットのキーを直接更新する (これならエラーにならない)
+                    st.session_state.txt_overview_preview_area = new_text
                     
                 else:
                     st.error("保存に失敗しました")
@@ -247,12 +234,11 @@ def render_overview_page():
         else:
             st.error("プロジェクトが選択されていません")
 
-    # テキストエリア
-    # value引数だけでなく、session_stateのキー自体が更新されているので反映されます
+    # テキストエリア (★修正: value引数を削除し、keyだけで管理)
+    # これにより、st.session_state["txt_overview_preview_area"] の値が常に表示されます
     st.subheader("📝 告知用テキストプレビュー")
     st.text_area(
         "コピーしてSNSなどで使用できます", 
-        value=st.session_state.overview_text_preview, 
         height=400, 
-        key="txt_overview_preview_area"
+        key="txt_overview_preview_area" # value=... を削除
     )
