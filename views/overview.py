@@ -1,22 +1,9 @@
 import streamlit as st
 from datetime import datetime
-import traceback # エラー詳細表示用
 
 # データベース関連
-from database import get_db, TimetableProject # ★TimetableProjectを追加
+from database import get_db, TimetableProject
 from logic_project import save_current_project, load_project_data
-
-# ==========================================
-# 🔧 デバッグ用ヘルパー
-# ==========================================
-def debug_log(message, data=None):
-    """画面上のサイドバーまたはメインエリアにデバッグ情報を出す"""
-    msg = f"[{datetime.now().strftime('%H:%M:%S')}] {message}"
-    print(msg) # コンソールにも出す
-    with st.sidebar:
-        st.caption(msg)
-        if data is not None:
-            st.code(str(data), language="json")
 
 # ==========================================
 # ヘルパー関数
@@ -39,7 +26,7 @@ def get_circled_number(n):
         return f"({n})"
 
 def generate_event_text():
-    """イベント概要を生成"""
+    """イベント概要テキストを生成"""
     try:
         # 1. 基本情報の取得
         title = st.session_state.get("proj_title", "")
@@ -52,7 +39,6 @@ def generate_event_text():
         if date_val:
             date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
         
-        # ★ここでの取得時に、session_stateに値が戻っていることを期待
         open_t = st.session_state.get("tt_open_time", "10:00")
         start_t = st.session_state.get("tt_start_time", "10:30")
         
@@ -109,53 +95,31 @@ def generate_event_text():
 # メイン描画関数
 # ==========================================
 def render_overview_page():
-    """イベント概要の編集画面 (Debug Mode + Preview Fix + Time Restore)"""
-    
-    st.title("🛠️ イベント概要編集 (Debug Mode)")
+    """イベント概要の編集画面"""
     
     project_id = st.session_state.get("ws_active_project_id")
 
     # ==========================================
-    # ★追加修正: 時間データ消失時の復旧ロジック
+    # ★重要修正: 時間データの強制同期
     # ==========================================
-    # タイムテーブルタブが表示されていない時、tt_open_time等がメモリから消えることがあるため
-    # ここでDBから再取得して補完します。
+    # app.py等での初期化により「10:00」に戻ってしまうのを防ぐため、
+    # このページを開くたびにDBから正しい時間を取得してセッションを上書きします。
     if project_id:
-        should_restore = False
-        if "tt_open_time" not in st.session_state: should_restore = True
-        if "tt_start_time" not in st.session_state: should_restore = True
-        
-        if should_restore:
-            db = next(get_db())
-            try:
-                proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
-                if proj:
-                    st.session_state.tt_open_time = proj.open_time or "10:00"
-                    st.session_state.tt_start_time = proj.start_time or "10:30"
-                    debug_log("⚠️ 時間データが消えていたためDBから復旧しました")
-            finally:
-                db.close()
-
-    # サイドバーに現在のデータ状態を表示（デバッグ用）
-    st.sidebar.markdown("---")
-    st.sidebar.warning("📊 データ監視中")
-    if st.sidebar.checkbox("生データを表示", value=False):
-        st.sidebar.write("Project ID:", st.session_state.get("ws_active_project_id"))
-        st.sidebar.write("Notes List:", st.session_state.get("proj_ticket_notes"))
-        st.sidebar.write("Open Time:", st.session_state.get("tt_open_time")) # 時間も監視
-        st.sidebar.write("Tickets:", st.session_state.get("proj_tickets"))
+        db = next(get_db())
+        try:
+            proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+            if proj:
+                st.session_state.tt_open_time = proj.open_time or "10:00"
+                st.session_state.tt_start_time = proj.start_time or "10:30"
+        finally:
+            db.close()
     
-    # --- データ読み込み ---
+    # --- 基本データのロード (タイトル等が無い場合) ---
     if project_id:
-        # 必要なキーがない場合のみロード
         if "proj_title" not in st.session_state:
-            debug_log("DBからデータをロードします...")
             db = next(get_db())
             try:
                 load_project_data(db, project_id)
-                debug_log("ロード完了")
-            except Exception as e:
-                st.error(f"ロードエラー: {e}")
             finally:
                 db.close()
     
@@ -271,24 +235,18 @@ def render_overview_page():
 
     st.divider()
 
-    # --- 設定反映 & デバッグ保存処理 ---
+    # --- 保存ボタン処理 ---
     st.caption("変更内容は以下のボタンで保存してください。")
 
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
         
-        debug_log("🚀 保存ボタンが押されました。処理を開始します。")
-
-        # 【重要】強制同期: ウィジェット(入力欄)の値を、確実にデータリストに書き戻す
-        debug_log("--- 強制同期処理開始 ---")
-        
-        # 1. チケット共通備考の同期
+        # 強制同期: ウィジェットの値をリストに書き戻す
         if "proj_ticket_notes" in st.session_state:
             for i in range(len(st.session_state.proj_ticket_notes)):
                 widget_key = f"t_common_note_{i}"
                 if widget_key in st.session_state:
                     st.session_state.proj_ticket_notes[i] = st.session_state[widget_key]
         
-        # 2. チケット情報の同期
         if "proj_tickets" in st.session_state:
             for i, ticket in enumerate(st.session_state.proj_tickets):
                 if f"t_name_{i}" in st.session_state:
@@ -298,7 +256,6 @@ def render_overview_page():
                 if f"t_note_{i}" in st.session_state:
                     ticket["note"] = st.session_state[f"t_note_{i}"]
 
-        # 3. 自由記述の同期
         if "proj_free_text" in st.session_state:
             for i, item in enumerate(st.session_state.proj_free_text):
                 if f"f_title_{i}" in st.session_state:
@@ -306,33 +263,24 @@ def render_overview_page():
                 if f"f_content_{i}" in st.session_state:
                     item["content"] = st.session_state[f"f_content_{i}"]
         
-        debug_log("--- 強制同期完了 ---")
-        debug_log("保存するTicket Notes:", st.session_state.proj_ticket_notes)
-
-        # 保存処理実行
+        # 保存実行
         if project_id:
             db = next(get_db())
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
-                    # 保存成功時は明示的にテキストを生成
                     new_text = generate_event_text()
                     st.session_state.txt_overview_preview_area = new_text
-                    debug_log("✅ 保存成功")
                 else:
-                    st.error("保存処理が False を返しました。")
-                    debug_log("❌ 保存失敗 (save_current_project returned False)")
+                    st.error("保存に失敗しました")
             except Exception as e:
-                st.error(f"保存中にエラーが発生: {e}")
-                st.code(traceback.format_exc()) # エラー詳細を表示
+                st.error(f"保存エラー: {e}")
             finally:
                 db.close()
         else:
             st.error("プロジェクトIDが不明です")
 
-    # ==========================================
-    # ★修正ポイント: 常に最新のデータでテキストを生成する
-    # ==========================================
+    # テキストプレビュー生成 (最新データを使用)
     st.session_state.txt_overview_preview_area = generate_event_text()
 
     st.subheader("📝 告知用テキストプレビュー")
