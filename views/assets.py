@@ -5,7 +5,8 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from database import get_db, Asset, FavoriteFont, SystemFontConfig, upload_image_to_supabase, get_image_url, IMAGE_DIR
 from constants import FONT_DIR
-from utils import create_font_specimen_img
+# utilsからのインポートは不要になったため削除、または残していても問題ありません
+# from utils import create_font_specimen_img 
 
 # ディレクトリの確実な作成
 os.makedirs(IMAGE_DIR, exist_ok=True)
@@ -39,23 +40,30 @@ def sync_fonts_from_storage(db):
         st.toast(f"{restored_count}個のフォントをクラウドから復元しました")
 
 # --- ヘルパー関数: フォントプレビュー画像の生成 ---
-def create_font_thumbnail(font_path, text="あいうABC", width=300, height=100):
+def create_font_thumbnail(font_path, text="Sample 123", width=300, height=150):
     try:
-        img = Image.new("RGB", (width, height), (240, 242, 246)) # 薄いグレー背景
+        # 背景色を白っぽく、少しリッチに
+        img = Image.new("RGB", (width, height), (250, 250, 252)) 
         draw = ImageDraw.Draw(img)
         try:
-            font_size = int(height * 0.6)
+            # フォントサイズを高さに合わせて調整
+            font_size = int(height * 0.5)
             font = ImageFont.truetype(font_path, font_size)
         except:
             return None
         
+        # 中央揃え計算
         bbox = draw.textbbox((0, 0), text, font=font)
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
         x = (width - w) // 2
         y = (height - h) // 2 - bbox[1]
         
-        draw.text((x, y), text, font=font, fill=(50, 50, 50))
+        draw.text((x, y), text, font=font, fill=(60, 60, 70))
+        
+        # 枠線を少し描く（オプション）
+        draw.rectangle([(0,0), (width-1, height-1)], outline="#e0e0e0", width=1)
+        
         return img
     except:
         return None
@@ -67,7 +75,7 @@ def render_asset_card(asset, db, is_font=False):
         if is_font:
             font_path = os.path.join(FONT_DIR, asset.image_filename)
             if os.path.exists(font_path):
-                thumb = create_font_thumbnail(font_path, text="Design 123")
+                thumb = create_font_thumbnail(font_path, text="AaBb 012")
                 if thumb: st.image(thumb, use_container_width=True)
                 else: st.warning("プレビュー生成失敗")
             else:
@@ -163,7 +171,6 @@ def render_assets_page():
                             st.stop()
 
                         # 4. Supabaseへアップロード
-                        # ★修正: フォントも含めてすべてのファイルをアップロード対象にする
                         try:
                             f.seek(0)
                             upload_image_to_supabase(f, fname)
@@ -226,7 +233,7 @@ def render_assets_page():
         # フォントアセット取得
         font_assets_all = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
         
-        # --- 見本画像表示 ---
+        # --- 見本画像表示 (グリッド形式に変更) ---
         st.markdown("### 🔠 フォント一覧見本")
         if font_assets_all:
             sorted_fonts = sorted(
@@ -234,16 +241,24 @@ def render_assets_page():
                 key=lambda x: x.image_filename.lower() if x.image_filename else ""
             )
             
-            try:
-                # ユーティリティで一覧画像を生成
-                # (注意: ここでもローカルにフォントファイルがないとエラーになるため、sync_fonts_from_storage が重要)
-                specimen_img = create_font_specimen_img(db, sorted_fonts)
-                if specimen_img:
-                    st.image(specimen_img, caption="登録済みフォント一覧 (ファイル名順)", use_container_width=True)
-                else:
-                    st.warning("見本画像の生成に失敗しました（フォントファイルが見つかりません）")
-            except Exception as e:
-                st.error(f"見本画像生成エラー: {e}")
+            # グリッド表示 (4列)
+            cols = st.columns(4)
+            for idx, font_asset in enumerate(sorted_fonts):
+                with cols[idx % 4]:
+                    font_path = os.path.join(FONT_DIR, font_asset.image_filename)
+                    if os.path.exists(font_path):
+                        # サムネイル生成（見本用のテキスト）
+                        thumb = create_font_thumbnail(font_path, text="12:30\nLIVE", width=400, height=200)
+                        
+                        with st.container(border=True):
+                            if thumb:
+                                st.image(thumb, use_container_width=True)
+                            else:
+                                st.error("No Preview")
+                            # フォント名を表示
+                            st.caption(f"**{font_asset.name}**")
+                    else:
+                        st.warning(f"File Not Found: {font_asset.image_filename}")
         else:
             st.info("フォントが登録されていません。")
 
