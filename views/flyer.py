@@ -62,8 +62,6 @@ def resize_image_to_width(img, target_width):
 def format_event_date(dt_obj, mode="EN"):
     """
     日付をフォーマットする。文字列で渡された場合もパースして処理する。
-    mode="EN": 2025.2.15.SUN
-    mode="JP": 2025年2月15日 (日)
     """
     if not dt_obj: return ""
     
@@ -94,7 +92,6 @@ def format_event_date(dt_obj, mode="EN"):
             wd = weekdays_en[target_date.weekday()]
             return f"{target_date.year}.{target_date.month}.{target_date.day}.{wd}"
     except Exception as e:
-        print(f"Date format error: {e}")
         return str(dt_obj)
 
 def format_time_str(t_val):
@@ -109,20 +106,13 @@ def is_glyph_available(font, char):
     """
     指定されたフォントに文字(グリフ)が含まれているかを確認する。
     """
-    # 空白や改行はOK
     if char.isspace() or ord(char) < 32: return True
-
     try:
-        # freetypeのcmapを確認 (Pillow標準の方法)
+        # freetypeのcmapを確認
         return ord(char) in font.font.cmap
     except AttributeError:
-        # cmap属性がない場合、または判定できない場合は
-        # 安全側に倒してTrue（あるとみなす）にするか、Falseにするか。
-        # 日本語フォントへの切り替えを優先したい場合、英語フォントでここに来たらFalseにしたいが、
-        # 汎用性を考えるとTrue。ただし、英字フォントで日本語を表示しようとしてここに落ちるケースは稀。
         return True
     except Exception:
-        # その他のエラーなら一応Trueにしておく
         return True
 
 def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
@@ -139,20 +129,17 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
         if is_glyph_available(primary_font, char):
             use_font = primary_font
         else:
-            # ダメならフォールバック（標準フォント）
             use_font = fallback_font
         
         # 文字サイズ取得
         bbox = draw.textbbox((0, 0), char, font=use_font)
-        # width
         char_w = bbox[2] - bbox[0]
-        # height
         char_h = bbox[3] - bbox[1] 
         
         # 描画
         draw.text((current_x, y), char, font=use_font, fill=fill)
         
-        # 次の文字へ移動 (getlengthが使える場合は使う)
+        # 次の文字へ移動
         try:
             advance = use_font.getlength(char)
         except:
@@ -166,39 +153,36 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
             
     return total_w, max_h
 
-def draw_text_with_shadow(base_img, text, x, y, font, max_width, fill_color, 
+def draw_text_with_shadow(base_img, text, x, y, font, font_size_px, max_width, fill_color, 
                           anchor="la", 
                           shadow_on=False, shadow_color="#000000", shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
                           fallback_font_name="keifont.ttf"):
     """
     テキストを描画する関数（自動日本語フォールバック機能付き）。
+    ★重要: font_size_px を明示的に受け取り、fallbackフォントのサイズを保証する
     """
     if not text: return 0
     
-    # 1. フォールバック用フォントの準備
-    # アセット管理で設定された標準フォントをロードする
-    fallback_font = font # 初期値はメインフォント
-    
+    # 1. フォールバック用フォントの準備 (サイズを明示)
+    fallback_font = font # 初期値
     try:
-        # 指定された標準フォントを探す
         fb_path = os.path.join(FONT_DIR, fallback_font_name)
         if not os.path.exists(fb_path):
-            # なければ keifont.ttf を探す
-            fb_path = os.path.join(FONT_DIR, "keifont.ttf")
+             fb_path = os.path.join(FONT_DIR, "keifont.ttf")
         
         if os.path.exists(fb_path):
-            fallback_font = ImageFont.truetype(fb_path, font.size)
+            # ★ここで確実にサイズを指定してロード
+            fallback_font = ImageFont.truetype(fb_path, int(font_size_px))
     except Exception as e:
         print(f"Fallback font load error: {e}")
-        # ロード失敗時はメインフォントをそのまま使う（混植なしになる）
 
     # 2. サイズ計測用 (ダミー描画)
     dummy_img = Image.new("RGBA", (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
     
     # 幅の上限を仮で大きく取る
-    temp_w = int(font.size * len(text) * 2) + 200
-    temp_h = int(font.size * 2) + 100
+    temp_w = int(font_size_px * len(text) * 2) + 200
+    temp_h = int(font_size_px * 2) + 100
     
     measure_img = Image.new("RGBA", (temp_w, temp_h), (0,0,0,0))
     measure_draw = ImageDraw.Draw(measure_img)
@@ -208,8 +192,7 @@ def draw_text_with_shadow(base_img, text, x, y, font, max_width, fill_color,
     # 3. 本番用キャンバス作成
     margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
     canvas_w = int(text_w + margin * 2)
-    # 高さには少し余裕を持たせる
-    canvas_h = int(text_h + margin * 2 + font.size * 0.5) 
+    canvas_h = int(text_h + margin * 2 + font_size_px * 0.5) 
     
     txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     txt_draw = ImageDraw.Draw(txt_img)
@@ -319,10 +302,13 @@ def create_flyer_image_shadow(
         # フォント
         f_name = styles.get(f"{key}_font", "keifont.ttf")
         f_size_val = styles.get(f"{key}_size", default_size)
+        
+        # 画面サイズに応じたスケール計算
         scale_factor = W / 1200.0
-        final_size = int(f_size_val * scale_factor)
+        final_size_px = int(f_size_val * scale_factor) # ★ここでピクセルサイズ確定
+        
         try:
-            font = ImageFont.truetype(os.path.join(FONT_DIR, f_name), final_size)
+            font = ImageFont.truetype(os.path.join(FONT_DIR, f_name), final_size_px)
         except:
             font = ImageFont.load_default()
         
@@ -338,6 +324,7 @@ def create_flyer_image_shadow(
         
         return {
             "font": font,
+            "size": final_size_px, # ★サイズ数値を返す
             "color": color,
             "shadow_on": shadow_on,
             "shadow_color": s_color,
@@ -392,14 +379,14 @@ def create_flyer_image_shadow(
     # --- 左側 (日付・会場) ---
     h_date = draw_text_with_shadow(
         base_img, str(date_text), left_x, header_y, 
-        s_date["font"], left_max_w, s_date["color"], "la",
+        s_date["font"], s_date["size"], left_max_w, s_date["color"], "la",
         s_date["shadow_on"], s_date["shadow_color"], s_date["shadow_blur"], s_date["shadow_off_x"], s_date["shadow_off_y"],
         fallback_font_name=system_fallback_font
     )
     venue_y = header_y + h_date + int(H * 0.005)
     h_venue = draw_text_with_shadow(
         base_img, str(venue_text), left_x, venue_y, 
-        s_venue["font"], left_max_w, s_venue["color"], "la",
+        s_venue["font"], s_venue["size"], left_max_w, s_venue["color"], "la",
         s_venue["shadow_on"], s_venue["shadow_color"], s_venue["shadow_blur"], s_venue["shadow_off_x"], s_venue["shadow_off_y"],
         fallback_font_name=system_fallback_font
     )
@@ -410,18 +397,18 @@ def create_flyer_image_shadow(
     s_str = str(start_time) if start_time else "TBA"
     
     # 時間描画 (OPEN▶10:20)
-    line_h_time = s_time["font"].size * 1.3 # 行間
+    line_h_time = s_time["size"] * 1.3 # 行間
     
     draw_text_with_shadow(
         base_img, f"OPEN▶{o_str}", right_x, header_y, 
-        s_time["font"], right_max_w, s_time["color"], "ra",
+        s_time["font"], s_time["size"], right_max_w, s_time["color"], "ra",
         s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
         fallback_font_name=system_fallback_font
     )
     start_y = header_y + line_h_time
     draw_text_with_shadow(
         base_img, f"START▶{s_str}", right_x, start_y, 
-        s_time["font"], right_max_w, s_time["color"], "ra",
+        s_time["font"], s_time["size"], right_max_w, s_time["color"], "ra",
         s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
         fallback_font_name=system_fallback_font
     )
@@ -436,7 +423,6 @@ def create_flyer_image_shadow(
     
     # 備考 (Gap設定反映)
     note_gap = styles.get("note_gap", 15)
-    # 画面サイズ比率に合わせてピクセル変換
     note_gap_px = int(note_gap * (W / 1200.0))
 
     for note in reversed(common_notes_list):
@@ -471,6 +457,7 @@ def create_flyer_image_shadow(
     
     for item in footer_lines:
         dummy_draw = ImageDraw.Draw(Image.new("RGBA",(1,1)))
+        # ダミー描画でもサイズ感概算
         bbox = dummy_draw.textbbox((0,0), item["text"], font=item["style"]["font"])
         h = bbox[3] - bbox[1]
         processed_footer.append({**item, "h": h})
@@ -484,7 +471,7 @@ def create_flyer_image_shadow(
         st_obj = item["style"]
         draw_text_with_shadow(
             base_img, item["text"], W//2, curr_fy, 
-            st_obj["font"], int(W*0.9), st_obj["color"], "ma",
+            st_obj["font"], st_obj["size"], int(W*0.9), st_obj["color"], "ma",
             st_obj["shadow_on"], st_obj["shadow_color"], st_obj["shadow_blur"], st_obj["shadow_off_x"], st_obj["shadow_off_y"],
             fallback_font_name=system_fallback_font
         )
