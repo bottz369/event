@@ -6,6 +6,8 @@ import requests
 import json
 from constants import FONT_DIR
 from database import get_db, TimetableProject, Asset, get_image_url
+# ★ get_sorted_font_list を追加インポート
+from utils import get_sorted_font_list
 
 # ==========================================
 # 1. ヘルパー関数群
@@ -139,7 +141,7 @@ def render_visual_selector(label, assets, key_prefix, current_id, allow_none=Fal
                 st.rerun()
 
 # ==========================================
-# 3. フライヤー生成ロジック (改修版)
+# 3. フライヤー生成ロジック
 # ==========================================
 
 def create_flyer_image_v2(
@@ -147,7 +149,7 @@ def create_flyer_image_v2(
     basic_font_path, text_color, stroke_color,
     date_text, venue_text, open_time, start_time,
     ticket_info_list,
-    common_notes_list # ★追加: チケット共通備考リスト
+    common_notes_list
 ):
     # 1. 背景
     base_img = load_image_from_source(bg_source)
@@ -161,8 +163,6 @@ def create_flyer_image_v2(
         f_label = ImageFont.truetype(basic_font_path, int(W * 0.04))
         f_time = ImageFont.truetype(basic_font_path, int(W * 0.06))
         f_ticket_name = ImageFont.truetype(basic_font_path, int(W * 0.045))
-        
-        # ★追加: 共通備考用の小さめのフォント
         f_note_small = ImageFont.truetype(basic_font_path, int(W * 0.03)) 
     except:
         f_date = f_venue = f_label = f_time = f_ticket_name = f_note_small = ImageFont.load_default()
@@ -232,10 +232,9 @@ def create_flyer_image_v2(
         if ticket.get('note'): line += f" ({ticket.get('note')})"
         footer_lines.append({"text": line, "font": f_ticket_name, "gap": int(H * 0.05)})
     
-    # 2. ★追加: チケット共通備考 (小さめ、下部)
+    # 2. チケット共通備考
     for note in common_notes_list:
         if note and str(note).strip():
-            # 注釈などは少し行間を狭める
             footer_lines.append({"text": str(note).strip(), "font": f_note_small, "gap": int(H * 0.02)})
 
     # フッターの総高さを計算
@@ -287,19 +286,6 @@ def render_flyer_editor(project_id):
     logos = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
     bgs = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
     
-    # ★追加: フォント一覧をDBから取得
-    fonts_db = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
-    
-    # ★追加: 表示名でソート (アルファベット順 -> 日本語)
-    # Pythonの標準ソートはASCII順が先に来るので、そのままnameでソートすればOK
-    fonts_db.sort(key=lambda x: x.name)
-    
-    # セレクトボックス用の辞書作成 (表示名 -> ファイル名)
-    # デフォルトフォントも含める
-    font_options = {"標準フォント": "keifont.ttf"}
-    for f in fonts_db:
-        font_options[f.name] = f.image_filename
-    
     if not proj:
         st.error("プロジェクトエラー")
         db.close()
@@ -320,7 +306,6 @@ def render_flyer_editor(project_id):
     if "flyer_logo_id" not in st.session_state:
         st.session_state.flyer_logo_id = int(saved_config.get("logo_id", 0))
     if "flyer_basic_font" not in st.session_state:
-        # 保存されているのはファイル名
         st.session_state.flyer_basic_font = saved_config.get("font", "keifont.ttf")
     if "flyer_text_color" not in st.session_state:
         st.session_state.flyer_text_color = saved_config.get("text_color", "#FFFFFF")
@@ -340,32 +325,33 @@ def render_flyer_editor(project_id):
             render_visual_selector("ロゴ", logos, "flyer_logo_id", st.session_state.flyer_logo_id, allow_none=True)
 
         with st.expander("3. フォント・色設定", expanded=True):
-            # ★変更: DBから取得したフォントリストでセレクトボックスを作成
-            # 現在の選択状態 (ファイル名) から、表示名を探す
-            current_filename = st.session_state.flyer_basic_font
-            current_display_name = "標準フォント"
             
-            # ファイル名から表示名を逆引き
-            for name, filename in font_options.items():
-                if filename == current_filename:
-                    current_display_name = name
-                    break
+            # --- ★変更: ソート済みフォントリストを取得 ---
+            sorted_fonts = get_sorted_font_list(db)
             
-            # セレクトボックス (キーは表示名のリスト)
-            display_names = list(font_options.keys())
+            # セレクトボックス用: {ファイル名: 表示名}
+            font_file_list = [item["filename"] for item in sorted_fonts]
+            font_display_map = {item["filename"]: item["name"] for item in sorted_fonts}
             
-            # 選択された表示名
-            selected_display_name = st.selectbox(
+            if not font_file_list:
+                font_file_list = ["keifont.ttf"]
+                font_display_map = {"keifont.ttf": "標準フォント (未設定)"}
+
+            # 現在の選択状態
+            current_filename = st.session_state.get("flyer_basic_font", font_file_list[0])
+            if current_filename not in font_file_list:
+                current_filename = font_file_list[0]
+                st.session_state.flyer_basic_font = current_filename
+
+            # フォント選択
+            st.selectbox(
                 "フォント", 
-                display_names, 
-                index=display_names.index(current_display_name) if current_display_name in display_names else 0,
-                key="flyer_font_selectbox" 
+                font_file_list,
+                format_func=lambda x: font_display_map.get(x, x),
+                key="flyer_basic_font" # セッション変数 flyer_basic_font を直接更新
             )
             
-            # 選択された表示名からファイル名を決定してセッションステートに保存
-            st.session_state.flyer_basic_font = font_options[selected_display_name]
-            
-            # ★追加: フォントプレビュー
+            # フォントプレビュー
             selected_filename = st.session_state.flyer_basic_font
             if selected_filename:
                 prev_img = local_create_font_preview(os.path.join(FONT_DIR, selected_filename), "OPEN 18:30 / START 19:00")
@@ -423,7 +409,7 @@ def render_flyer_editor(project_id):
                     "open_time": format_time_str(proj.open_time),
                     "start_time": format_time_str(proj.start_time),
                     "ticket_info_list": st.session_state.get("proj_tickets", []),
-                    "common_notes_list": st.session_state.get("proj_ticket_notes", []) # ★追加
+                    "common_notes_list": st.session_state.get("proj_ticket_notes", [])
                 }
                 
                 if not args["ticket_info_list"] and getattr(proj, "tickets_json", None):
