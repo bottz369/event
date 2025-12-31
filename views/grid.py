@@ -5,7 +5,6 @@ import io
 from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset
 from constants import FONT_DIR
 from logic_project import save_current_project
-# ★ get_sorted_font_list, create_font_specimen_img をインポート
 from utils import create_font_specimen_img, get_sorted_font_list
 
 try:
@@ -40,47 +39,65 @@ def render_grid_page():
                 if sel_label != "(選択)":
                     selected_id = p_map[sel_label]
 
-        # セッション初期化
-        if "grid_order" not in st.session_state: 
-            st.session_state.grid_order = []
-        else:
-            st.session_state.grid_order = list(dict.fromkeys(st.session_state.grid_order))
-
+        # セッション初期化 (デフォルト値)
+        if "grid_order" not in st.session_state: st.session_state.grid_order = []
         if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
-        if "grid_base_cols" not in st.session_state: st.session_state.grid_base_cols = 5
         if "grid_row_counts_str" not in st.session_state: st.session_state.grid_row_counts_str = "5,5,5,5,5"
         if "grid_alignment" not in st.session_state: st.session_state.grid_alignment = "中央揃え"
         if "grid_layout_mode" not in st.session_state: st.session_state.grid_layout_mode = "レンガ (サイズ統一)"
-        
+        if "grid_font" not in st.session_state: st.session_state.grid_font = "keifont.ttf"
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
-        # フォント設定の初期化 (ここでは仮の値を入れておき、下でリストの先頭で上書きする)
-        if "grid_font" not in st.session_state:
-            st.session_state.grid_font = "keifont.ttf"
-
         if selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             
-            # 初回ロード
-            if not st.session_state.grid_order and proj and proj.data_json:
-                try:
-                    d = json.loads(proj.data_json)
-                    tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
-                    st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                except: pass
+            # --- ★修正: DBからの設定復元ロジック ---
+            # 初回ロード、またはプロジェクト切り替え時にDB保存値を適用
+            if proj:
+                # 1. アーティストリストの初期化 (data_jsonから)
+                if not st.session_state.grid_order and proj.data_json:
+                    try:
+                        d = json.loads(proj.data_json)
+                        tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                    except: pass
+                
+                # 2. グリッド設定の復元 (settings_jsonから)
+                # セッションステートにまだ値がセットされていない、または明示的なロードが必要な場合に適用
+                if "grid_settings_loaded" not in st.session_state or st.session_state.get("current_proj_id_check") != selected_id:
+                    if proj.settings_json:
+                        try:
+                            settings = json.loads(proj.settings_json)
+                            grid_conf = settings.get("grid_settings", {})
+                            if grid_conf:
+                                st.session_state.grid_order = grid_conf.get("order", st.session_state.grid_order)
+                                st.session_state.grid_rows = grid_conf.get("rows", 5)
+                                st.session_state.grid_row_counts_str = grid_conf.get("row_counts", "5,5,5,5,5")
+                                st.session_state.grid_layout_mode = grid_conf.get("layout_mode", "レンガ (サイズ統一)")
+                                st.session_state.grid_alignment = grid_conf.get("alignment", "中央揃え")
+                                st.session_state.grid_font = grid_conf.get("font", "keifont.ttf")
+                        except Exception as e:
+                            print(f"Settings load error: {e}")
+                    
+                    st.session_state.grid_settings_loaded = True
+                    st.session_state.current_proj_id_check = selected_id
+
 
             st.divider()
             
             # --- 設定エリア ---
             c_set1, c_set2 = st.columns([1, 2])
             with c_set1: 
-                new_rows = st.number_input("行数", min_value=1, key="grid_rows")
+                new_rows = st.number_input("行数", min_value=1, value=st.session_state.grid_rows, key="grid_rows")
             with c_set2:
                 if st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset"):
                     if proj.data_json:
                         d = json.loads(proj.data_json)
                         tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                        # 設定もリセット
+                        st.session_state.grid_rows = 5
+                        st.session_state.grid_row_counts_str = "5,5,5,5,5"
                         st.rerun()
 
             # --- 行ごとの枚数設定 ---
@@ -95,15 +112,17 @@ def render_grid_page():
             elif len(current_counts) > new_rows:
                 current_counts = current_counts[:new_rows]
             
+            # 入力欄とセッション変数の同期
             st.session_state.grid_row_counts_str = ",".join(map(str, current_counts))
 
-            st.text_input(
+            row_counts_input = st.text_input(
                 "各行の枚数設定 (カンマ区切り)", 
-                key="grid_row_counts_str_input", 
                 value=st.session_state.grid_row_counts_str,
-                help="例: 3,4,6 と入力すると、1行目3枚、2行目4枚、3行目6枚になります。"
+                help="例: 3,4,6 と入力すると、1行目3枚、2行目4枚、3行目6枚になります。",
+                key="grid_row_counts_input_widget"
             )
-            st.session_state.grid_row_counts_str = st.session_state.grid_row_counts_str_input
+            # 入力値をセッションに反映
+            st.session_state.grid_row_counts_str = row_counts_input
             
             try:
                 parsed_counts = [int(x.strip()) for x in st.session_state.grid_row_counts_str.split(",") if x.strip()]
@@ -152,40 +171,29 @@ def render_grid_page():
             
             # --- 画像生成・プレビューエリア ---
             
-            # ★ドロップダウン用: 優先順位付きリスト (標準->お気に入り->その他)
             sorted_fonts = get_sorted_font_list(db)
-            
-            # セレクトボックス用: {ファイル名: 表示名} の辞書
             font_file_list = [item["filename"] for item in sorted_fonts]
             font_display_map = {item["filename"]: item["name"] for item in sorted_fonts}
             
-            # フォントが一つもない場合のガード
             if not font_file_list:
                 font_file_list = ["keifont.ttf"]
                 font_display_map = {"keifont.ttf": "標準フォント (未設定)"}
 
-            # 現在の選択状態の維持または初期化
-            current_filename = st.session_state.get("grid_font", font_file_list[0])
-            
-            if current_filename not in font_file_list:
-                current_filename = font_file_list[0]
-                st.session_state.grid_font = current_filename
+            # フォント選択状態の確保
+            if st.session_state.grid_font not in font_file_list:
+                st.session_state.grid_font = font_file_list[0]
 
-            # ★見本表示 (要件: 画像内ではファイル名のアルファベット順でソート)
+            # 見本表示
             with st.expander("🔤 フォント一覧見本を表示"):
                 with st.container(height=300):
-                    # リストをファイル名順でソートし直す
                     specimen_list = sorted(sorted_fonts, key=lambda x: x["filename"].lower())
-                    
-                    # 修正された呼び出し形式: (db, list)
                     specimen_img = create_font_specimen_img(db, specimen_list)
-                    
                     if specimen_img:
                         st.image(specimen_img, use_container_width=True)
                     else:
                         st.info("フォントが見つかりません。")
 
-            # フォント選択ボックス (こちらは優先順位付きの順序で表示)
+            # フォント選択
             st.selectbox(
                 "プレビュー用フォント", 
                 font_file_list,
@@ -193,7 +201,7 @@ def render_grid_page():
                 key="grid_font" 
             )
             
-            # 設定スナップショット
+            # 現在の設定パラメータ（保存・比較用）
             current_params = {
                 "order": st.session_state.grid_order,
                 "row_counts": st.session_state.grid_row_counts_str,
@@ -203,7 +211,7 @@ def render_grid_page():
                 "rows": st.session_state.grid_rows
             }
 
-            # 自動生成ロジック
+            # 自動生成ロジック (初回のみ)
             if st.session_state.get("last_generated_grid_image") is None:
                 if generate_grid_image:
                     target_artists = []
@@ -226,6 +234,7 @@ def render_grid_page():
                             st.session_state.grid_last_generated_params = current_params
                         except: pass
 
+            # ★修正: 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
                 if generate_grid_image:
                     target_artists = []
@@ -251,10 +260,28 @@ def render_grid_page():
                                 if img:
                                     st.session_state.last_generated_grid_image = img
                                     st.session_state.grid_last_generated_params = current_params
-                                    if save_current_project(db, selected_id):
-                                        st.toast("保存＆プレビュー更新完了！", icon="✅")
-                                    else:
-                                        st.error("DB保存に失敗しました")
+                                    
+                                    # --- ★重要: ここでDBに設定を保存する ---
+                                    # プロジェクトを再取得（セッション切れ防止）
+                                    proj_to_save = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
+                                    if proj_to_save:
+                                        # 既存の settings_json を読み込み
+                                        settings = {}
+                                        if proj_to_save.settings_json:
+                                            try: settings = json.loads(proj_to_save.settings_json)
+                                            except: pass
+                                        
+                                        # グリッド設定を上書き
+                                        settings["grid_settings"] = current_params
+                                        
+                                        # JSON文字列に戻して保存
+                                        proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
+                                        
+                                        # コミット実行
+                                        if save_current_project(db, selected_id):
+                                            st.toast("保存＆プレビュー更新完了！", icon="✅")
+                                        else:
+                                            st.error("DB保存に失敗しました")
                                 else:
                                     st.error("生成失敗")
                             except Exception as e:
