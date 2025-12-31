@@ -20,7 +20,7 @@ def parse_json_safe(data, default_val):
     if isinstance(data, (list, dict)):
         return data
     
-    # 文字列の場合（SQLiteや、自動変換が無効な場合）
+    # 文字列の場合
     if isinstance(data, str):
         try:
             return json.loads(data)
@@ -28,6 +28,28 @@ def parse_json_safe(data, default_val):
             return default_val
             
     return default_val
+
+# --- ヘルパー関数: 安全な時間変換 (★追加) ---
+def format_time_safe(t_val, default="10:00"):
+    """
+    DBから来るデータが datetime.time型 でも 文字列(秒付き) でも、
+    "HH:MM" 形式の文字列にして返す。
+    これがないと、リロード時に時間が初期値に戻る現象が起きます。
+    """
+    if not t_val:
+        return default
+    
+    # 文字列の場合 (例: "10:10:00" -> "10:10")
+    if isinstance(t_val, str):
+        if len(t_val) >= 5:
+            return t_val[:5]
+        return t_val
+        
+    # datetime.time型の場合
+    if isinstance(t_val, (datetime.time, datetime.datetime)):
+        return t_val.strftime("%H:%M")
+        
+    return default
 
 # --- 読み込み処理 ---
 def load_project_data(db, project_id):
@@ -46,7 +68,6 @@ def load_project_data(db, project_id):
     # 日付変換 (String -> date)
     if proj.event_date:
         try:
-            # 文字列型で来てもDate型で来ても対応できるようにする
             if isinstance(proj.event_date, (datetime.date, datetime.datetime)):
                 st.session_state.proj_date = proj.event_date
             else:
@@ -56,13 +77,12 @@ def load_project_data(db, project_id):
     else:
         st.session_state.proj_date = None
 
-    # 時間
-    # Time型オブジェクトか文字列かを考慮してセット
-    st.session_state.tt_open_time = proj.open_time or "10:00"
-    st.session_state.tt_start_time = proj.start_time or "10:30"
+    # 時間 (★修正: format_time_safe を適用)
+    st.session_state.tt_open_time = format_time_safe(proj.open_time, "10:00")
+    st.session_state.tt_start_time = format_time_safe(proj.start_time, "10:30")
     st.session_state.tt_goods_offset = proj.goods_start_offset or 0
 
-    # 2. JSONデータ (リスト/辞書系) - ★修正: parse_json_safe を使用
+    # 2. JSONデータ (リスト/辞書系)
     
     # タイムテーブルデータ
     st.session_state.tt_data = parse_json_safe(proj.data_json, [])
@@ -75,7 +95,6 @@ def load_project_data(db, project_id):
         st.session_state.grid_alignment = grid_data.get("alignment", "中央揃え")
         st.session_state.grid_layout_mode = grid_data.get("layout_mode", "レンガ (サイズ統一)")
     else:
-        # 古いデータ形式(単なるリスト)の場合のフォールバック
         st.session_state.grid_order = grid_data if isinstance(grid_data, list) else []
 
     # チケット情報
@@ -85,8 +104,9 @@ def load_project_data(db, project_id):
     st.session_state.proj_free_text = parse_json_safe(proj.free_text_json, [])
 
     # ★追加: チケット共通備考の読み込み
-    # ここでエラーが起きていた可能性が高い箇所です
-    st.session_state.proj_ticket_notes = parse_json_safe(proj.ticket_notes_json, [])
+    # getattrを使って、万が一カラム認識が遅れてもエラーにならないようにする
+    raw_notes = getattr(proj, "ticket_notes_json", None)
+    st.session_state.proj_ticket_notes = parse_json_safe(raw_notes, [])
     
     # フライヤー設定の読み込み
     flyer_conf = parse_json_safe(proj.flyer_json, {})
@@ -119,8 +139,6 @@ def save_current_project(db, project_id):
     if "proj_url" in st.session_state: proj.venue_url = st.session_state.proj_url
     
     # JSONデータ
-    # Supabaseの場合、Dict/Listをそのまま代入しても自動でJSON化してくれることが多いですが、
-    # 安全のため json.dumps で文字列化して保存するのが最も確実です。
     if "proj_tickets" in st.session_state:
         proj.tickets_json = json.dumps(st.session_state.proj_tickets, ensure_ascii=False)
     if "proj_free_text" in st.session_state:
@@ -128,7 +146,9 @@ def save_current_project(db, project_id):
     
     # ★追加: チケット共通備考の保存
     if "proj_ticket_notes" in st.session_state:
-        proj.ticket_notes_json = json.dumps(st.session_state.proj_ticket_notes, ensure_ascii=False)
+        # DBモデルに列があるか確認してから代入（安全策）
+        if hasattr(proj, "ticket_notes_json"):
+            proj.ticket_notes_json = json.dumps(st.session_state.proj_ticket_notes, ensure_ascii=False)
 
     # タイムテーブルデータ
     save_data = []
@@ -209,8 +229,8 @@ def save_current_project(db, project_id):
     # 既存のJSONがあればマージする
     if proj.flyer_json:
         try:
-            # ここも読み込み時は安全策をとる
             existing_flyer = proj.flyer_json
+            # ここも parse_json_safe 相当の処理で安全に
             if isinstance(existing_flyer, str):
                 existing_flyer = json.loads(existing_flyer)
             elif not isinstance(existing_flyer, dict):
