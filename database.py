@@ -39,6 +39,7 @@ IMAGE_DIR = "images"
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
 # --- モデル定義 ---
+
 class Artist(Base):
     __tablename__ = "artists"
     id = Column(Integer, primary_key=True, index=True)
@@ -47,34 +48,33 @@ class Artist(Base):
     is_deleted = Column(Boolean, default=False)
 
 class TimetableProject(Base):
-    # ★CSVのテーブル名と一致
     __tablename__ = "projects_v4"
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
     event_date = Column(String)
-    venue_name = Column(String) # ★修正ポイント: venue ではなく venue_name
+    venue_name = Column(String)
     venue_url = Column(String)
     
+    # 時間関連（文字列 "HH:MM" で管理）
     open_time = Column(String)
     start_time = Column(String)
     goods_start_offset = Column(Integer)
     
+    # JSONデータ（Text型で定義し、アプリ側でパースする）
     data_json = Column(Text)       # タイムテーブルデータ
     grid_order_json = Column(Text) # アー写グリッド順序
     
     tickets_json = Column(Text)    # チケット情報
     free_text_json = Column(Text)  # 自由入力欄
     
-    # ★追加: チケット共通備考の保存用カラム
+    # チケット共通備考（ここが正しく追加されている必要があります）
     ticket_notes_json = Column(Text)
     
-    flyer_json = Column(Text)      # ★修正ポイント: フライヤー設定保存用
-    
-    # ★設定保存用カラム (CSVにあったため定義)
-    settings_json = Column(Text)
+    flyer_json = Column(Text)      # フライヤー設定
+    settings_json = Column(Text)   # その他設定
 
-# ★素材アーカイブ用テーブル
+# 素材アーカイブ用テーブル
 class Asset(Base):
     __tablename__ = "assets"
     id = Column(Integer, primary_key=True, index=True)
@@ -83,6 +83,7 @@ class Asset(Base):
     image_filename = Column(String)
     is_deleted = Column(Boolean, default=False)
 
+# お気に入りフォント
 class FavoriteFont(Base):
     __tablename__ = "favorite_fonts"
     id = Column(Integer, primary_key=True, index=True)
