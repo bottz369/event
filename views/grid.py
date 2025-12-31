@@ -5,7 +5,7 @@ import io
 from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset
 from constants import FONT_DIR
 from logic_project import save_current_project
-# ★ get_sorted_font_list を追加インポート
+# ★ get_sorted_font_list, create_font_specimen_img をインポート
 from utils import create_font_specimen_img, get_sorted_font_list
 
 try:
@@ -152,12 +152,10 @@ def render_grid_page():
             
             # --- 画像生成・プレビューエリア ---
             
-            # ★重要: ソート済みのフォントリストを取得
-            # [{"name": "★ Noto (標準)", "filename": "noto.ttf", ...}, ...] の形式
+            # ★ドロップダウン用: 優先順位付きリスト (標準->お気に入り->その他)
             sorted_fonts = get_sorted_font_list(db)
             
-            # セレクトボックス用: {ファイル名: 表示名} の辞書を作る
-            # 順序を保持するためにリストから作成
+            # セレクトボックス用: {ファイル名: 表示名} の辞書
             font_file_list = [item["filename"] for item in sorted_fonts]
             font_display_map = {item["filename"]: item["name"] for item in sorted_fonts}
             
@@ -169,21 +167,25 @@ def render_grid_page():
             # 現在の選択状態の維持または初期化
             current_filename = st.session_state.get("grid_font", font_file_list[0])
             
-            # もし前回の選択がリストから消えていたら、先頭（標準フォント）に戻す
             if current_filename not in font_file_list:
                 current_filename = font_file_list[0]
                 st.session_state.grid_font = current_filename
 
-            # 見本表示 (ソート順で表示)
+            # ★見本表示 (要件: 画像内ではファイル名のアルファベット順でソート)
             with st.expander("🔤 フォント一覧見本を表示"):
                 with st.container(height=300):
-                    specimen_img = create_font_specimen_img(FONT_DIR, font_file_list)
+                    # リストをファイル名順でソートし直す
+                    specimen_list = sorted(sorted_fonts, key=lambda x: x["filename"].lower())
+                    
+                    # 修正された呼び出し形式: (db, list)
+                    specimen_img = create_font_specimen_img(db, specimen_list)
+                    
                     if specimen_img:
                         st.image(specimen_img, use_container_width=True)
                     else:
                         st.info("フォントが見つかりません。")
 
-            # フォント選択ボックス
+            # フォント選択ボックス (こちらは優先順位付きの順序で表示)
             st.selectbox(
                 "プレビュー用フォント", 
                 font_file_list,
