@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-from sqlalchemy import text # ★追加
-from database import init_db, engine # ★engineを追加
+from sqlalchemy import text, inspect # ★inspectを追加
+from database import init_db, engine, TimetableProject # ★TimetableProjectを追加
 
 from constants import get_default_row_settings
 
@@ -15,6 +15,34 @@ from views.artists import render_artists_page      # アーティスト管理
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
 init_db()
+
+# ==========================================
+# 🔍 システム内部診断 (Step 3)
+# ==========================================
+st.markdown("### 🔍 システム内部診断")
+st.caption("※確認が終わったらこのブロックは削除してOKです")
+col1, col2 = st.columns(2)
+
+# 1. Pythonの設計図に項目があるかチェック
+with col1:
+    if hasattr(TimetableProject, 'ticket_notes_json'):
+        st.success("✅ Python設計図: OK (ticket_notes_json あり)")
+    else:
+        st.error("❌ Python設計図: NG (database.py が反映されていません)")
+
+# 2. データベースの実物に項目があるかチェック
+with col2:
+    try:
+        inspector = inspect(engine)
+        columns = [c['name'] for c in inspector.get_columns('projects_v4')]
+        if 'ticket_notes_json' in columns:
+            st.success("✅ データベース実物: OK (カラムあり)")
+        else:
+            st.error("❌ データベース実物: NG (カラムが追加されていません)")
+    except Exception as e:
+        st.error(f"DB接続エラー: {e}")
+
+st.divider()
 
 # ==========================================
 # ★重要: セッションステートの初期化
@@ -49,22 +77,6 @@ st.sidebar.title("メニュー")
 
 menu_items = ["ワークスペース", "プロジェクト管理", "素材アーカイブ", "アーティスト管理"]
 menu_selection = st.sidebar.radio("機能を選択", menu_items, key="sb_menu")
-
-# ==========================================
-# ★ 緊急メンテナンス用ボタン (ここに追加)
-# ==========================================
-st.sidebar.markdown("---")
-with st.sidebar.expander("🔧 データベース緊急対応", expanded=True):
-    st.caption("「共通備考」が保存されない場合のみ押してください")
-    if st.button("DB修復: カラム追加", type="primary"):
-        try:
-            with engine.connect() as conn:
-                # projects_v4 テーブルに ticket_notes_json カラムを追加
-                conn.execute(text("ALTER TABLE projects_v4 ADD COLUMN IF NOT EXISTS ticket_notes_json TEXT;"))
-                conn.commit()
-            st.success("✅ 修復成功！カラムを追加しました。")
-        except Exception as e:
-            st.error(f"エラー: {e}")
 
 # ==========================================
 # ページ遷移
