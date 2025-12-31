@@ -1,9 +1,9 @@
 import streamlit as st
 import uuid
 import os
-from PIL import Image, ImageDraw, ImageFont # ★追加: フォントプレビュー生成用
+from PIL import Image, ImageDraw, ImageFont
 from database import get_db, Asset, upload_image_to_supabase, get_image_url, IMAGE_DIR
-from constants import FONT_DIR # ★追加: constantsからインポート
+from constants import FONT_DIR
 
 # ディレクトリの確実な作成
 os.makedirs(IMAGE_DIR, exist_ok=True)
@@ -38,7 +38,6 @@ def render_assets_page():
     st.caption("フライヤー作成で使用する画像素材やフォントを登録します。")
     
     db = next(get_db())
-    # ★拡張子を追加
     ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'ttf', 'otf']
 
     # --- 新規登録 ---
@@ -47,7 +46,6 @@ def render_assets_page():
             c1, c2 = st.columns(2)
             with c1:
                 name = st.text_input("素材名 (例: メインロゴ, ポップ体フォント)")
-                # ★選択肢にフォントを追加
                 a_type = st.selectbox(
                     "種類", 
                     ["logo", "background", "font"], 
@@ -76,7 +74,7 @@ def render_assets_page():
                         
                         local_path = os.path.join(save_dir, fname)
 
-                        # 3. ローカル保存 (必須)
+                        # 3. ローカル保存
                         try:
                             f.seek(0)
                             with open(local_path, "wb") as local_f:
@@ -86,13 +84,10 @@ def render_assets_page():
                             st.stop()
 
                         # 4. Supabaseへアップロード (バックアップ用)
-                        # ※フォントもStorageに入れておくとPCが変わっても復元できます
                         try:
                             f.seek(0)
                             upload_image_to_supabase(f, fname)
                         except:
-                            # データベース側のContent-Type制限でエラーになる場合がありますが
-                            # ローカルにあれば動くのでここは警告のみにして続行させます
                             pass 
 
                         # 5. DB登録
@@ -107,7 +102,6 @@ def render_assets_page():
     st.divider()
 
     # --- 一覧表示 ---
-    # ★タブを3つに増やす
     tabs = st.tabs(["ロゴ一覧", "背景一覧", "フォント一覧"])
     
     # 1. ロゴ一覧
@@ -141,7 +135,6 @@ def render_assets_page():
                     with st.container(border=True):
                         u = get_image_url(asset.image_filename)
                         if u:
-                            # 縦横比固定で表示
                             st.markdown(f"""
                             <div style="width:100%; aspect-ratio:210/297; background:#333; overflow:hidden; border-radius:4px; margin-bottom:8px;">
                                 <img src="{u}" style="width:100%; height:100%; object-fit:cover;">
@@ -153,9 +146,33 @@ def render_assets_page():
                             db.commit()
                             st.rerun()
 
-    # 3. ★追加: フォント一覧
+    # 3. フォント一覧
     with tabs[2]:
+        # ★同期処理: フォルダにあるのにDBにないフォントを自動登録する
+        # DB上のフォントファイル名リスト
         assets = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
+        db_filenames = [a.image_filename for a in assets]
+        
+        # フォルダ上のフォントファイル名リスト
+        if os.path.exists(FONT_DIR):
+            local_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith((".ttf", ".otf"))]
+            
+            new_found = False
+            for fname in local_fonts:
+                if fname not in db_filenames:
+                    # DBに未登録のファイルを発見 -> 自動登録
+                    # 表示名はファイル名をそのまま使う
+                    new_asset = Asset(name=fname, asset_type="font", image_filename=fname)
+                    db.add(new_asset)
+                    new_found = True
+            
+            if new_found:
+                db.commit()
+                st.rerun() # リロードして表示更新
+                
+        # 改めて取得
+        assets = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
+
         if not assets:
             st.info("登録されているフォントはありません")
         else:
@@ -163,20 +180,20 @@ def render_assets_page():
             for idx, asset in enumerate(assets):
                 with cols[idx % 3]:
                     with st.container(border=True):
-                        # フォントファイルのパス
                         font_path = os.path.join(FONT_DIR, asset.image_filename)
                         
-                        # プレビュー生成
+                        # プレビュー
                         if os.path.exists(font_path):
-                            thumb = create_font_thumbnail(font_path, text="Design 123") 
+                            thumb = create_font_thumbnail(font_path, text="Design 123")
                             if thumb:
                                 st.image(thumb, use_container_width=True)
                             else:
                                 st.warning("プレビュー生成失敗")
                         else:
-                            st.error("ファイル未検出")
+                            st.error("ファイルが見つかりません")
 
                         st.caption(f"🅰️ {asset.name}")
+                        # ファイル名も小さく表示
                         st.caption(f"📄 {asset.image_filename}")
                         
                         if st.button("削除", key=f"del_font_{asset.id}"):
