@@ -7,3 +7,4 @@ sqlalchemy
 psycopg2-binary
 supabase
 opencv-python-headless
+requests
