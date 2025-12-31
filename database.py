@@ -65,6 +65,10 @@ class TimetableProject(Base):
     
     tickets_json = Column(Text)    # チケット情報
     free_text_json = Column(Text)  # 自由入力欄
+    
+    # ★追加: チケット共通備考の保存用カラム
+    ticket_notes_json = Column(Text)
+    
     flyer_json = Column(Text)      # ★修正ポイント: フライヤー設定保存用
     
     # ★設定保存用カラム (CSVにあったため定義)
