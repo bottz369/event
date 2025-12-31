@@ -4,8 +4,8 @@ import io
 import os
 import requests
 import json
+from datetime import datetime, date
 from constants import FONT_DIR
-# SystemFontConfig を追加インポート
 from database import get_db, TimetableProject, Asset, get_image_url, SystemFontConfig
 from utils import get_sorted_font_list, create_font_specimen_img
 
@@ -60,20 +60,41 @@ def resize_image_to_width(img, target_width):
     return img.resize((target_width, h_size), Image.LANCZOS)
 
 def format_event_date(dt_obj, mode="EN"):
+    """
+    日付をフォーマットする。文字列で渡された場合もパースして処理する。
+    mode="EN": 2025.2.15.SUN
+    mode="JP": 2025年2月15日 (日)
+    """
     if not dt_obj: return ""
-    if isinstance(dt_obj, str): return dt_obj
+    
+    # 文字列ならdate型に変換を試みる
+    target_date = dt_obj
+    if isinstance(dt_obj, str):
+        try:
+            # よくある形式をトライ
+            for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"]:
+                try:
+                    target_date = datetime.strptime(dt_obj, fmt).date()
+                    break
+                except ValueError:
+                    continue
+        except:
+            return str(dt_obj) # 変換できなければそのまま返す
+
+    # ここで target_date は date型 または datetime型
     try:
-        # 0=Mon, 6=Sun
+        # Python: 0=Mon, 6=Sun
         if mode == "JP":
             weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
-            wd = weekdays_jp[dt_obj.weekday()]
-            return f"{dt_obj.year}年{dt_obj.month}月{dt_obj.day}日 ({wd})"
+            wd = weekdays_jp[target_date.weekday()]
+            return f"{target_date.year}年{target_date.month}月{target_date.day}日 ({wd})"
         else:
-            # EN mode: 2025.2.15.SUN
+            # EN mode
             weekdays_en = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-            wd = weekdays_en[dt_obj.weekday()]
-            return f"{dt_obj.year}.{dt_obj.month}.{dt_obj.day}.{wd}"
-    except:
+            wd = weekdays_en[target_date.weekday()]
+            return f"{target_date.year}.{target_date.month}.{target_date.day}.{wd}"
+    except Exception as e:
+        print(f"Date format error: {e}")
         return str(dt_obj)
 
 def format_time_str(t_val):
@@ -82,20 +103,26 @@ def format_time_str(t_val):
     try: return t_val.strftime("%H:%M")
     except: return str(t_val)
 
-# --- ★フォント混植・描画ロジック ---
+# --- ★フォント混植・描画ロジック (強化版) ---
 
 def is_glyph_available(font, char):
     """
     指定されたフォントに文字(グリフ)が含まれているかを確認する。
     """
-    # 空白文字や制御文字はOKとする
+    # 空白や改行はOK
     if char.isspace() or ord(char) < 32: return True
 
     try:
-        # freetypeのcmapを確認
+        # freetypeのcmapを確認 (Pillow標準の方法)
         return ord(char) in font.font.cmap
     except AttributeError:
-        # cmap属性がない場合(デフォルトフォント等)はTrueとみなす
+        # cmap属性がない場合、または判定できない場合は
+        # 安全側に倒してTrue（あるとみなす）にするか、Falseにするか。
+        # 日本語フォントへの切り替えを優先したい場合、英語フォントでここに来たらFalseにしたいが、
+        # 汎用性を考えるとTrue。ただし、英字フォントで日本語を表示しようとしてここに落ちるケースは稀。
+        return True
+    except Exception:
+        # その他のエラーなら一応Trueにしておく
         return True
 
 def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
@@ -112,18 +139,20 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
         if is_glyph_available(primary_font, char):
             use_font = primary_font
         else:
+            # ダメならフォールバック（標準フォント）
             use_font = fallback_font
         
         # 文字サイズ取得
         bbox = draw.textbbox((0, 0), char, font=use_font)
+        # width
         char_w = bbox[2] - bbox[0]
-        # 高さのオフセットなども考慮が必要だが、簡易的にbboxの高さを使う
+        # height
         char_h = bbox[3] - bbox[1] 
         
         # 描画
         draw.text((current_x, y), char, font=use_font, fill=fill)
         
-        # 次の文字へ移動
+        # 次の文字へ移動 (getlengthが使える場合は使う)
         try:
             advance = use_font.getlength(char)
         except:
@@ -147,23 +176,29 @@ def draw_text_with_shadow(base_img, text, x, y, font, max_width, fill_color,
     if not text: return 0
     
     # 1. フォールバック用フォントの準備
-    # アセット管理で設定された標準フォントを使用
+    # アセット管理で設定された標準フォントをロードする
+    fallback_font = font # 初期値はメインフォント
+    
     try:
-        fallback_font_path = os.path.join(FONT_DIR, fallback_font_name)
-        if not os.path.exists(fallback_font_path):
-             # 指定がなければkeifont
-             fallback_font_path = os.path.join(FONT_DIR, "keifont.ttf")
+        # 指定された標準フォントを探す
+        fb_path = os.path.join(FONT_DIR, fallback_font_name)
+        if not os.path.exists(fb_path):
+            # なければ keifont.ttf を探す
+            fb_path = os.path.join(FONT_DIR, "keifont.ttf")
         
-        fallback_font = ImageFont.truetype(fallback_font_path, font.size)
-    except:
-        fallback_font = font # ロード失敗時はメインフォントをそのまま使う
+        if os.path.exists(fb_path):
+            fallback_font = ImageFont.truetype(fb_path, font.size)
+    except Exception as e:
+        print(f"Fallback font load error: {e}")
+        # ロード失敗時はメインフォントをそのまま使う（混植なしになる）
 
     # 2. サイズ計測用 (ダミー描画)
     dummy_img = Image.new("RGBA", (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
     
-    temp_w = int(font.size * len(text) * 2) + 100
-    temp_h = int(font.size * 2)
+    # 幅の上限を仮で大きく取る
+    temp_w = int(font.size * len(text) * 2) + 200
+    temp_h = int(font.size * 2) + 100
     
     measure_img = Image.new("RGBA", (temp_w, temp_h), (0,0,0,0))
     measure_draw = ImageDraw.Draw(measure_img)
