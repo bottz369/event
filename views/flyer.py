@@ -123,23 +123,16 @@ def format_time_str(t_val):
 # --- ★フォント混植・描画ロジック (強化版) ---
 
 def is_glyph_available(font, char):
-    """
-    文字が含まれているかチェック。getmaskを使って描画サイズを確認する確実な方法。
-    """
     if char.isspace() or ord(char) < 32: return True
     try:
         mask = font.getmask(char)
-        # 描画サイズが0なら、そのフォントには文字がない（または豆腐）
         if mask.size[0] == 0 or mask.size[1] == 0:
             return False
         return True
     except:
-        return True # エラー時はあるとみなして進む
+        return True 
 
 def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
-    """
-    一文字ずつフォントを確認して描画する関数。
-    """
     x, y = xy
     total_w = 0
     max_h = 0
@@ -147,7 +140,6 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
     
     for char in text:
         use_font = primary_font
-        # メインフォントで描画できない場合のみフォールバック
         if not is_glyph_available(primary_font, char):
             if fallback_font:
                 use_font = fallback_font
@@ -174,21 +166,19 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
 def draw_text_with_shadow(base_img, text, x, y, font, font_size_px, max_width, fill_color, 
                           anchor="la", 
                           shadow_on=False, shadow_color="#000000", shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
-                          fallback_font_path=None): # pathを直接受け取る
+                          fallback_font_path=None):
     if not text: return 0
     
-    # 1. フォールバック用フォントの準備
     fallback_font = None
     if fallback_font_path and os.path.exists(fallback_font_path):
         try:
-            # メインフォントと同じサイズでロード
             fallback_font = ImageFont.truetype(fallback_font_path, int(font_size_px))
         except:
-            fallback_font = font # ロード失敗時はメインフォント
+            fallback_font = font
     else:
-        fallback_font = font # 指定なしならメインフォント
+        fallback_font = font
 
-    # 2. サイズ計測
+    # サイズ計測
     dummy_img = Image.new("RGBA", (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
     
@@ -199,7 +189,7 @@ def draw_text_with_shadow(base_img, text, x, y, font, font_size_px, max_width, f
     
     text_w, text_h = draw_text_mixed(measure_draw, (0, 0), text, font, fallback_font, fill_color)
     
-    # 3. 本番描画
+    # 本番描画
     margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
     canvas_w = int(text_w + margin * 2)
     canvas_h = int(text_h + margin * 2 + font_size_px * 0.5) 
@@ -212,7 +202,7 @@ def draw_text_with_shadow(base_img, text, x, y, font, font_size_px, max_width, f
     
     draw_text_mixed(txt_draw, (draw_x, draw_y), text, font, fallback_font, fill_color)
     
-    # 4. 影
+    # 影
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     
     if shadow_on:
@@ -225,7 +215,7 @@ def draw_text_with_shadow(base_img, text, x, y, font, font_size_px, max_width, f
         
     final_layer.paste(txt_img, (0, 0), txt_img)
     
-    # 5. 配置計算
+    # 配置
     content_w = canvas_w
     content_h = canvas_h
     effective_text_w = text_w
@@ -278,26 +268,22 @@ def render_visual_selector(label, assets, key_prefix, current_id, allow_none=Fal
 # ==========================================
 
 def create_flyer_image_shadow(
-    db, # DBを受け取るように変更
+    db, 
     bg_source, logo_source, main_source,
     styles,
     date_text, venue_text, open_time, start_time,
     ticket_info_list,
     common_notes_list,
-    system_fallback_filename=None # ファイル名を受け取る
+    system_fallback_filename=None 
 ):
-    # ★重要: フォントファイルの確実な準備
-    # メインで使用するフォントのダウンロード確認
+    # フォント準備
     for k in ["date", "venue", "time", "ticket_name", "ticket_note"]:
         fname = styles.get(f"{k}_font", "keifont.ttf")
         ensure_font_file_exists(db, fname)
         
-    # フォールバック用フォントのダウンロード確認とパス取得
     fallback_font_path = None
     if system_fallback_filename:
         fallback_font_path = ensure_font_file_exists(db, system_fallback_filename)
-        if not fallback_font_path:
-            print(f"Fallback font {system_fallback_filename} could not be downloaded.")
 
     # 背景
     raw_bg = load_image_from_source(bg_source)
@@ -318,7 +304,6 @@ def create_flyer_image_shadow(
         scale_factor = W / 1200.0
         final_size_px = int(f_size_val * scale_factor)
         
-        # フォントロード（すでにensureしているのでpath結合だけでOK）
         path = os.path.join(FONT_DIR, f_name)
         try:
             font = ImageFont.truetype(path, final_size_px)
@@ -373,7 +358,11 @@ def create_flyer_image_shadow(
         s_date["shadow_on"], s_date["shadow_color"], s_date["shadow_blur"], s_date["shadow_off_x"], s_date["shadow_off_y"],
         fallback_font_path=fallback_font_path
     )
-    venue_y = header_y + h_date + int(H * 0.005)
+    
+    # ★修正: 日付と会場の間隔設定を反映
+    date_venue_gap_px = int(styles.get("date_venue_gap", 10) * (W / 1200.0))
+    venue_y = header_y + h_date + date_venue_gap_px
+    
     h_venue = draw_text_with_shadow(
         base_img, str(venue_text), left_x, venue_y, 
         s_venue["font"], s_venue["size"], left_max_w, s_venue["color"], "la",
@@ -409,12 +398,12 @@ def create_flyer_image_shadow(
     ticket_gap_px = int(styles.get("ticket_gap", 20) * (W / 1200.0))
     area_gap_px = int(styles.get("area_gap", 40) * (W / 1200.0))
 
-    # Notes
+    # 1. Notes
     for note in reversed(common_notes_list):
         if note and str(note).strip():
             footer_lines.append({"text": str(note).strip(), "style": s_note, "gap": note_gap_px})
     
-    # Tickets
+    # 2. Tickets
     is_first_ticket = True
     for ticket in reversed(ticket_info_list):
         name = ticket.get('name', '')
@@ -507,6 +496,7 @@ def render_flyer_editor(project_id):
     if "flyer_logo_pos_x" not in st.session_state: st.session_state.flyer_logo_pos_x = saved_config.get("logo_pos_x", 0.0)
     if "flyer_logo_pos_y" not in st.session_state: st.session_state.flyer_logo_pos_y = saved_config.get("logo_pos_y", 0.0)
 
+    # Resize & Gap Config
     if "flyer_content_scale_w" not in st.session_state: st.session_state.flyer_content_scale_w = saved_config.get("content_scale_w", 95)
     if "flyer_content_scale_h" not in st.session_state: st.session_state.flyer_content_scale_h = saved_config.get("content_scale_h", 100)
     
@@ -514,9 +504,12 @@ def render_flyer_editor(project_id):
     if "flyer_area_gap" not in st.session_state: st.session_state.flyer_area_gap = saved_config.get("area_gap", 40)
     if "flyer_note_gap" not in st.session_state: st.session_state.flyer_note_gap = saved_config.get("note_gap", 15)
     
-    # 日本語補助フォント設定 (前回保存値 or デフォルト)
+    # ★追加: 日付と会場の間隔初期化
+    if "flyer_date_venue_gap" not in st.session_state:
+        st.session_state.flyer_date_venue_gap = saved_config.get("date_venue_gap", 10)
+
+    # 日本語補助フォント設定
     if "flyer_fallback_font" not in st.session_state:
-        # DBのシステム設定があればそれ、なければkeifont
         sys_conf = db.query(SystemFontConfig).first()
         def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
         st.session_state.flyer_fallback_font = saved_config.get("fallback_font", def_sys)
@@ -590,7 +583,6 @@ def render_flyer_editor(project_id):
             st.radio("📅 日付表示形式", date_opts, key="flyer_date_format_radio")
             st.session_state.flyer_date_format = "EN" if st.session_state.flyer_date_format_radio.startswith("EN") else "JP"
             
-            # 日本語補助フォントの選択
             st.markdown("---")
             st.selectbox("🇯🇵 日本語用フォント (補助)", font_options, 
                          key="flyer_fallback_font", 
@@ -611,6 +603,8 @@ def render_flyer_editor(project_id):
             
             st.markdown("---")
             st.markdown("**フッター行間**")
+            # ★追加: 日付と会場の間隔設定
+            st.slider("日付と会場の間隔", 0, 100, step=1, key="flyer_date_venue_gap")
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
             st.slider("備考行間", 0, 100, step=1, key="flyer_note_gap")
@@ -632,6 +626,7 @@ def render_flyer_editor(project_id):
                 "logo_pos_y": st.session_state.flyer_logo_pos_y,
                 "content_scale_w": st.session_state.flyer_content_scale_w,
                 "content_scale_h": st.session_state.flyer_content_scale_h,
+                "date_venue_gap": st.session_state.flyer_date_venue_gap, # 保存に追加
                 "ticket_gap": st.session_state.flyer_ticket_gap,
                 "area_gap": st.session_state.flyer_area_gap,
                 "note_gap": st.session_state.flyer_note_gap,
@@ -667,6 +662,7 @@ def render_flyer_editor(project_id):
                 "logo_pos_y": st.session_state.flyer_logo_pos_y,
                 "content_scale_w": st.session_state.flyer_content_scale_w,
                 "content_scale_h": st.session_state.flyer_content_scale_h,
+                "date_venue_gap": st.session_state.flyer_date_venue_gap, # 辞書に追加
                 "ticket_gap": st.session_state.flyer_ticket_gap,
                 "area_gap": st.session_state.flyer_area_gap,
                 "note_gap": st.session_state.flyer_note_gap
@@ -690,17 +686,16 @@ def render_flyer_editor(project_id):
             v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
             d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
 
-            # ★選択されたフォールバックフォント名を取得
             fallback_filename = st.session_state.get("flyer_fallback_font")
 
             args = {
-                "db": db, # DBオブジェクトを渡す
+                "db": db, 
                 "bg_source": bg_url, "logo_source": logo_url, "styles": style_dict,
                 "date_text": d_text, "venue_text": v_text,
                 "open_time": format_time_str(proj.open_time),
                 "start_time": format_time_str(proj.start_time),
                 "ticket_info_list": tickets, "common_notes_list": notes,
-                "system_fallback_filename": fallback_filename # ファイル名を渡す
+                "system_fallback_filename": fallback_filename 
             }
 
             with st.spinner("生成中..."):
