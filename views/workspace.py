@@ -100,9 +100,9 @@ def load_project_to_session(proj):
     if not tickets_data: tickets_data = [{"name":"", "price":"", "note":""}]
     st.session_state.proj_tickets = tickets_data
 
-    # ★追加修正: チケット共通備考のロード（ここが抜けていました！）
+    # ★修正: チケット共通備考のロード (確実にリストとして初期化)
     notes_data = []
-    # 万が一カラム認識前でもエラーにならないよう getattr を使用
+    # カラムが存在しない場合のエラー回避
     raw_notes = getattr(proj, "ticket_notes_json", None)
     if raw_notes:
         try:
@@ -175,7 +175,7 @@ def load_project_to_session(proj):
             st.session_state.grid_row_counts_str = "5,5,5,5,5"
         except: pass
 
-    # キャッシュリセット
+    # キャッシュリセット (初回ロード時のみクリア)
     st.session_state.last_generated_tt_image = None
     st.session_state.tt_last_generated_params = None
     st.session_state.last_generated_grid_image = None
@@ -198,6 +198,7 @@ def render_workspace_page():
         if "ws_active_project_id" not in st.session_state:
             st.session_state.ws_active_project_id = None
 
+        # 現在の選択を維持するためのインデックス計算
         current_idx = 0
         if st.session_state.ws_active_project_id:
             current_val = next((k for k, v in proj_map.items() if v == st.session_state.ws_active_project_id), None)
@@ -208,6 +209,8 @@ def render_workspace_page():
 
         if selected_label not in ["(選択してください)", "➕ 新規プロジェクト作成"]:
             selected_id = proj_map.get(selected_label)
+            
+            # ★重要: プロジェクトIDが変わった場合のみロード処理を行う (リロード時のデータ消失防止)
             if selected_id != st.session_state.ws_active_project_id:
                 st.session_state.ws_active_project_id = selected_id
                 proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
@@ -253,9 +256,10 @@ def render_workspace_page():
 
         # --- 編集画面 ---
         project_id = st.session_state.ws_active_project_id
-        proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+        # プロジェクトが存在するか再確認
+        proj_check = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
         
-        if not proj:
+        if not proj_check:
             st.error("プロジェクトが見つかりません")
             st.session_state.ws_active_project_id = None
             st.rerun()
@@ -266,6 +270,7 @@ def render_workspace_page():
         col_dummy, col_act = st.columns([4, 1])
         with col_act:
             if st.button("📄 複製して編集", use_container_width=True, key="btn_proj_duplicate"):
+                # 現在の状態を保存してから複製
                 save_current_project(db, project_id)
                 new_proj = duplicate_project(db, project_id)
                 if new_proj:
@@ -275,9 +280,9 @@ def render_workspace_page():
                     st.rerun()
 
         # ヘッダー
-        display_title = st.session_state.get("proj_title", proj.title)
-        display_date = st.session_state.get("proj_date", proj.event_date)
-        display_venue = st.session_state.get("proj_venue", proj.venue_name)
+        display_title = st.session_state.get("proj_title", "")
+        display_date = st.session_state.get("proj_date", "")
+        display_venue = st.session_state.get("proj_venue", "")
 
         st.markdown(f"### 📂 {display_title} <small>({display_date} @ {display_venue})</small>", unsafe_allow_html=True)
 
