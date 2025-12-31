@@ -41,12 +41,14 @@ def resize_image_contain(img, max_w, max_h):
     new_h = int(img.height * ratio)
     return img.resize((new_w, new_h), Image.LANCZOS)
 
-def format_event_date(dt_obj):
+def format_event_date_short(dt_obj):
+    """日付を 2025.2.15.SUN 形式にする (ゼロ埋めなし)"""
     if not dt_obj: return ""
     if isinstance(dt_obj, str): return dt_obj
     try:
         weekdays = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-        return f"{dt_obj.strftime('%Y.%m.%d')}.{weekdays[dt_obj.weekday()]}"
+        # dt_obj.month, dt_obj.day を使うとゼロ埋めされません
+        return f"{dt_obj.year}.{dt_obj.month}.{dt_obj.day}.{weekdays[dt_obj.weekday()]}"
     except:
         return str(dt_obj)
 
@@ -74,53 +76,43 @@ def local_create_font_preview(font_path, text="Preview", width=400, height=50):
         return img
     except: return None
 
-# --- ★新機能: テキストを長体（横につぶす）で描画する関数 ---
 def draw_text_squeezed(base_img, text, x, y, font, max_width, fill, stroke_width=0, stroke_fill=None, anchor="la"):
     """
     指定幅(max_width)を超えたら、画像を縮小(長体)して描画する。
-    anchor: 'la' (左上基準), 'ra' (右上基準), 'ma' (中央上基準) 対応
     """
     if not text: return y
     
-    # 1. テキストの本来のサイズを計測
     dummy_img = Image.new("RGBA", (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
     bbox = dummy_draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
     
-    # 余白を含めたキャンバス作成
-    canvas_w = text_w + abs(bbox[0]) # 左のはみ出しケア
+    canvas_w = text_w + abs(bbox[0])
     canvas_h = text_h + abs(bbox[1]) + stroke_width * 2
     
-    # 2. テキスト描画用の一時画像を作成
     txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     txt_draw = ImageDraw.Draw(txt_img)
-    # 一時画像の (0, 0) ではなく、bboxのオフセット分ずらして描画
     draw_x = -bbox[0]
     draw_y = -bbox[1]
     txt_draw.text((draw_x, draw_y), text, font=font, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill)
     
-    # 3. 幅が最大値を超えていたらリサイズ（長体処理）
     final_w = canvas_w
     final_h = canvas_h
     if canvas_w > max_width:
         final_w = max_width
         txt_img = txt_img.resize((final_w, final_h), Image.LANCZOS)
     
-    # 4. ベース画像に貼り付け (アンカー計算)
     paste_x = x
     paste_y = y
     
-    if anchor == "ra":   # 右揃え
+    if anchor == "ra":
         paste_x = x - final_w
-    elif anchor == "ma": # 中央揃え
+    elif anchor == "ma":
         paste_x = x - (final_w // 2)
-    # "la" は x そのまま
     
     base_img.paste(txt_img, (paste_x, paste_y), txt_img)
-    
-    return final_h # 描画した高さを返す
+    return final_h
 
 # ==========================================
 # 2. UI コンポーネント
@@ -148,14 +140,15 @@ def render_visual_selector(label, assets, key_prefix, current_id, allow_none=Fal
                 st.rerun()
 
 # ==========================================
-# 3. フライヤー生成ロジック (配置改善版)
+# 3. フライヤー生成ロジック (改修版)
 # ==========================================
 
 def create_flyer_image_v2(
     bg_source, logo_source, main_source,
     basic_font_path, text_color, stroke_color,
     date_text, venue_text, open_time, start_time,
-    ticket_info_list, free_text_list
+    ticket_info_list
+    # ★ free_text_list は引数から削除
 ):
     # 1. 背景
     base_img = load_image_from_source(bg_source)
@@ -168,10 +161,10 @@ def create_flyer_image_v2(
         f_venue = ImageFont.truetype(basic_font_path, int(W * 0.05))
         f_label = ImageFont.truetype(basic_font_path, int(W * 0.04))
         f_time = ImageFont.truetype(basic_font_path, int(W * 0.06))
-        f_ticket_name = ImageFont.truetype(basic_font_path, int(W * 0.045)) # 少し小さく調整
-        f_note = ImageFont.truetype(basic_font_path, int(W * 0.025))
+        f_ticket_name = ImageFont.truetype(basic_font_path, int(W * 0.045))
+        # f_note は不要になったため削除
     except:
-        f_date = f_venue = f_label = f_time = f_ticket_name = f_note = ImageFont.load_default()
+        f_date = f_venue = f_label = f_time = f_ticket_name = ImageFont.load_default()
 
     padding_x = int(W * 0.05)
     current_y = int(H * 0.05)
@@ -181,7 +174,7 @@ def create_flyer_image_v2(
     # ==========================
     logo_img = load_image_from_source(logo_source)
     if logo_img:
-        logo_w = int(W * 0.5) # ★サイズ変更: 50%
+        logo_w = int(W * 0.5)
         logo_img = resize_image_to_width(logo_img, logo_w)
         logo_x = (W - logo_img.width) // 2
         base_img.paste(logo_img, (logo_x, current_y), logo_img)
@@ -189,23 +182,21 @@ def create_flyer_image_v2(
     else:
         current_y += int(H * 0.10)
 
-    header_bottom_y = current_y # ここから日時などを描画
+    header_bottom_y = current_y
 
     # ==========================
-    # B. 日時・会場 (長体適用)
+    # B. 日時・会場 (左側)
     # ==========================
-    
-    # 左エリアの最大幅 (全体の50%程度)
     left_max_w = int(W * 0.55)
     
     # 日時
     h_date = draw_text_squeezed(base_img, str(date_text), padding_x, current_y, f_date, left_max_w, text_color, 2, stroke_color, "la")
     
-    # 会場 (日時のすぐ下)
+    # 会場
     venue_y = current_y + h_date + int(H * 0.005)
     h_venue = draw_text_squeezed(base_img, str(venue_text), padding_x, venue_y, f_venue, left_max_w, text_color, 2, stroke_color, "la")
     
-    header_end_y = venue_y + h_venue # ヘッダー情報の終わり位置
+    header_end_y = venue_y + h_venue
 
     # ==========================
     # C. OPEN / START (右側)
@@ -219,16 +210,10 @@ def create_flyer_image_v2(
     # OPEN
     h_open = draw_text_squeezed(base_img, o_time_str, right_x, current_y, f_time, right_max_w, text_color, 2, stroke_color, "ra")
     
-    # ラベル "OPEN ▶" (時間の左)
-    # 時間の描画幅を簡易計算して左に配置するのは複雑なので、少し固定オフセットで配置
-    # 時間文字が長体かかると位置がずれるため、おおよその位置に配置
     draw = ImageDraw.Draw(base_img)
-    lbl_bbox = draw.textbbox((0,0), "OPEN ▶", font=f_label)
-    lbl_w = lbl_bbox[2] - lbl_bbox[0]
-    # 簡易的に右端から少し離す
     draw_text_squeezed(base_img, "OPEN ▶", right_x - int(W*0.25), current_y + 10, f_label, int(W*0.15), text_color, 1, stroke_color, "ra")
 
-    # START (OPENの下)
+    # START
     start_y = current_y + h_open + int(H * 0.01)
     draw_text_squeezed(base_img, s_time_str, right_x, start_y, f_time, right_max_w, text_color, 2, stroke_color, "ra")
     draw_text_squeezed(base_img, "START ▶", right_x - int(W*0.25), start_y + 10, f_label, int(W*0.15), text_color, 1, stroke_color, "ra")
@@ -236,11 +221,8 @@ def create_flyer_image_v2(
     header_end_y = max(header_end_y, start_y + int(H*0.08)) + int(H * 0.02)
 
     # ==========================
-    # D. フッター高さ計算 (チケット情報)
+    # D. フッター高さ計算 (チケット情報のみ)
     # ==========================
-    # チケット情報を下から積み上げるために、必要な高さを計算
-    # ※実際に描画はせず、高さだけシミュレーション
-    
     footer_lines = []
     # チケット
     for ticket in ticket_info_list:
@@ -248,13 +230,9 @@ def create_flyer_image_v2(
         if ticket.get('note'): line += f" ({ticket.get('note')})"
         footer_lines.append({"text": line, "font": f_ticket_name, "gap": int(H * 0.05)})
     
-    # 注釈
-    for txt in free_text_list:
-        c = txt.get('content','')
-        if c: footer_lines.append({"text": c, "font": f_note, "gap": int(H * 0.03)})
-    
-    # フッターの総高さを計算
-    footer_total_h = int(H * 0.05) # 下部パディング
+    # ★自由入力(free_text)のループは削除しました
+
+    footer_total_h = int(H * 0.05)
     for item in reversed(footer_lines):
         bbox = draw.textbbox((0,0), item["text"], font=item["font"])
         h = bbox[3] - bbox[1]
@@ -263,33 +241,30 @@ def create_flyer_image_v2(
     footer_start_y = H - footer_total_h
     
     # ==========================
-    # E. メイン画像 (グリッド/TT)
+    # E. メイン画像 (ヘッダーとフッターの間に中央配置)
     # ==========================
-    # ヘッダー終わり 〜 フッター開始 の間に画像を収める
     
-    available_h = footer_start_y - header_end_y - int(H * 0.02)
+    available_h = footer_start_y - header_end_y - int(H * 0.04) # 上下少し余裕を持たせる
     
     main_img = load_image_from_source(main_source)
     if main_img and available_h > 100:
-        # 幅は95%、高さは空きスペースに合わせる
         target_w = int(W * 0.95)
+        # 枠内に収める
         main_img = resize_image_contain(main_img, target_w, available_h)
         
         grid_x = (W - main_img.width) // 2
-        # 中央配置
-        grid_y = header_end_y + (available_h - main_img.height) // 2
+        # ★垂直方向中央配置
+        grid_y = header_end_y + (available_h - main_img.height) // 2 + int(H * 0.02)
         
         base_img.paste(main_img, (grid_x, int(grid_y)), main_img)
 
     # ==========================
-    # F. フッター描画 (チケット等)
+    # F. フッター描画
     # ==========================
-    # 今度は実際に描画
     current_footer_y = footer_start_y + int(H * 0.02)
     
     for item in footer_lines:
         draw_text_squeezed(base_img, item["text"], W//2, current_footer_y, item["font"], int(W*0.9), text_color, 2, stroke_color, "ma")
-        # 高さ分進める
         bbox = draw.textbbox((0,0), item["text"], font=item["font"])
         h = bbox[3] - bbox[1]
         current_footer_y += h + item["gap"]
@@ -404,20 +379,17 @@ def render_flyer_editor(project_id):
                     "basic_font_path": font_path,
                     "text_color": st.session_state.flyer_text_color,
                     "stroke_color": st.session_state.flyer_stroke_color,
-                    "date_text": format_event_date(proj.event_date),
+                    # ★ここで日付フォーマットを変更
+                    "date_text": format_event_date_short(proj.event_date),
                     "venue_text": v_text,
                     "open_time": format_time_str(proj.open_time),
                     "start_time": format_time_str(proj.start_time),
-                    "ticket_info_list": st.session_state.get("proj_tickets", []),
-                    "free_text_list": st.session_state.get("proj_free_text", [])
+                    "ticket_info_list": st.session_state.get("proj_tickets", [])
+                    # ★ free_text_list は渡さない
                 }
                 
-                # DB読み込みフォールバック
                 if not args["ticket_info_list"] and getattr(proj, "tickets_json", None):
                     try: args["ticket_info_list"] = json.loads(proj.tickets_json)
-                    except: pass
-                if not args["free_text_list"] and getattr(proj, "free_text_json", None):
-                    try: args["free_text_list"] = json.loads(proj.free_text_json)
                     except: pass
 
                 with st.spinner("生成中..."):
