@@ -133,11 +133,11 @@ def render_overview_page():
             with st.container(border=True):
                 cols = st.columns([3, 2, 4, 1])
                 with cols[0]:
-                    ticket["name"] = st.text_input("チケット名", value=ticket.get("name",""), key=f"t_name_{i}", label_visibility="collapsed", placeholder="Sチケット")
+                    ticket["name"] = st.text_input("チケット名", value=ticket.get("name",""), key=f"t_name_{i}", label_visibility="collapsed", placeholder="Sチケット 等")
                 with cols[1]:
                     ticket["price"] = st.text_input("金額", value=ticket.get("price",""), key=f"t_price_{i}", label_visibility="collapsed", placeholder="¥3,000")
                 with cols[2]:
-                    ticket["note"] = st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", label_visibility="collapsed", placeholder="ドリンク代別")
+                    ticket["note"] = st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", label_visibility="collapsed", placeholder="前方エリア 等")
                 with cols[3]:
                     if i > 0:
                         if st.button("🗑️", key=f"del_t_{i}"):
