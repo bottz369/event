@@ -7,7 +7,29 @@ from database import TimetableProject
 from utils import safe_int, safe_str
 from constants import get_default_row_settings
 
-# --- 読み込み処理 (★追加) ---
+# --- ヘルパー関数: 安全なJSON読み込み ---
+def parse_json_safe(data, default_val):
+    """
+    SQLAlchemyがJSON型を自動変換する場合(List/Dict)と、
+    文字列で返してくる場合の両方に対応する
+    """
+    if data is None:
+        return default_val
+    
+    # すでにリストや辞書になっている場合（Supabase/Postgresの自動変換）
+    if isinstance(data, (list, dict)):
+        return data
+    
+    # 文字列の場合（SQLiteや、自動変換が無効な場合）
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except:
+            return default_val
+            
+    return default_val
+
+# --- 読み込み処理 ---
 def load_project_data(db, project_id):
     """
     DBからプロジェクト情報を取得し、st.session_state に展開する
@@ -24,63 +46,56 @@ def load_project_data(db, project_id):
     # 日付変換 (String -> date)
     if proj.event_date:
         try:
-            st.session_state.proj_date = datetime.datetime.strptime(proj.event_date, "%Y-%m-%d").date()
+            # 文字列型で来てもDate型で来ても対応できるようにする
+            if isinstance(proj.event_date, (datetime.date, datetime.datetime)):
+                st.session_state.proj_date = proj.event_date
+            else:
+                st.session_state.proj_date = datetime.datetime.strptime(str(proj.event_date), "%Y-%m-%d").date()
         except:
             st.session_state.proj_date = None
     else:
         st.session_state.proj_date = None
 
     # 時間
+    # Time型オブジェクトか文字列かを考慮してセット
     st.session_state.tt_open_time = proj.open_time or "10:00"
     st.session_state.tt_start_time = proj.start_time or "10:30"
     st.session_state.tt_goods_offset = proj.goods_start_offset or 0
 
-    # 2. JSONデータ (リスト/辞書系)
-    try:
-        st.session_state.tt_data = json.loads(proj.data_json) if proj.data_json else []
-    except:
-        st.session_state.tt_data = []
+    # 2. JSONデータ (リスト/辞書系) - ★修正: parse_json_safe を使用
+    
+    # タイムテーブルデータ
+    st.session_state.tt_data = parse_json_safe(proj.data_json, [])
 
-    try:
-        # grid_order_json は辞書形式で保存されている場合があるため調整
-        grid_data = json.loads(proj.grid_order_json) if proj.grid_order_json else {}
-        if isinstance(grid_data, dict):
-            st.session_state.grid_order = grid_data.get("order", [])
-            st.session_state.grid_row_counts_str = grid_data.get("row_counts_str", "5,5,5,5,5")
-            st.session_state.grid_alignment = grid_data.get("alignment", "中央揃え")
-            st.session_state.grid_layout_mode = grid_data.get("layout_mode", "レンガ (サイズ統一)")
-        else:
-            st.session_state.grid_order = []
-    except:
-        st.session_state.grid_order = []
+    # グリッド順序・設定
+    grid_data = parse_json_safe(proj.grid_order_json, {})
+    if isinstance(grid_data, dict):
+        st.session_state.grid_order = grid_data.get("order", [])
+        st.session_state.grid_row_counts_str = grid_data.get("row_counts_str", "5,5,5,5,5")
+        st.session_state.grid_alignment = grid_data.get("alignment", "中央揃え")
+        st.session_state.grid_layout_mode = grid_data.get("layout_mode", "レンガ (サイズ統一)")
+    else:
+        # 古いデータ形式(単なるリスト)の場合のフォールバック
+        st.session_state.grid_order = grid_data if isinstance(grid_data, list) else []
 
-    try:
-        st.session_state.proj_tickets = json.loads(proj.tickets_json) if proj.tickets_json else []
-    except:
-        st.session_state.proj_tickets = []
+    # チケット情報
+    st.session_state.proj_tickets = parse_json_safe(proj.tickets_json, [])
 
-    try:
-        st.session_state.proj_free_text = json.loads(proj.free_text_json) if proj.free_text_json else []
-    except:
-        st.session_state.proj_free_text = []
+    # 自由記述
+    st.session_state.proj_free_text = parse_json_safe(proj.free_text_json, [])
 
     # ★追加: チケット共通備考の読み込み
-    try:
-        st.session_state.proj_ticket_notes = json.loads(proj.ticket_notes_json) if proj.ticket_notes_json else []
-    except:
-        st.session_state.proj_ticket_notes = []
+    # ここでエラーが起きていた可能性が高い箇所です
+    st.session_state.proj_ticket_notes = parse_json_safe(proj.ticket_notes_json, [])
     
     # フライヤー設定の読み込み
-    try:
-        flyer_conf = json.loads(proj.flyer_json) if proj.flyer_json else {}
-        if flyer_conf:
-            st.session_state.flyer_bg_id = int(flyer_conf.get("bg_id", 0))
-            st.session_state.flyer_logo_id = int(flyer_conf.get("logo_id", 0))
-            st.session_state.flyer_basic_font = flyer_conf.get("font", "keifont.ttf")
-            st.session_state.flyer_text_color = flyer_conf.get("text_color", "#FFFFFF")
-            st.session_state.flyer_stroke_color = flyer_conf.get("stroke_color", "#000000")
-    except:
-        pass
+    flyer_conf = parse_json_safe(proj.flyer_json, {})
+    if flyer_conf:
+        st.session_state.flyer_bg_id = int(flyer_conf.get("bg_id", 0))
+        st.session_state.flyer_logo_id = int(flyer_conf.get("logo_id", 0))
+        st.session_state.flyer_basic_font = flyer_conf.get("font", "keifont.ttf")
+        st.session_state.flyer_text_color = flyer_conf.get("text_color", "#FFFFFF")
+        st.session_state.flyer_stroke_color = flyer_conf.get("stroke_color", "#000000")
 
     return True
 
@@ -104,6 +119,8 @@ def save_current_project(db, project_id):
     if "proj_url" in st.session_state: proj.venue_url = st.session_state.proj_url
     
     # JSONデータ
+    # Supabaseの場合、Dict/Listをそのまま代入しても自動でJSON化してくれることが多いですが、
+    # 安全のため json.dumps で文字列化して保存するのが最も確実です。
     if "proj_tickets" in st.session_state:
         proj.tickets_json = json.dumps(st.session_state.proj_tickets, ensure_ascii=False)
     if "proj_free_text" in st.session_state:
@@ -183,18 +200,22 @@ def save_current_project(db, project_id):
 
     # フライヤー情報 (NEWデザイン用)
     flyer_data = {}
-    # 保存したいキーを指定
     keys = ["flyer_bg_id", "flyer_logo_id", "flyer_basic_font", "flyer_text_color", "flyer_stroke_color"]
     for k in keys:
         if k in st.session_state:
-            # jsonキーは "bg_id" のように短くする
             short_key = k.replace("flyer_", "").replace("basic_", "")
             flyer_data[short_key] = st.session_state[k]
     
-    # 既存のJSONがあればマージする（消さないように）
+    # 既存のJSONがあればマージする
     if proj.flyer_json:
         try:
-            existing_flyer = json.loads(proj.flyer_json)
+            # ここも読み込み時は安全策をとる
+            existing_flyer = proj.flyer_json
+            if isinstance(existing_flyer, str):
+                existing_flyer = json.loads(existing_flyer)
+            elif not isinstance(existing_flyer, dict):
+                existing_flyer = {}
+                
             existing_flyer.update(flyer_data)
             flyer_data = existing_flyer
         except:
@@ -221,7 +242,7 @@ def duplicate_project(db, project_id):
         grid_order_json=src.grid_order_json,
         tickets_json=src.tickets_json,
         free_text_json=src.free_text_json,
-        ticket_notes_json=src.ticket_notes_json, # ★追加
+        ticket_notes_json=src.ticket_notes_json, # ★追加済み
         flyer_json=src.flyer_json,
         settings_json=src.settings_json
     )
