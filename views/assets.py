@@ -78,6 +78,7 @@ def render_assets_page():
     st.caption("フライヤー作成で使用する画像素材やフォントを登録します。")
     
     db = next(get_db())
+    # ★重要: アップローダーで許可する拡張子
     ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'ttf', 'otf']
 
     # --- 新規登録 ---
@@ -100,9 +101,9 @@ def render_assets_page():
                         name = os.path.splitext(f.name)[0]
 
                     # 1. ファイル名の決定
-                    if a_type == "font":
-                        fname = f.name
-                    else:
+                    fname = f.name # デフォルトはそのまま
+                    if a_type != "font":
+                        # 画像のみUUID化
                         ext = os.path.splitext(f.name)[1].lower()
                         fname = f"asset_{uuid.uuid4()}{ext}"
                     
@@ -121,7 +122,7 @@ def render_assets_page():
                         
                         local_path = os.path.join(save_dir, fname)
 
-                        # 3. ローカル保存
+                        # 3. ローカル保存 (ここが重要)
                         try:
                             f.seek(0)
                             with open(local_path, "wb") as local_f:
@@ -130,19 +131,35 @@ def render_assets_page():
                             st.error(f"ローカル保存エラー: {e}")
                             st.stop()
 
-                        # 4. Supabaseへアップロード
-                        try:
-                            f.seek(0)
-                            upload_image_to_supabase(f, fname)
-                        except:
-                            pass 
+                        # 4. Supabaseへアップロード (画像のみ)
+                        if a_type != "font":
+                            try:
+                                f.seek(0)
+                                upload_image_to_supabase(f, fname)
+                            except:
+                                pass 
 
-                        # 5. DB登録
-                        new_asset = Asset(name=name, asset_type=a_type, image_filename=fname)
-                        db.add(new_asset)
-                        db.commit()
-                        st.success(f"保存しました: {fname}")
-                        st.rerun()
+                        # 5. DB登録 (★修正: 重複チェックと再有効化)
+                        try:
+                            # 既に同じファイル名で登録があるかチェック(削除済み含む)
+                            existing_asset = db.query(Asset).filter(Asset.image_filename == fname).first()
+                            
+                            if existing_asset:
+                                # 存在する場合は情報を更新して復活させる
+                                existing_asset.name = name
+                                existing_asset.asset_type = a_type
+                                existing_asset.is_deleted = False # 削除フラグを解除
+                                st.success(f"更新・再有効化しました: {fname}")
+                            else:
+                                # 新規作成
+                                new_asset = Asset(name=name, asset_type=a_type, image_filename=fname)
+                                db.add(new_asset)
+                                st.success(f"保存しました: {fname}")
+                            
+                            db.commit()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"DB登録エラー: {e}")
                 else:
                     st.error("ファイルを選択してください")
 
@@ -173,31 +190,40 @@ def render_assets_page():
                 with cols[idx % 4]:
                     render_asset_card(asset, db, is_font=False)
 
-    # 3. フォント一覧 (★ここを機能強化)
+    # 3. フォント一覧
     with tabs[2]:
-        # --- 自動同期処理 ---
+        # --- 自動同期処理 (★修正: OTF対応と再有効化) ---
         if os.path.exists(FONT_DIR):
-            db_filenames = [a.image_filename for a in db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()]
+            # フォルダにあるファイル一覧
             local_fonts = [f for f in os.listdir(FONT_DIR) if f.lower().endswith((".ttf", ".otf"))]
             
             new_found = False
             for fname in local_fonts:
-                if fname not in db_filenames:
-                    new_asset = Asset(name=fname, asset_type="font", image_filename=fname)
-                    db.add(new_asset)
+                # DBにあるかチェック（削除済みも含めて検索）
+                existing = db.query(Asset).filter(Asset.image_filename == fname).first()
+                
+                if not existing:
+                    # まだ無いなら新規登録
+                    try:
+                        new_asset = Asset(name=fname, asset_type="font", image_filename=fname)
+                        db.add(new_asset)
+                        new_found = True
+                    except: pass
+                elif existing.is_deleted:
+                    # あるけど削除済みなら復活
+                    existing.is_deleted = False
                     new_found = True
             
             if new_found:
                 db.commit()
                 st.rerun()
 
-        # --- ★標準・お気に入りフォント設定エリア ---
+        # --- 標準・お気に入りフォント設定エリア ---
         st.markdown("### ⚙️ フォント設定")
         st.caption("見本画像の「ファイル名」表示や、システム全体で標準的に使用するフォントを設定します。")
         
         # 全フォント取得
         font_assets = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
-        # ファイル名 -> 表示名のマップ
         font_options_map = {f.image_filename: f.name for f in font_assets}
         font_filenames = list(font_options_map.keys())
         
@@ -211,7 +237,7 @@ def render_assets_page():
 
             c_sys, c_fav = st.columns([1, 2])
             
-            # 標準フォント設定 (シングルセレクト)
+            # 標準フォント設定
             with c_sys:
                 st.caption("標準フォント (システムデフォルト)")
                 new_sys_val = st.selectbox(
@@ -221,7 +247,7 @@ def render_assets_page():
                     key="sys_font_select", label_visibility="collapsed"
                 )
             
-            # お気に入りフォント設定 (マルチセレクト)
+            # お気に入りフォント設定
             with c_fav:
                 st.caption("お気に入りフォント (リスト上位に表示)")
                 new_fav_vals = st.multiselect(
@@ -231,13 +257,10 @@ def render_assets_page():
                     key="fav_font_select", label_visibility="collapsed"
                 )
 
-            # 保存ボタン
             if st.button("設定を保存", type="primary", key="save_font_conf"):
-                # 1. 標準フォント保存
                 db.query(SystemFontConfig).delete()
                 db.add(SystemFontConfig(filename=new_sys_val))
                 
-                # 2. お気に入り保存 (全削除して追加)
                 db.query(FavoriteFont).delete()
                 for f_name in new_fav_vals:
                     db.add(FavoriteFont(filename=f_name))
