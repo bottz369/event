@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 import json
 import datetime
 from datetime import date
@@ -9,46 +8,27 @@ from constants import get_default_row_settings
 
 # --- ヘルパー関数: 安全なJSON読み込み ---
 def parse_json_safe(data, default_val):
-    """
-    SQLAlchemyがJSON型を自動変換する場合(List/Dict)と、
-    文字列で返してくる場合の両方に対応する
-    """
     if data is None:
         return default_val
-    
-    # すでにリストや辞書になっている場合（Supabase/Postgresの自動変換）
     if isinstance(data, (list, dict)):
         return data
-    
-    # 文字列の場合
     if isinstance(data, str):
         try:
             return json.loads(data)
         except:
             return default_val
-            
     return default_val
 
-# --- ヘルパー関数: 安全な時間変換 (★追加) ---
+# --- ヘルパー関数: 安全な時間変換 ---
 def format_time_safe(t_val, default="10:00"):
-    """
-    DBから来るデータが datetime.time型 でも 文字列(秒付き) でも、
-    "HH:MM" 形式の文字列にして返す。
-    これがないと、リロード時に時間が初期値に戻る現象が起きます。
-    """
     if not t_val:
         return default
-    
-    # 文字列の場合 (例: "10:10:00" -> "10:10")
     if isinstance(t_val, str):
         if len(t_val) >= 5:
             return t_val[:5]
         return t_val
-        
-    # datetime.time型の場合
     if isinstance(t_val, (datetime.time, datetime.datetime)):
         return t_val.strftime("%H:%M")
-        
     return default
 
 # --- 読み込み処理 ---
@@ -65,7 +45,6 @@ def load_project_data(db, project_id):
     st.session_state.proj_venue = proj.venue_name or ""
     st.session_state.proj_url = proj.venue_url or ""
     
-    # 日付変換 (String -> date)
     if proj.event_date:
         try:
             if isinstance(proj.event_date, (datetime.date, datetime.datetime)):
@@ -77,17 +56,13 @@ def load_project_data(db, project_id):
     else:
         st.session_state.proj_date = None
 
-    # 時間 (★修正: format_time_safe を適用)
     st.session_state.tt_open_time = format_time_safe(proj.open_time, "10:00")
     st.session_state.tt_start_time = format_time_safe(proj.start_time, "10:30")
     st.session_state.tt_goods_offset = proj.goods_start_offset or 0
 
-    # 2. JSONデータ (リスト/辞書系)
-    
-    # タイムテーブルデータ
+    # 2. JSONデータ
     st.session_state.tt_data = parse_json_safe(proj.data_json, [])
 
-    # グリッド順序・設定
     grid_data = parse_json_safe(proj.grid_order_json, {})
     if isinstance(grid_data, dict):
         st.session_state.grid_order = grid_data.get("order", [])
@@ -97,18 +72,19 @@ def load_project_data(db, project_id):
     else:
         st.session_state.grid_order = grid_data if isinstance(grid_data, list) else []
 
-    # チケット情報
     st.session_state.proj_tickets = parse_json_safe(proj.tickets_json, [])
-
-    # 自由記述
     st.session_state.proj_free_text = parse_json_safe(proj.free_text_json, [])
 
-    # ★追加: チケット共通備考の読み込み
-    # getattrを使って、万が一カラム認識が遅れてもエラーにならないようにする
-    raw_notes = getattr(proj, "ticket_notes_json", None)
+    # ★修正: 安全策の getattr をやめ、直接取得を試みる（DBにはカラムが存在するため）
+    # 万が一古いキャッシュがあっても読み込めるように処理
+    try:
+        raw_notes = proj.ticket_notes_json
+    except AttributeError:
+        # まだSQLAlchemyが更新を認識していない場合のフォールバック
+        raw_notes = getattr(proj, "ticket_notes_json", None)
+
     st.session_state.proj_ticket_notes = parse_json_safe(raw_notes, [])
     
-    # フライヤー設定の読み込み
     flyer_conf = parse_json_safe(proj.flyer_json, {})
     if flyer_conf:
         st.session_state.flyer_bg_id = int(flyer_conf.get("bg_id", 0))
@@ -119,7 +95,7 @@ def load_project_data(db, project_id):
 
     return True
 
-# --- 保存処理 (共通化) ---
+# --- 保存処理 ---
 def save_current_project(db, project_id):
     """
     現在のセッションステートの内容をデータベースに保存する
@@ -144,21 +120,18 @@ def save_current_project(db, project_id):
     if "proj_free_text" in st.session_state:
         proj.free_text_json = json.dumps(st.session_state.proj_free_text, ensure_ascii=False)
     
-    # ★追加: チケット共通備考の保存
+    # ★修正完了: 安全装置(hasattr)を削除し、強制的に書き込みます
     if "proj_ticket_notes" in st.session_state:
-        # DBモデルに列があるか確認してから代入（安全策）
-        if hasattr(proj, "ticket_notes_json"):
-            proj.ticket_notes_json = json.dumps(st.session_state.proj_ticket_notes, ensure_ascii=False)
+        proj.ticket_notes_json = json.dumps(st.session_state.proj_ticket_notes, ensure_ascii=False)
+        # デバッグ用: コンソールに書き込んだ内容を表示（本番では消してもOK）
+        print(f"DEBUG: Saving ticket_notes -> {proj.ticket_notes_json}")
 
     # タイムテーブルデータ
     save_data = []
-    # 優先: binding_df が存在して空でない場合
     if "binding_df" in st.session_state and not st.session_state.binding_df.empty:
         save_data = st.session_state.binding_df.to_dict(orient="records")
     
-    # フォールバック: セッション変数から再構築
     elif "tt_artists_order" in st.session_state and st.session_state.tt_artists_order:
-        # 開演前物販
         if st.session_state.get("tt_has_pre_goods"):
             p = st.session_state.get("tt_pre_goods_settings", {})
             save_data.append({
@@ -167,7 +140,6 @@ def save_current_project(db, project_id):
                 "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": ""
             })
         
-        # アーティスト
         for i, name in enumerate(st.session_state.tt_artists_order):
             ad = st.session_state.tt_artist_settings.get(name, {"DURATION": 20})
             if i < len(st.session_state.tt_row_settings):
@@ -182,7 +154,6 @@ def save_current_project(db, project_id):
                 "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE"))
             })
             
-        # 終演後物販
         has_post = any(x.get("IS_POST_GOODS") for x in save_data)
         if has_post:
             p = st.session_state.get("tt_post_goods_settings", {})
@@ -218,7 +189,7 @@ def save_current_project(db, project_id):
     }
     proj.settings_json = json.dumps(settings, ensure_ascii=False)
 
-    # フライヤー情報 (NEWデザイン用)
+    # フライヤー情報
     flyer_data = {}
     keys = ["flyer_bg_id", "flyer_logo_id", "flyer_basic_font", "flyer_text_color", "flyer_stroke_color"]
     for k in keys:
@@ -226,16 +197,13 @@ def save_current_project(db, project_id):
             short_key = k.replace("flyer_", "").replace("basic_", "")
             flyer_data[short_key] = st.session_state[k]
     
-    # 既存のJSONがあればマージする
     if proj.flyer_json:
         try:
             existing_flyer = proj.flyer_json
-            # ここも parse_json_safe 相当の処理で安全に
             if isinstance(existing_flyer, str):
                 existing_flyer = json.loads(existing_flyer)
             elif not isinstance(existing_flyer, dict):
                 existing_flyer = {}
-                
             existing_flyer.update(flyer_data)
             flyer_data = existing_flyer
         except:
@@ -262,7 +230,7 @@ def duplicate_project(db, project_id):
         grid_order_json=src.grid_order_json,
         tickets_json=src.tickets_json,
         free_text_json=src.free_text_json,
-        ticket_notes_json=src.ticket_notes_json, # ★追加済み
+        ticket_notes_json=src.ticket_notes_json, 
         flyer_json=src.flyer_json,
         settings_json=src.settings_json
     )
