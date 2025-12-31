@@ -53,7 +53,6 @@ def render_timetable_page():
                 st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
                 
                 # フォント設定のロード (なければデフォルト)
-                # ★修正: デフォルト値は "keifont.ttf" を一旦入れるが、後でソート済みリストの先頭で上書きされる
                 if "tt_font" not in st.session_state:
                     st.session_state.tt_font = "keifont.ttf"
                 
@@ -425,7 +424,10 @@ def render_timetable_page():
             # 見本表示 (ソート順)
             with st.expander("🔤 フォント一覧見本を表示"):
                 with st.container(height=300):
-                    specimen_img = create_font_specimen_img(FONT_DIR, font_file_list)
+                    # ソートして渡す
+                    specimen_list = sorted(sorted_fonts, key=lambda x: x["filename"].lower())
+                    specimen_img = create_font_specimen_img(db, specimen_list)
+                    
                     if specimen_img: st.image(specimen_img, use_container_width=True)
                     else: st.info("フォントが見つかりません")
 
@@ -434,7 +436,7 @@ def render_timetable_page():
                 "プレビュー用フォント", 
                 font_file_list,
                 format_func=lambda x: font_display_map.get(x, x),
-                key="tt_font" # これでセッション変数 tt_font が更新される
+                key="tt_font" 
             )
             
             # 設定スナップショット
