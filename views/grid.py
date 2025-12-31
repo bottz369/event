@@ -2,10 +2,17 @@ import streamlit as st
 import os
 import json
 import io
-from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset # ★Assetを追加
+from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset
 from constants import FONT_DIR
 from logic_project import save_current_project
 from utils import create_font_specimen_img
+
+# ==========================================
+# ★設定: 標準フォントのファイル名
+# ==========================================
+# fontsフォルダの中に、この名前のファイルが必ず存在する必要があります。
+# 別のフォント（例: NotoSansJP-Bold.ttf）を使いたい場合はここを書き換えてください。
+DEFAULT_FONT_FILE = "keifont.ttf" 
 
 try:
     from streamlit_sortables import sort_items
@@ -33,6 +40,7 @@ def render_grid_page():
         if not selected_id:
             projects = db.query(TimetableProject).all()
             if projects:
+                projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
                 p_map = {f"{p.event_date} {p.title}": p.id for p in projects}
                 sel_label = st.selectbox("プロジェクト選択", ["(選択)"] + list(p_map.keys()))
                 if sel_label != "(選択)":
@@ -52,6 +60,10 @@ def render_grid_page():
         
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
+        # フォント設定の初期化（デフォルト値の保証）
+        if "grid_font" not in st.session_state:
+            st.session_state.grid_font = DEFAULT_FONT_FILE
+
         if selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             
@@ -162,36 +174,45 @@ def render_grid_page():
 
             st.divider()
             
-            # --- ★変更: 画像生成・プレビューエリア (新フォント管理対応) ---
+            # --- 画像生成・プレビューエリア ---
             # DBからフォント一覧を取得し、ソート
             fonts_db = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
             fonts_db.sort(key=lambda x: x.name)
             
             # セレクトボックス用辞書 (表示名 -> ファイル名)
-            font_options = {"標準フォント": "keifont.ttf"}
+            font_options = {"標準フォント": DEFAULT_FONT_FILE}
             for f in fonts_db:
-                font_options[f.name] = f.image_filename
+                # 標準と同じファイルなら重複させない
+                if f.image_filename != DEFAULT_FONT_FILE:
+                    font_options[f.name] = f.image_filename
             
             # 選択中のファイル名から表示名を取得
-            current_filename = st.session_state.get("grid_font", "keifont.ttf")
+            current_filename = st.session_state.get("grid_font", DEFAULT_FONT_FILE)
+            
+            # もし前回の設定ファイルが存在しなくなっていたらデフォルトに戻す
+            if current_filename != DEFAULT_FONT_FILE and current_filename not in [f.image_filename for f in fonts_db]:
+                current_filename = DEFAULT_FONT_FILE
+                st.session_state.grid_font = DEFAULT_FONT_FILE
+
             current_display_name = "標準フォント"
             for name, fname in font_options.items():
                 if fname == current_filename:
                     current_display_name = name
                     break
             
-            # フォント一覧見本 (スクロール対応)
+            # フォント一覧見本
             with st.expander("🔤 フォント一覧見本を表示"):
-                # ★修正: スクロールコンテナを使用
                 with st.container(height=300):
-                    sorted_filenames = ["keifont.ttf"] + [f.image_filename for f in fonts_db]
+                    # 見本作成用のリスト（標準フォント + DBのフォント）
+                    sorted_filenames = [DEFAULT_FONT_FILE] + [f.image_filename for f in fonts_db if f.image_filename != DEFAULT_FONT_FILE]
+                    
                     specimen_img = create_font_specimen_img(FONT_DIR, sorted_filenames)
                     if specimen_img:
                         st.image(specimen_img, use_container_width=True)
                     else:
-                        st.info("フォントが見つかりません")
+                        st.info("フォントが見つかりません。fontsフォルダを確認してください。")
 
-            # フォント選択 (表示名で選択)
+            # フォント選択
             display_names = list(font_options.keys())
             selected_display_name = st.selectbox(
                 "プレビュー用フォント", 
