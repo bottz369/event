@@ -5,8 +5,8 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from database import get_db, Asset, FavoriteFont, SystemFontConfig, upload_image_to_supabase, get_image_url, IMAGE_DIR
 from constants import FONT_DIR
-# utilsからのインポートは不要になったため削除、または残していても問題ありません
-# from utils import create_font_specimen_img 
+# ★ create_font_specimen_img と get_sorted_font_list をインポート
+from utils import create_font_specimen_img, get_sorted_font_list
 
 # ディレクトリの確実な作成
 os.makedirs(IMAGE_DIR, exist_ok=True)
@@ -39,31 +39,24 @@ def sync_fonts_from_storage(db):
     if restored_count > 0:
         st.toast(f"{restored_count}個のフォントをクラウドから復元しました")
 
-# --- ヘルパー関数: フォントプレビュー画像の生成 ---
-def create_font_thumbnail(font_path, text="Sample 123", width=300, height=150):
+# --- ヘルパー関数: フォントプレビュー画像の生成 (個別カード用) ---
+def create_font_thumbnail(font_path, text="あいうABC", width=300, height=100):
     try:
-        # 背景色を白っぽく、少しリッチに
-        img = Image.new("RGB", (width, height), (250, 250, 252)) 
+        img = Image.new("RGB", (width, height), (240, 242, 246)) # 薄いグレー背景
         draw = ImageDraw.Draw(img)
         try:
-            # フォントサイズを高さに合わせて調整
-            font_size = int(height * 0.5)
+            font_size = int(height * 0.6)
             font = ImageFont.truetype(font_path, font_size)
         except:
             return None
         
-        # 中央揃え計算
         bbox = draw.textbbox((0, 0), text, font=font)
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
         x = (width - w) // 2
         y = (height - h) // 2 - bbox[1]
         
-        draw.text((x, y), text, font=font, fill=(60, 60, 70))
-        
-        # 枠線を少し描く（オプション）
-        draw.rectangle([(0,0), (width-1, height-1)], outline="#e0e0e0", width=1)
-        
+        draw.text((x, y), text, font=font, fill=(50, 50, 50))
         return img
     except:
         return None
@@ -75,7 +68,7 @@ def render_asset_card(asset, db, is_font=False):
         if is_font:
             font_path = os.path.join(FONT_DIR, asset.image_filename)
             if os.path.exists(font_path):
-                thumb = create_font_thumbnail(font_path, text="AaBb 012")
+                thumb = create_font_thumbnail(font_path, text="Design 123")
                 if thumb: st.image(thumb, use_container_width=True)
                 else: st.warning("プレビュー生成失敗")
             else:
@@ -233,34 +226,26 @@ def render_assets_page():
         # フォントアセット取得
         font_assets_all = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
         
-        # --- 見本画像表示 (グリッド形式に変更) ---
-        st.markdown("### 🔠 フォント一覧見本")
-        if font_assets_all:
-            sorted_fonts = sorted(
-                font_assets_all, 
-                key=lambda x: x.image_filename.lower() if x.image_filename else ""
-            )
-            
-            # グリッド表示 (4列)
-            cols = st.columns(4)
-            for idx, font_asset in enumerate(sorted_fonts):
-                with cols[idx % 4]:
-                    font_path = os.path.join(FONT_DIR, font_asset.image_filename)
-                    if os.path.exists(font_path):
-                        # サムネイル生成（見本用のテキスト）
-                        thumb = create_font_thumbnail(font_path, text="12:30\nLIVE", width=400, height=200)
-                        
-                        with st.container(border=True):
-                            if thumb:
-                                st.image(thumb, use_container_width=True)
-                            else:
-                                st.error("No Preview")
-                            # フォント名を表示
-                            st.caption(f"**{font_asset.name}**")
-                    else:
-                        st.warning(f"File Not Found: {font_asset.image_filename}")
-        else:
-            st.info("フォントが登録されていません。")
+        # --- 見本画像表示 (アー写グリッドと同じ形式) ---
+        # 1. データを辞書型リストに変換 (create_font_specimen_img が期待する形式)
+        sorted_fonts_data = get_sorted_font_list(db)
+        
+        # 2. ExpanderとContainerで表示
+        with st.expander("🔤 フォント一覧見本を表示", expanded=True):
+            with st.container(height=300):
+                if sorted_fonts_data:
+                    # ファイル名順などでソート (get_sorted_font_list内で既にお気に入り順等になっているが、一覧表示用に見直すならここ)
+                    # ここではそのまま渡します
+                    try:
+                        specimen_img = create_font_specimen_img(db, sorted_fonts_data)
+                        if specimen_img:
+                            st.image(specimen_img, use_container_width=True)
+                        else:
+                            st.info("フォントが見つかりません（生成失敗）。")
+                    except Exception as e:
+                        st.error(f"見本画像生成エラー: {e}")
+                else:
+                    st.info("フォントが登録されていません。")
 
         st.divider()
 
