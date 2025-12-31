@@ -1,6 +1,8 @@
 import streamlit as st
 from datetime import datetime
-from logic_project import save_current_project
+from database import get_db
+# ★ load_project_data を追加インポート
+from logic_project import save_current_project, load_project_data
 
 # --- ヘルパー関数 ---
 def get_day_of_week_jp(dt):
@@ -73,14 +75,11 @@ def generate_event_text():
                 text += f"\n※{str(note).strip()}"
 
     # 4. 出演者リスト
-    # ★重要: アー写グリッドの並び順 (grid_order) を最優先で使用
     if "grid_order" in st.session_state and st.session_state.grid_order:
         artists = st.session_state.grid_order
     else:
-        # グリッド順序がまだない場合はタイムテーブル順をバックアップとして使用
         artists = st.session_state.get("tt_artists_order", [])
 
-    # 重複排除しつつ順序を維持（念のため）
     valid_artists = list(dict.fromkeys(artists))
 
     if valid_artists:
@@ -103,6 +102,18 @@ def render_overview_page():
     """イベント概要（基本情報・チケット・自由記述）の編集画面"""
     
     project_id = st.session_state.get("ws_active_project_id")
+    
+    # ==========================================
+    # ★重要修正: データの自動読み込み処理
+    # ==========================================
+    if project_id:
+        # リロード直後など、データがメモリにない場合 (例: タイトルや時間が空) はDBから読み込む
+        if "proj_title" not in st.session_state or "tt_open_time" not in st.session_state:
+            db = next(get_db())
+            try:
+                load_project_data(db, project_id)
+            finally:
+                db.close()
     
     # --- 基本情報 ---
     st.subheader("基本情報")
@@ -158,13 +169,10 @@ def render_overview_page():
         if not isinstance(st.session_state.proj_ticket_notes, list):
              st.session_state.proj_ticket_notes = []
 
-        # 入力フォームループ
-        # 削除時のインデックスズレを防ぐため、コピーやenumerateを使用
         current_notes = st.session_state.proj_ticket_notes
         for i in range(len(current_notes)):
             c_note_in, c_note_del = st.columns([8, 1])
             with c_note_in:
-                # 入力値をsession_stateに直接反映
                 current_notes[i] = st.text_input(
                     "共通備考",
                     value=current_notes[i],
@@ -215,7 +223,7 @@ def render_overview_page():
     # --- 設定反映 & テキストプレビューエリア ---
     st.caption("変更内容は以下のボタンで保存してください。同時に告知用テキストを生成します。")
     
-    # 初回表示時のテキスト生成 (キーがなければ)
+    # 初回表示時のテキスト生成
     if "txt_overview_preview_area" not in st.session_state:
         st.session_state.txt_overview_preview_area = generate_event_text()
 
@@ -226,13 +234,10 @@ def render_overview_page():
             try:
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
-                    
                     # 1. 新しいテキストを生成
                     new_text = generate_event_text()
-                    
-                    # 2. ★修正: ウィジェットのキーを直接更新する (これならエラーにならない)
+                    # 2. ウィジェットのキーを直接更新する
                     st.session_state.txt_overview_preview_area = new_text
-                    
                 else:
                     st.error("保存に失敗しました")
             finally:
@@ -240,11 +245,10 @@ def render_overview_page():
         else:
             st.error("プロジェクトが選択されていません")
 
-    # テキストエリア (★修正: value引数を削除し、keyだけで管理)
-    # これにより、st.session_state["txt_overview_preview_area"] の値が常に表示されます
+    # テキストエリア
     st.subheader("📝 告知用テキストプレビュー")
     st.text_area(
         "コピーしてSNSなどで使用できます", 
         height=400, 
-        key="txt_overview_preview_area" # value=... を削除
+        key="txt_overview_preview_area"
     )
