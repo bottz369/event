@@ -68,7 +68,7 @@ class TimetableProject(Base):
     tickets_json = Column(Text)    # チケット情報
     free_text_json = Column(Text)  # 自由入力欄
     
-    # チケット共通備考（ここが正しく追加されている必要があります）
+    # チケット共通備考
     ticket_notes_json = Column(Text)
     
     flyer_json = Column(Text)      # フライヤー設定
@@ -83,15 +83,22 @@ class Asset(Base):
     image_filename = Column(String)
     is_deleted = Column(Boolean, default=False)
 
-# お気に入りフォント
+# お気に入りフォント（複数登録用）
 class FavoriteFont(Base):
     __tablename__ = "favorite_fonts"
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String)
+
+# ★追加: 標準フォント設定（1つだけ保存用）
+class SystemFontConfig(Base):
+    __tablename__ = "system_font_config"
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String)
 
 # --- データベース初期化関数 ---
 def init_db():
     try:
+        # 新しいテーブルがあれば作成されます
         Base.metadata.create_all(bind=engine)
     except Exception as e:
         st.error(f"データベース初期化エラー (接続に失敗しました): {e}")
