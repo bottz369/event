@@ -79,61 +79,43 @@ def format_time_str(t_val):
     try: return t_val.strftime("%H:%M")
     except: return str(t_val)
 
-# --- ★ここからが重要な追加機能です ---
+# --- ★フォント混植・描画ロジック ---
 
 def is_glyph_available(font, char):
     """
     指定されたフォントに文字(グリフ)が含まれているかを確認する。
-    PillowのFreeTypeFontオブジェクトは cmap (文字コードマップ) を持っている。
     """
-    # 空白文字は常にOKとする
     if char.isspace():
         return True
-    
-    # font.font.cmap をチェック (ord(char) がキーにあるか)
     try:
         return ord(char) in font.font.cmap
     except AttributeError:
-        # cmapが取得できない場合はとりあえずTrueとして進める（エラー回避）
         return True
 
 def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
     """
     一文字ずつフォントを確認して描画する関数。
-    戻り値: 描画したテキスト全体の幅と高さ (w, h)
     """
     x, y = xy
     total_w = 0
     max_h = 0
-    
-    # 描画開始位置
     current_x = x
     
     for char in text:
-        # メインフォントで描画できるか？
         if is_glyph_available(primary_font, char):
             use_font = primary_font
         else:
-            # できないならフォールバックフォント
             use_font = fallback_font
         
-        # 文字サイズ取得
         bbox = draw.textbbox((0, 0), char, font=use_font)
-        char_w = bbox[2] - bbox[0]
         char_h = bbox[3] - bbox[1]
         
-        # 描画 (y位置はベースライン合わせが理想だが、ここでは簡易的に上揃え+微調整)
-        # 異なるフォントを混ぜると高さがズレることがあるので、高さを中央揃えにするなどの工夫も可能だが
-        # ここではシンプルに描画します。
         draw.text((current_x, y), char, font=use_font, fill=fill)
         
-        # 次の文字へ移動
-        # getlengthを使うとより正確なカーニングが得られる
         advance = use_font.getlength(char)
         current_x += advance
         total_w += advance
         
-        # 最大高さの更新
         if char_h > max_h:
             max_h = char_h
             
@@ -147,21 +129,17 @@ def draw_text_with_shadow(base_img, text, x, y, font, max_width, fill_color,
     """
     if not text: return 0
     
-    # 1. フォールバック用フォントの準備 (keifont.ttf を使用)
-    # メインフォントと同じサイズでロードする
+    # 1. フォールバック用フォントの準備
     try:
         fallback_font_path = os.path.join(FONT_DIR, "keifont.ttf")
         fallback_font = ImageFont.truetype(fallback_font_path, font.size)
     except:
-        fallback_font = font # ロード失敗時はメインフォントをそのまま使う
+        fallback_font = font
 
     # 2. サイズ計測用 (ダミー描画)
     dummy_img = Image.new("RGBA", (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
     
-    # draw_text_mixed は実際に描画してしまうので、サイズ計測用に透明キャンバスに描画してみる
-    # ※少し非効率ですが、正確な幅を知るために必要
-    # 幅の上限を仮で大きく取る
     temp_w = int(font.size * len(text) * 2) + 100
     temp_h = int(font.size * 2)
     
@@ -173,20 +151,18 @@ def draw_text_with_shadow(base_img, text, x, y, font, max_width, fill_color,
     # 3. 本番用キャンバス作成
     margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
     canvas_w = int(text_w + margin * 2)
-    canvas_h = int(text_h + margin * 2 + font.size) # 高さに余裕を持たせる
+    canvas_h = int(text_h + margin * 2 + font.size)
     
-    # テキストレイヤー
     txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     txt_draw = ImageDraw.Draw(txt_img)
     
-    # 描画位置 (マージン考慮)
     draw_x = margin
     draw_y = margin
     
-    # ★ここで混植描画を実行
+    # ★混植描画
     draw_text_mixed(txt_draw, (draw_x, draw_y), text, font, fallback_font, fill_color)
     
-    # 4. 影の生成 (shadow_on の場合)
+    # 4. 影の生成
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     
     if shadow_on:
@@ -202,7 +178,7 @@ def draw_text_with_shadow(base_img, text, x, y, font, max_width, fill_color,
     # 5. テキストを重ねる
     final_layer.paste(txt_img, (0, 0), txt_img)
     
-    # 6. 長体処理 (幅圧縮)
+    # 6. 長体処理
     content_w = canvas_w
     content_h = canvas_h
     
@@ -224,10 +200,7 @@ def draw_text_with_shadow(base_img, text, x, y, font, max_width, fill_color,
 
     base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
     
-    # 高さ情報の返却 (概算)
     return text_h
-
-# --- ★追加機能ここまで ---
 
 # ==========================================
 # 2. UI コンポーネント
@@ -421,8 +394,6 @@ def create_flyer_image_shadow(
     
     # 高さ計算用ダミーフォント(概算)
     for item in footer_lines:
-        # ※正確な高さは draw_text_with_shadow でわかるが、配置計算用に概算する
-        # 日本語フォールバックの影響で多少誤差が出るが、行送り用なのでbbox計測でOK
         dummy_draw = ImageDraw.Draw(Image.new("RGBA",(1,1)))
         bbox = dummy_draw.textbbox((0,0), item["text"], font=item["style"]["font"])
         h = bbox[3] - bbox[1]
@@ -522,7 +493,6 @@ def render_flyer_editor(project_id):
             c1, c2 = st.columns([2, 1])
             with c1:
                 st.selectbox("フォント", font_options, 
-                             index=font_options.index(st.session_state[f"flyer_{key_prefix}_font"]) if st.session_state[f"flyer_{key_prefix}_font"] in font_options else 0,
                              key=f"flyer_{key_prefix}_font", format_func=lambda x: font_map.get(x, x))
             with c2:
                 st.color_picker("文字色", st.session_state[f"flyer_{key_prefix}_color"], key=f"flyer_{key_prefix}_color")
