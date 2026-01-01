@@ -5,10 +5,15 @@ import os
 import requests
 import json
 import zipfile
+import pandas as pd
 from datetime import datetime, date
+
+# ReportLab imports for PDF
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 from constants import FONT_DIR
 from database import get_db, TimetableProject, Asset, get_image_url, SystemFontConfig
@@ -79,7 +84,6 @@ def resize_image_contain(img, max_w, max_h):
     new_h = int(img.height * ratio)
     return img.resize((new_w, new_h), Image.LANCZOS)
 
-# エラー修正: 必要な関数定義を維持
 def resize_image_to_width(img, target_width):
     if not img: return None
     w_percent = (target_width / float(img.size[0]))
@@ -116,6 +120,92 @@ def format_time_str(t_val):
     if isinstance(t_val, str): return t_val[:5]
     try: return t_val.strftime("%H:%M")
     except: return str(t_val)
+
+# --- 告知テキスト生成 ---
+def generate_event_summary_text(proj, date_str):
+    """プロジェクト情報から告知用テキストを生成する"""
+    venue_name = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
+    
+    text = f"【イベント名】\n{proj.title}\n\n"
+    text += f"【日時】\n{date_str}\n"
+    text += f"OPEN {format_time_str(proj.open_time)} / START {format_time_str(proj.start_time)}\n\n"
+    text += f"【会場】\n{venue_name}\n\n"
+    
+    # チケット情報
+    text += "【チケット】\n"
+    try:
+        tickets = json.loads(proj.tickets_json) if proj.tickets_json else []
+        for t in tickets:
+            t_name = t.get("name", "")
+            t_price = t.get("price", "")
+            t_note = t.get("note", "")
+            line = f"{t_name} {t_price}"
+            if t_note: line += f" ({t_note})"
+            text += line + "\n"
+    except: pass
+    
+    # 備考
+    try:
+        notes = json.loads(proj.ticket_notes_json) if proj.ticket_notes_json else []
+        if notes:
+            text += "\n<備考>\n"
+            for n in notes:
+                text += f"・{n}\n"
+    except: pass
+    
+    text += "\n"
+
+    # 出演者 (タイムテーブルデータから抽出)
+    text += "【出演】\n"
+    try:
+        if proj.data_json:
+            data = json.loads(proj.data_json)
+            # 重複除外してリスト化
+            artists = []
+            for d in data:
+                a_name = d.get("ARTIST", "")
+                if a_name and a_name not in ["開演前物販", "終演後物販", "調整中", ""] and a_name not in artists:
+                    artists.append(a_name)
+            text += " / ".join(artists)
+    except: pass
+    
+    return text
+
+# --- PDF生成 ---
+def create_pdf_from_text(text, font_path=None):
+    """テキストをPDFバイナリに変換する (日本語対応)"""
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    
+    # フォント登録
+    font_name = "Helvetica" # デフォルト
+    if font_path and os.path.exists(font_path):
+        try:
+            pdfmetrics.registerFont(TTFont('CustomFont', font_path))
+            font_name = 'CustomFont'
+        except: pass
+    
+    c.setFont(font_name, 10)
+    
+    y = height - 30*mm
+    x = 20*mm
+    line_height = 14
+    
+    lines = text.split('\n')
+    for line in lines:
+        if y < 20*mm: # 改ページ
+            c.showPage()
+            c.setFont(font_name, 10)
+            y = height - 30*mm
+        
+        # PDFでは文字化け防止のため、日本語を含まないフォントの場合は注意が必要だが
+        # ここでは登録したフォントを使う前提
+        c.drawString(x, y, line)
+        y -= line_height
+        
+    c.save()
+    return buffer.getvalue()
 
 # --- ★フォント描画ロジック ---
 
@@ -386,7 +476,6 @@ def create_flyer_image_shadow(
         logo_pos_y = styles.get("logo_pos_y", 0)
         base_logo_w = int(W * 0.5 * logo_scale)
         logo_img = resize_image_to_width(logo_img, base_logo_w)
-        
         base_x = (W - logo_img.width) // 2
         base_y = current_y
         offset_x = int(W * (logo_pos_x / 100.0))
@@ -402,6 +491,7 @@ def create_flyer_image_shadow(
     left_max_w = int(W * 0.55)
     right_max_w = int(W * 0.35)
 
+    # 左側 (日付・会場)
     h_date = draw_text_with_shadow(
         base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
         s_date["font"], s_date["size"], left_max_w, s_date["color"], "la",
@@ -717,7 +807,7 @@ def render_flyer_editor(project_id):
 
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
-        if st.button("画像を生成する", type="primary", use_container_width=True):
+        if st.button("プレビューを生成する", type="primary", use_container_width=True):
             bg_url = None
             if st.session_state.flyer_bg_id:
                 asset = db.query(Asset).get(st.session_state.flyer_bg_id)
@@ -781,68 +871,102 @@ def render_flyer_editor(project_id):
                 if tt_src:
                     st.session_state.flyer_result_tt = create_flyer_image_shadow(main_source=tt_src, **args)
 
-        t1, t2, t3 = st.tabs(["アー写グリッド版", "タイムテーブル版", "📥 一括ダウンロード"])
+        t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要PDF", "一括ダウンロード"])
+        
+        # Tab1: アー写グリッド版
         with t1:
             if st.session_state.get("flyer_result_grid"):
                 st.image(st.session_state.flyer_result_grid, use_container_width=True)
-            else: st.info("生成ボタンを押してください")
+                buf = io.BytesIO()
+                st.session_state.flyer_result_grid.save(buf, format="PNG")
+                st.download_button("DL (Grid)", buf.getvalue(), "flyer_grid.png", "image/png", key="dl_grid_single")
+            else: st.info("プレビューを生成してください")
+            
+        # Tab2: タイムテーブル版
         with t2:
             if st.session_state.get("flyer_result_tt"):
                 st.image(st.session_state.flyer_result_tt, use_container_width=True)
-            else: st.info("生成ボタンを押してください")
-        
+                buf = io.BytesIO()
+                st.session_state.flyer_result_tt.save(buf, format="PNG")
+                st.download_button("DL (TT)", buf.getvalue(), "flyer_tt.png", "image/png", key="dl_tt_single")
+            else: st.info("プレビューを生成してください")
+            
+        # Tab3: イベント概要PDF
         with t3:
-            st.markdown("生成された画像と素材をまとめてダウンロードします。")
+            st.markdown("### 告知用テキストプレビュー")
+            d_str = format_event_date(proj.event_date, "JP")
+            summary_text = generate_event_summary_text(proj, d_str)
+            st.text_area("内容", value=summary_text, height=300, disabled=True)
+            
+            # フォント準備 (PDF用)
+            fallback_filename = st.session_state.get("flyer_fallback_font")
+            font_path_for_pdf = None
+            if fallback_filename:
+                font_path_for_pdf = ensure_font_file_exists(db, fallback_filename)
+                
+            pdf_bytes = create_pdf_from_text(summary_text, font_path_for_pdf)
+            st.download_button(
+                label="📄 PDFをダウンロード",
+                data=pdf_bytes,
+                file_name=f"event_outline_{proj.id}.pdf",
+                mime="application/pdf"
+            )
+
+        # Tab4: 一括ダウンロード
+        with t4:
+            st.markdown("### ファイル一括ダウンロード")
+            include_assets = st.checkbox("素材データを含める (透過PNG, CSV, テキスト等)")
+            
             if st.button("📦 ZIPファイルを生成", type="primary"):
-                if not st.session_state.get("flyer_result_grid") or not st.session_state.get("last_generated_grid_image"):
-                    st.error("先に画像を生成してください。")
+                if not st.session_state.get("flyer_result_grid"):
+                    st.error("先にプレビューを生成してください。")
                 else:
                     try:
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
+                            # 1. Flyer Grid
                             buf = io.BytesIO()
                             st.session_state.flyer_result_grid.save(buf, format="PNG")
                             zip_file.writestr("Flyer_Grid.png", buf.getvalue())
                             
+                            # 2. Flyer TT
                             if st.session_state.get("flyer_result_tt"):
                                 buf = io.BytesIO()
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
-                            if st.session_state.get("last_generated_grid_image"):
-                                buf = io.BytesIO()
-                                st.session_state.last_generated_grid_image.save(buf, format="PNG")
-                                zip_file.writestr("Source_Grid_Transparent.png", buf.getvalue())
-                            
-                            if st.session_state.get("last_generated_tt_image"):
-                                buf = io.BytesIO()
-                                st.session_state.last_generated_tt_image.save(buf, format="PNG")
-                                zip_file.writestr("Source_Timetable_Transparent.png", buf.getvalue())
-                            
-                            # Simple PDFs
-                            venue_str = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
-                            
-                            pdf_buf = io.BytesIO()
-                            c = canvas.Canvas(pdf_buf, pagesize=A4)
-                            c.setFont("Helvetica-Bold", 16)
-                            c.drawString(20*mm, 280*mm, f"Event: {proj.title}")
-                            c.setFont("Helvetica", 12)
-                            c.drawString(20*mm, 270*mm, f"Date: {format_event_date(proj.event_date)}")
-                            c.drawString(20*mm, 260*mm, f"Venue: {venue_str}")
-                            c.save()
-                            zip_file.writestr("Event_Outline.pdf", pdf_buf.getvalue())
-                            
-                            if st.session_state.get("last_generated_tt_image"):
-                                pdf_buf = io.BytesIO()
-                                c = canvas.Canvas(pdf_buf, pagesize=A4)
-                                tt_img = st.session_state.last_generated_tt_image
-                                temp_tt_path = "temp_tt_for_pdf.png"
-                                tt_img.save(temp_tt_path)
-                                c.drawImage(temp_tt_path, 10*mm, 10*mm, width=190*mm, preserveAspectRatio=True)
-                                c.save()
-                                zip_file.writestr("Timetable.pdf", pdf_buf.getvalue())
-                                try: os.remove(temp_tt_path)
-                                except: pass
+                            # 3. Event Outline PDF
+                            d_str = format_event_date(proj.event_date, "JP")
+                            summary_text = generate_event_summary_text(proj, d_str)
+                            fallback_filename = st.session_state.get("flyer_fallback_font")
+                            font_path_for_pdf = ensure_font_file_exists(db, fallback_filename) if fallback_filename else None
+                            pdf_bytes = create_pdf_from_text(summary_text, font_path_for_pdf)
+                            zip_file.writestr("Event_Outline.pdf", pdf_bytes)
+
+                            # --- 素材データを含める場合 ---
+                            if include_assets:
+                                # Source Grid (Transparent)
+                                if st.session_state.get("last_generated_grid_image"):
+                                    buf = io.BytesIO()
+                                    st.session_state.last_generated_grid_image.save(buf, format="PNG")
+                                    zip_file.writestr("Source_Grid_Transparent.png", buf.getvalue())
+                                
+                                # Source TT (Transparent)
+                                if st.session_state.get("last_generated_tt_image"):
+                                    buf = io.BytesIO()
+                                    st.session_state.last_generated_tt_image.save(buf, format="PNG")
+                                    zip_file.writestr("Source_Timetable_Transparent.png", buf.getvalue())
+                                
+                                # Timetable CSV
+                                if proj.data_json:
+                                    try:
+                                        df = pd.read_json(proj.data_json)
+                                        csv_str = df.to_csv(index=False).encode('utf-8_sig')
+                                        zip_file.writestr("Timetable_Data.csv", csv_str)
+                                    except: pass
+                                
+                                # Outline Text
+                                zip_file.writestr("Event_Outline.txt", summary_text)
 
                         st.download_button(
                             label="⬇️ ZIPをダウンロード",
