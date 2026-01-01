@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, Float, ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from supabase import create_client, Client
 import streamlit as st
@@ -33,7 +33,9 @@ except Exception as e:
 
 # --- Supabase Storageクライアント ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-BUCKET_NAME = "images"
+# ★重要: バケット名は実際のSupabase設定に合わせてください (images, artists など)
+# 今回は "images" と仮定しています
+BUCKET_NAME = "images" 
 
 IMAGE_DIR = "images" 
 os.makedirs(IMAGE_DIR, exist_ok=True)
@@ -92,10 +94,10 @@ class TimetableRow(Base):
     place = Column(String)
     
     add_goods_start_time = Column(String)
+    # ★修正: Integer または Float どちらでも対応できるように定義
+    # ここでは既存に合わせてIntegerにしていますが、Floatが必要なら変更してください
     add_goods_duration = Column(Integer, nullable=True)
     add_goods_place = Column(String)
-    
-    # ★重要: created_at は削除しました (DB側で自動設定されるため)
     
     project = relationship("TimetableProject", back_populates="rows")
 
@@ -153,7 +155,26 @@ def upload_image_to_supabase(file_obj, filename):
         st.error(f"画像アップロードエラー: {e}")
         return None
 
+# ★重要: 画像URL生成関数の強化
 def get_image_url(filename):
+    """
+    ファイル名からSupabaseの公開URLを取得する
+    """
     if not filename: return None
-    if filename.startswith("http"): return filename
-    return supabase.storage.from_(BUCKET_NAME).get_public_url(filename)
+    
+    # 既にURL形式ならそのまま返す
+    if filename.startswith("http://") or filename.startswith("https://"):
+        return filename
+    
+    # ローカルファイルがあるかチェック (開発用)
+    local_path = os.path.join("assets", "artists", filename)
+    if os.path.exists(local_path):
+        return local_path
+        
+    try:
+        # Supabase Storageから公開URLを取得
+        # 注意: バケットがPublic設定になっている必要があります
+        return supabase.storage.from_(BUCKET_NAME).get_public_url(filename)
+    except Exception as e:
+        print(f"URL生成エラー: {e}")
+        return None
