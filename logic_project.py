@@ -36,6 +36,7 @@ def format_time_safe(t_val, default="10:00"):
 def save_timetable_rows(db, project_id, rows_data):
     """
     タイムテーブルの行データをDBテーブル(timetable_rows)に保存する。
+    ★修正: 数値データに safe_int を適用して nan エラーを防止
     """
     try:
         # 1. 既存行の削除
@@ -44,22 +45,28 @@ def save_timetable_rows(db, project_id, rows_data):
         # 2. 新規行の作成
         new_rows = []
         for idx, item in enumerate(rows_data):
+            # 数値型カラムに入れる値は必ず safe_int を通す
+            duration_val = safe_int(item.get("DURATION"), 0)
+            adjustment_val = safe_int(item.get("ADJUSTMENT"), 0)
+            goods_duration_val = safe_int(item.get("GOODS_DURATION"), 60)
+            add_goods_duration_val = safe_int(item.get("ADD_GOODS_DURATION"), 60) # デフォルト60または0
+
             row = TimetableRow(
                 project_id=project_id,
                 sort_order=idx,
-                artist_name=item.get("ARTIST"),
-                duration=item.get("DURATION"),
-                is_post_goods=item.get("IS_POST_GOODS", False),
-                adjustment=item.get("ADJUSTMENT", 0),
+                artist_name=safe_str(item.get("ARTIST")),
                 
-                goods_start_time=item.get("GOODS_START_MANUAL"),
-                goods_duration=item.get("GOODS_DURATION"),
-                place=item.get("PLACE"),
+                duration=duration_val,
+                is_post_goods=bool(item.get("IS_POST_GOODS", False)),
+                adjustment=adjustment_val,
                 
-                add_goods_start_time=item.get("ADD_GOODS_START"),
-                add_goods_duration=item.get("ADD_GOODS_DURATION"),
-                add_goods_place=item.get("ADD_GOODS_PLACE")
-                # created_at はDBデフォルトに任せるため指定しない
+                goods_start_time=safe_str(item.get("GOODS_START_MANUAL")),
+                goods_duration=goods_duration_val,
+                place=safe_str(item.get("PLACE")),
+                
+                add_goods_start_time=safe_str(item.get("ADD_GOODS_START")),
+                add_goods_duration=add_goods_duration_val,
+                add_goods_place=safe_str(item.get("ADD_GOODS_PLACE"))
             )
             new_rows.append(row)
         
