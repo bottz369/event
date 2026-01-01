@@ -2,7 +2,7 @@ import streamlit as st
 import json
 import datetime
 from datetime import date
-from database import TimetableProject
+from database import TimetableProject, TimetableRow
 from utils import safe_int, safe_str
 from constants import get_default_row_settings
 
@@ -31,7 +31,77 @@ def format_time_safe(t_val, default="10:00"):
         return t_val.strftime("%H:%M")
     return default
 
-# --- 読み込み処理 ---
+# --- 新規追加: タイムテーブル行データの保存・読込 ---
+
+def save_timetable_rows(db, project_id, rows_data):
+    """
+    タイムテーブルの行データをDBテーブル(timetable_rows)に保存する。
+    既存の行を削除→新規作成という方式で完全同期を行う。
+    """
+    try:
+        # 1. 既存行の削除
+        db.query(TimetableRow).filter(TimetableRow.project_id == project_id).delete()
+        
+        # 2. 新規行の作成
+        new_rows = []
+        for idx, item in enumerate(rows_data):
+            row = TimetableRow(
+                project_id=project_id,
+                sort_order=idx,
+                artist_name=item.get("ARTIST"),
+                duration=item.get("DURATION"),
+                is_post_goods=item.get("IS_POST_GOODS", False),
+                adjustment=item.get("ADJUSTMENT", 0),
+                
+                goods_start_time=item.get("GOODS_START_MANUAL"),
+                goods_duration=item.get("GOODS_DURATION"),
+                place=item.get("PLACE"),
+                
+                add_goods_start_time=item.get("ADD_GOODS_START"),
+                add_goods_duration=item.get("ADD_GOODS_DURATION"),
+                add_goods_place=item.get("ADD_GOODS_PLACE")
+            )
+            new_rows.append(row)
+        
+        db.add_all(new_rows)
+        db.commit()
+        return True
+    except Exception as e:
+        print(f"Error saving timetable rows: {e}")
+        db.rollback()
+        return False
+
+def load_timetable_rows(db, project_id):
+    """
+    DBテーブルから行データを読み込み、アプリで使用する辞書リスト形式に変換する。
+    """
+    try:
+        rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).order_by(TimetableRow.sort_order).all()
+        if not rows:
+            return []
+            
+        data_export = []
+        for r in rows:
+            item = {
+                "ARTIST": r.artist_name,
+                "DURATION": r.duration,
+                "IS_POST_GOODS": r.is_post_goods,
+                "ADJUSTMENT": r.adjustment,
+                "GOODS_START_MANUAL": r.goods_start_time,
+                "GOODS_DURATION": r.goods_duration,
+                "PLACE": r.place,
+                "ADD_GOODS_START": r.add_goods_start_time,
+                "ADD_GOODS_DURATION": r.add_goods_duration,
+                "ADD_GOODS_PLACE": r.add_goods_place
+            }
+            data_export.append(item)
+        return data_export
+    except Exception as e:
+        print(f"Error loading timetable rows: {e}")
+        return []
+
+
+# --- 読み込み処理 (既存) ---
 def load_project_data(db, project_id):
     """
     DBからプロジェクト情報を取得し、st.session_state に展開する
@@ -60,8 +130,14 @@ def load_project_data(db, project_id):
     st.session_state.tt_start_time = format_time_safe(proj.start_time, "10:30")
     st.session_state.tt_goods_offset = proj.goods_start_offset or 0
 
-    # 2. JSONデータ
-    st.session_state.tt_data = parse_json_safe(proj.data_json, [])
+    # 2. タイムテーブルデータのロード (DBテーブル優先、なければJSON)
+    # ★修正: ここで新しいテーブルからの読み込みを試みます
+    tt_data_from_db = load_timetable_rows(db, project_id)
+    if tt_data_from_db:
+        st.session_state.tt_data = tt_data_from_db
+    else:
+        # DBになければ旧JSONから
+        st.session_state.tt_data = parse_json_safe(proj.data_json, [])
 
     grid_data = parse_json_safe(proj.grid_order_json, {})
     if isinstance(grid_data, dict):
@@ -75,12 +151,9 @@ def load_project_data(db, project_id):
     st.session_state.proj_tickets = parse_json_safe(proj.tickets_json, [])
     st.session_state.proj_free_text = parse_json_safe(proj.free_text_json, [])
 
-    # ★修正: 安全策の getattr をやめ、直接取得を試みる（DBにはカラムが存在するため）
-    # 万が一古いキャッシュがあっても読み込めるように処理
     try:
         raw_notes = proj.ticket_notes_json
     except AttributeError:
-        # まだSQLAlchemyが更新を認識していない場合のフォールバック
         raw_notes = getattr(proj, "ticket_notes_json", None)
 
     st.session_state.proj_ticket_notes = parse_json_safe(raw_notes, [])
@@ -95,10 +168,11 @@ def load_project_data(db, project_id):
 
     return True
 
-# --- 保存処理 ---
+# --- 保存処理 (既存) ---
 def save_current_project(db, project_id):
     """
     現在のセッションステートの内容をデータベースに保存する
+    ※タイムテーブル行データ自体はここでは保存しません（別途呼び出しが必要）
     """
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     if not proj: return False
@@ -120,13 +194,10 @@ def save_current_project(db, project_id):
     if "proj_free_text" in st.session_state:
         proj.free_text_json = json.dumps(st.session_state.proj_free_text, ensure_ascii=False)
     
-    # ★修正完了: 安全装置(hasattr)を削除し、強制的に書き込みます
     if "proj_ticket_notes" in st.session_state:
         proj.ticket_notes_json = json.dumps(st.session_state.proj_ticket_notes, ensure_ascii=False)
-        # デバッグ用: コンソールに書き込んだ内容を表示（本番では消してもOK）
-        print(f"DEBUG: Saving ticket_notes -> {proj.ticket_notes_json}")
 
-    # タイムテーブルデータ
+    # タイムテーブルデータ (バックアップとしてJSONにも保存)
     save_data = []
     if "binding_df" in st.session_state and not st.session_state.binding_df.empty:
         save_data = st.session_state.binding_df.to_dict(orient="records")
@@ -165,6 +236,8 @@ def save_current_project(db, project_id):
 
     if save_data:
         proj.data_json = json.dumps(save_data, ensure_ascii=False)
+        # ★重要: ここで同時にテーブルへの保存も行う
+        save_timetable_rows(db, project_id, save_data)
     
     if "tt_open_time" in st.session_state: proj.open_time = st.session_state.tt_open_time
     if "tt_start_time" in st.session_state: proj.start_time = st.session_state.tt_start_time
@@ -214,7 +287,7 @@ def save_current_project(db, project_id):
     db.commit()
     return True
 
-# --- 複製処理 ---
+# --- 複製処理 (既存) ---
 def duplicate_project(db, project_id):
     src = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     if not src: return None
@@ -236,4 +309,9 @@ def duplicate_project(db, project_id):
     )
     db.add(new_proj)
     db.commit()
+    
+    # ★追加: 行データも複製する
+    src_rows = load_timetable_rows(db, src.id)
+    save_timetable_rows(db, new_proj.id, src_rows)
+    
     return new_proj
