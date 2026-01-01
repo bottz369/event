@@ -10,7 +10,9 @@ from constants import (
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
-from logic_project import save_current_project
+
+# ★修正: 新しい保存関数をインポート
+from logic_project import save_current_project, save_timetable_rows
 
 try:
     from streamlit_sortables import sort_items
@@ -42,6 +44,9 @@ def render_timetable_page():
     if selected_id:
         # --- プロジェクトデータの読み込み (初回 or 切り替え時) ---
         if st.session_state.get("tt_current_proj_id") != selected_id:
+            # Note: データロード自体は views/workspace.py 側で行われている想定ですが
+            # ここでも念のため再ロードが必要な場合のロジックは残しています
+            # (ただし、tt_data が既にセッションにある場合はスキップする設計が望ましいです)
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             if proj:
                 st.session_state.tt_title = proj.title
@@ -63,52 +68,56 @@ def render_timetable_page():
                             st.session_state.tt_font = settings["tt_font"]
                     except: pass
 
-                # データJSON展開
-                if proj.data_json:
-                    try:
-                        data = json.loads(proj.data_json)
-                        new_order = []
-                        new_artist_settings = {}
-                        new_row_settings = []
-                        st.session_state.tt_has_pre_goods = False
-                        for item in data:
-                            name = item.get("ARTIST", "")
-                            if name == "開演前物販":
-                                st.session_state.tt_has_pre_goods = True
-                                st.session_state.tt_pre_goods_settings = {
-                                    "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                                    "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                                    "PLACE": safe_str(item.get("PLACE")),
-                                }
-                                continue
-                            if name == "終演後物販":
-                                st.session_state.tt_post_goods_settings = {
-                                    "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                                    "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                                    "PLACE": safe_str(item.get("PLACE")),
-                                }
-                                continue
-                            
-                            # 通常アーティスト
-                            if name:
-                                new_order.append(name)
-                                new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
-                                new_row_settings.append({
-                                    "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
-                                    "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                                    "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                                    "PLACE": safe_str(item.get("PLACE")),
-                                    "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
-                                    "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
-                                    "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
-                                    "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
-                                })
-                        st.session_state.tt_artists_order = new_order
-                        st.session_state.tt_artist_settings = new_artist_settings
-                        st.session_state.tt_row_settings = new_row_settings
-                        st.session_state.rebuild_table_flag = True
-                    except Exception as e:
-                        st.error(f"データ展開エラー: {e}")
+                # データ展開 (tt_artists_order等が未設定の場合のみ実行)
+                # workspace.py でロード済みの場合はスキップ
+                if "tt_artists_order" not in st.session_state or not st.session_state.tt_artists_order:
+                    # ここでは簡易的にJSONから復元するロジックのみ残しておきます
+                    # (本格的なロードは workspace.py に任せる)
+                    if proj.data_json:
+                        try:
+                            data = json.loads(proj.data_json)
+                            new_order = []
+                            new_artist_settings = {}
+                            new_row_settings = []
+                            st.session_state.tt_has_pre_goods = False
+                            for item in data:
+                                name = item.get("ARTIST", "")
+                                if name == "開演前物販":
+                                    st.session_state.tt_has_pre_goods = True
+                                    st.session_state.tt_pre_goods_settings = {
+                                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                                        "PLACE": safe_str(item.get("PLACE")),
+                                    }
+                                    continue
+                                if name == "終演後物販":
+                                    st.session_state.tt_post_goods_settings = {
+                                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                                        "PLACE": safe_str(item.get("PLACE")),
+                                    }
+                                    continue
+                                
+                                # 通常アーティスト
+                                if name:
+                                    new_order.append(name)
+                                    new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
+                                    new_row_settings.append({
+                                        "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
+                                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
+                                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
+                                        "PLACE": safe_str(item.get("PLACE")),
+                                        "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
+                                        "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
+                                        "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
+                                        "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
+                                    })
+                            st.session_state.tt_artists_order = new_order
+                            st.session_state.tt_artist_settings = new_artist_settings
+                            st.session_state.tt_row_settings = new_row_settings
+                            st.session_state.rebuild_table_flag = True
+                        except Exception as e:
+                            st.error(f"データ展開エラー: {e}")
                 
                 st.session_state.tt_current_proj_id = selected_id
                 if "ws_active_project_id" not in st.session_state: st.rerun()
@@ -476,7 +485,7 @@ def render_timetable_page():
                                     settings["tt_font"] = st.session_state.tt_font
                                     proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
                                     
-                                    # data_json 更新 (テーブル構成)
+                                    # データ保存用リスト作成
                                     data_export = []
                                     # 開演前
                                     if st.session_state.tt_has_pre_goods:
@@ -518,13 +527,17 @@ def render_timetable_page():
                                             "PLACE": p.get("PLACE")
                                         })
 
+                                    # JSONにも一応保存 (互換性のため)
                                     proj_to_save.data_json = json.dumps(data_export, ensure_ascii=False)
 
-                                    # 3. DBへコミット
-                                    if save_current_project(db, selected_id):
+                                    # 3. DBへコミット (JSON保存分)
+                                    save_current_project(db, selected_id)
+                                    
+                                    # ★重要: 新しいテーブルにも確実に保存
+                                    if save_timetable_rows(db, selected_id, data_export):
                                         st.toast("保存＆プレビュー更新完了！", icon="✅")
                                     else:
-                                        st.error("DB保存に失敗しました")
+                                        st.error("詳細データの保存に失敗しました")
                                 else:
                                     st.error("プロジェクトが見つかりません")
                                     
