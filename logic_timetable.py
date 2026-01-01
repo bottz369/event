@@ -5,6 +5,10 @@ import requests
 from io import BytesIO
 import streamlit as st
 
+# ★ここでインポートして、読み込めるかテストします
+# もしここでエラーが出るなら、database.py に問題があります
+from database import SessionLocal, Artist, get_image_url
+
 # ================= 設定エリア =================
 SINGLE_COL_WIDTH = 1450      
 COLUMN_GAP = 80             
@@ -17,7 +21,7 @@ FONT_SIZE_ARTIST = 60
 FONT_SIZE_GOODS = 48        
 
 COLOR_BG_ALL = (0, 0, 0, 0)        
-COLOR_ROW_BG = (0, 0, 0, 100)      # 背景の濃さ (0-255)
+COLOR_ROW_BG = (0, 0, 0, 100)      # 背景の濃さ
 COLOR_TEXT = (255, 255, 255, 255)   
 
 AREA_TIME_X = 20
@@ -43,24 +47,16 @@ def get_font(path, size):
     return ImageFont.load_default()
 
 def load_image(path_or_url):
-    """URLまたはローカルパスから画像を読み込む"""
     if not path_or_url: return None
-    try:
-        if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
-            # タイムアウトを少し長めに設定
-            response = requests.get(path_or_url, timeout=10)
-            if response.status_code != 200:
-                print(f"HTTP Error: {response.status_code} for {path_or_url}")
-                return None
-            return Image.open(BytesIO(response.content)).convert("RGBA")
-        
-        if os.path.exists(path_or_url):
-             return Image.open(path_or_url).convert("RGBA")
-        
-        return None
-    except Exception as e:
-        print(f"Image Load Error: {e}")
-        return None
+    # タイムアウト付きでダウンロード
+    if path_or_url.startswith("http"):
+        response = requests.get(path_or_url, timeout=5)
+        response.raise_for_status() # 404ならここでエラーにする
+        return Image.open(BytesIO(response.content)).convert("RGBA")
+    
+    if os.path.exists(path_or_url):
+            return Image.open(path_or_url).convert("RGBA")
+    return None
 
 def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_font_size, align="center"):
     text = str(text).strip()
@@ -83,74 +79,46 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     else: final_x = box_x
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
-def draw_debug_msg(draw, text, x, y, color="red"):
-    """画像上にエラー原因を書き込む（デバッグ用）"""
-    try:
-        font = get_font(None, 24)
-        draw.text((x, y+5), text, fill=color, font=font)
-    except: pass
-
 def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
-    """1行を描画する関数（DBセッションを受け取るように変更）"""
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
-    # ★ここが変更点: 必ずログを出す
-    # print(f"Processing row: {name_str}") 
-
     # 特殊行以外のみ画像処理
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
-        # DB処理のためのインポート（ここだけ遅延インポート）
-        try:
-            from database import Artist, get_image_url
+        
+        # ★エラーハンドリングなしで実行（エラーならアプリを落として原因を表示）
+        # 1. DB検索
+        artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
+        
+        # ヒットしなければあいまい検索
+        if not artist:
+            clean = name_str.replace(" ", "").replace("　", "")
+            if clean: artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
+
+        if artist:
+            # st.write(f"✅ DB発見: {name_str} (File: {artist.image_filename})") # 動作確認用
             
-            # 1. DB検索
-            artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
-            if not artist:
-                # スペース除去して再トライ
-                clean = name_str.replace(" ", "").replace("　", "")
-                if clean: artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
-
-            if artist:
-                # ★ログ: DBヒット確認
-                # st.write(f"  ✅ DB Hit: {name_str} -> {artist.image_filename}")
+            if artist.image_filename:
+                # 2. URL取得
+                url = get_image_url(artist.image_filename)
                 
-                if artist.image_filename:
-                    # 2. URL取得
-                    url = get_image_url(artist.image_filename)
-                    
-                    # ★ログ: URL確認
-                    print(f"[{name_str}] URL: {url}")
-                    # st.write(f"    🔗 URL: {url}")
-
-                    if url:
-                        # 3. 画像読み込み
+                if url:
+                    # 3. 画像読み込み
+                    try:
                         img = load_image(url)
                         if img:
-                            # 成功！画像を貼り付け
                             img_fitted = ImageOps.fit(img, (SINGLE_COL_WIDTH, ROW_HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
                             canvas.paste(img_fitted, (int(base_x), int(base_y)))
                         else:
-                            # URLはあるが読み込めない (404, 権限エラー)
-                            draw_debug_msg(draw, "Load Error", base_x+10, base_y, "red")
-                            # どんなURLだったか書き込む
-                            short_url = url.split('/')[-1][:10] + "..."
-                            draw_debug_msg(draw, short_url, base_x+10, base_y+30, "yellow")
-                    else:
-                        draw_debug_msg(draw, "URL None", base_x+10, base_y, "orange")
+                            st.warning(f"⚠️ 画像読み込み失敗 (中身なし): {url}")
+                    except Exception as e:
+                        st.error(f"❌ 画像ダウンロードエラー [{name_str}]: {e}")
                 else:
-                    # DBにあるがファイル名がNULL
-                    # draw_debug_msg(draw, "No File", base_x+10, base_y, "gray")
-                    pass
-            else:
-                # DBにアーティストが見つからない
-                draw_debug_msg(draw, "DB Not Found", base_x+10, base_y, "magenta")
-                # st.write(f"  ❌ DB Not Found: {name_str}")
-                
-        except Exception as e:
-            print(f"Draw Error: {e}")
-            draw_debug_msg(draw, "Sys Error", base_x+10, base_y, "red")
-            st.error(f"Draw Error ({name_str}): {e}")
+                    st.warning(f"⚠️ URL生成失敗: {name_str}")
+        else:
+            # DBにない場合（これは正常なケースもありうるのでエラーにはしない）
+            # st.info(f"ℹ️ DB未登録: {name_str}")
+            pass
 
     # 背景(半透明黒) - 画像の上に重ねる
     draw.rectangle([(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], fill=COLOR_ROW_BG)
@@ -176,12 +144,9 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
 def generate_timetable_image(timetable_data, font_path=None):
     if not timetable_data: return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (0,0,0,255))
     
-    # 処理開始ログ
-    print("--- Start Generating Image ---")
-    st.write("🔄 画像生成プロセス実行中...")
-
-    # DBセッションをここで1回だけ作成して使い回す（安定化）
-    from database import SessionLocal
+    st.write("🔄 画像生成を開始します...")
+    
+    # DBセッション作成
     db = SessionLocal()
 
     try:
@@ -207,11 +172,8 @@ def generate_timetable_image(timetable_data, font_path=None):
             draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db)
             y += (ROW_HEIGHT + ROW_MARGIN)
             
-        st.write("✅ 生成完了")
+        st.success("✅ 画像生成完了")
         return canvas
 
-    except Exception as e:
-        st.error(f"全体エラー: {e}")
-        return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (255,0,0,255))
     finally:
         db.close()
