@@ -4,16 +4,14 @@ import json
 import io
 import os
 from datetime import datetime, date, timedelta
-# ★追加: AssetFile をインポート
+
+# ★重要: AssetFile を確実にインポート
 from database import get_db, SessionLocal, Artist, TimetableProject, AssetFile
 from constants import (
     TIME_OPTIONS, DURATION_OPTIONS, ADJUSTMENT_OPTIONS, 
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
-# ★ utilsから新しい関数などをインポート
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
-
-# ★ 新しい保存関数をインポート (nanエラー対策済み)
 from logic_project import save_current_project, save_timetable_rows
 
 try:
@@ -21,7 +19,6 @@ try:
 except ImportError:
     sort_items = None
 
-# エラーハンドリング付きインポート
 import_error_msg = None
 try:
     from logic_timetable import generate_timetable_image
@@ -29,29 +26,43 @@ except Exception as e:
     import_error_msg = str(e)
     generate_timetable_image = None
 
-# --- ★新規追加: 生成直前にフォントを確実に入手する関数 ---
-def check_and_download_font(db, font_filename):
+# --- ★強化版: フォント確保関数 ---
+def ensure_font_exists(db, font_filename):
     """
-    指定されたフォントファイルがローカルになければ、
-    AssetFileテーブルから即座にダウンロードして保存する
+    指定されたフォントがローカル(FONT_DIR)にあるか確認し、
+    なければDB(AssetFile)からダウンロードして保存する。
     """
-    if not font_filename: return
+    if not font_filename: 
+        return None
 
-    # パスズレ防止のため絶対パスを使用
+    # 絶対パスでディレクトリを確保
     abs_font_dir = os.path.abspath(FONT_DIR)
     os.makedirs(abs_font_dir, exist_ok=True)
     
     file_path = os.path.join(abs_font_dir, font_filename)
 
-    # ファイルが無い、またはサイズ0ならDBから取得
-    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-        asset = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
-        if asset and asset.file_data:
-            try:
-                with open(file_path, "wb") as f:
-                    f.write(asset.file_data)
-            except Exception as e:
-                print(f"Font write error: {e}")
+    # すでに有効なファイルがあればパスを返す
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+        return file_path
+
+    # DBから取得
+    # print(f"Downloading font: {font_filename}")
+    asset = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
+    
+    if asset and asset.file_data:
+        try:
+            with open(file_path, "wb") as f:
+                f.write(asset.file_data)
+            st.toast(f"フォント「{font_filename}」を準備しました", icon="🔤")
+            return file_path
+        except Exception as e:
+            print(f"Font write error: {e}")
+            st.error(f"フォント保存エラー: {e}")
+            return None
+    else:
+        # DBにもない場合
+        # st.warning(f"フォント「{font_filename}」がデータベースに見つかりません")
+        return None
 
 def render_timetable_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
@@ -473,8 +484,8 @@ def render_timetable_page():
             if st.session_state.get("last_generated_tt_image") is None:
                 if generate_timetable_image and gen_list:
                     try:
-                        # ★追加: ここでも念のためフォント確保
-                        check_and_download_font(db, st.session_state.tt_font)
+                        # ★追加: 初回自動生成時もフォント確保
+                        ensure_font_exists(db, st.session_state.tt_font)
                         
                         # ★修正: 絶対パスを使用
                         font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
@@ -486,13 +497,12 @@ def render_timetable_page():
 
             # ★重要: 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
-                # ★修正: エラーメッセージがあれば表示
                 if import_error_msg:
                     st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
                 elif generate_timetable_image:
                     if gen_list:
                         # ★重要: 生成直前に、選択されているフォントを確実にダウンロードする
-                        check_and_download_font(db, st.session_state.tt_font)
+                        ensure_font_exists(db, st.session_state.tt_font)
 
                         with st.spinner("画像を生成＆保存中..."):
                             try:
@@ -522,7 +532,6 @@ def render_timetable_page():
                                     
                                     # データ保存用リスト作成
                                     data_export = []
-                                    # 開演前
                                     if st.session_state.tt_has_pre_goods:
                                         p = st.session_state.tt_pre_goods_settings
                                         data_export.append({
@@ -532,7 +541,6 @@ def render_timetable_page():
                                             "PLACE": p.get("PLACE")
                                         })
                                     
-                                    # 本編
                                     for i, name in enumerate(st.session_state.tt_artists_order):
                                         ad = st.session_state.tt_artist_settings.get(name, {"DURATION": 20})
                                         rd = st.session_state.tt_row_settings[i] if i < len(st.session_state.tt_row_settings) else {}
@@ -551,7 +559,6 @@ def render_timetable_page():
                                         }
                                         data_export.append(item)
                                     
-                                    # 終演後
                                     has_post = any(r.get("IS_POST_GOODS") for r in st.session_state.tt_row_settings)
                                     if has_post:
                                         p = st.session_state.tt_post_goods_settings
@@ -562,13 +569,9 @@ def render_timetable_page():
                                             "PLACE": p.get("PLACE")
                                         })
 
-                                    # JSONにも一応保存 (互換性のため)
                                     proj_to_save.data_json = json.dumps(data_export, ensure_ascii=False)
-
-                                    # 3. DBへコミット (JSON保存分)
                                     save_current_project(db, selected_id)
                                     
-                                    # ★重要: 新しいテーブルにも確実に保存
                                     if save_timetable_rows(db, selected_id, data_export):
                                         st.toast("保存＆プレビュー更新完了！", icon="✅")
                                     else:
@@ -581,7 +584,6 @@ def render_timetable_page():
                     else:
                         st.warning("データがありません")
                 else:
-                    # ここに来るということは import_error_msg もなく、generate_timetable_image も None
                     st.error("ロジックエラー: 理由不明のロード失敗です。アプリを再起動してください。")
 
             is_outdated = False
