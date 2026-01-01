@@ -9,9 +9,10 @@ from constants import (
     TIME_OPTIONS, DURATION_OPTIONS, ADJUSTMENT_OPTIONS, 
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
+# ★ utilsから新しい関数などをインポート
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
 
-# 新しい保存関数をインポート
+# ★ 新しい保存関数をインポート (nanエラー対策済み)
 from logic_project import save_current_project, save_timetable_rows
 
 try:
@@ -25,7 +26,8 @@ try:
     from logic_timetable import generate_timetable_image
 except Exception as e:
     import_error_msg = str(e)
-    st.error(f"⚠️ モジュール読み込みエラー (logic_timetable): {e}")
+    # st.errorは描画時まで取っておくか、ここで出すか
+    # st.error(f"⚠️ モジュール読み込みエラー (logic_timetable): {e}")
     generate_timetable_image = None
 
 def render_timetable_page():
