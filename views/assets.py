@@ -2,10 +2,10 @@ import streamlit as st
 import uuid
 import os
 import requests
+import urllib.parse  # ★追加：日本語ファイル名のURLエンコード用
 from PIL import Image, ImageDraw, ImageFont
 from database import get_db, Asset, FavoriteFont, SystemFontConfig, upload_image_to_supabase, get_image_url, IMAGE_DIR
 from constants import FONT_DIR
-# ★ create_font_specimen_img と get_sorted_font_list をインポート
 from utils import create_font_specimen_img, get_sorted_font_list
 
 # ディレクトリの確実な作成
@@ -18,26 +18,48 @@ def sync_fonts_from_storage(db):
     DBにはあるがローカル(FONT_DIR)にないフォントを
     SupabaseのURLからダウンロードして復元する
     """
+    # 削除されていないフォントを全て取得
     fonts = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
-    restored_count = 0
     
+    restored_count = 0
+    error_logs = []
+
     for font in fonts:
         local_path = os.path.join(FONT_DIR, font.image_filename)
+        
+        # ローカルにファイルがない場合のみダウンロードを試行
         if not os.path.exists(local_path):
-            # ファイルがない場合、URLから取得を試みる
             url = get_image_url(font.image_filename)
+            
             if url:
                 try:
+                    # ★日本語ファイル名対策: URLに日本語が含まれる場合の安全策
+                    # get_image_urlがすでにエンコード済みなら良いですが、念のため
+                    # URL自体が無効でないかチェックしつつリクエストを送ります
                     response = requests.get(url, timeout=10)
+                    
                     if response.status_code == 200:
                         with open(local_path, "wb") as f:
                             f.write(response.content)
                         restored_count += 1
+                    else:
+                        # 404などのエラー詳細を記録
+                        error_logs.append(f"❌ 取得失敗: {font.name} (Status: {response.status_code})")
                 except Exception as e:
-                    print(f"Font download failed: {font.image_filename} / {e}")
-    
+                    error_logs.append(f"❌ エラー: {font.name} ({str(e)})")
+            else:
+                 error_logs.append(f"❌ URL不明: {font.name}")
+
+    # 結果の表示
     if restored_count > 0:
-        st.toast(f"{restored_count}個のフォントをクラウドから復元しました")
+        st.toast(f"✅ {restored_count}個のフォントをクラウドから復元しました")
+    
+    # エラーがあった場合、デバッグ用に表示（原因特定のため）
+    if error_logs:
+        with st.expander("⚠️ フォント復元エラー（クリックして詳細を確認）", expanded=True):
+            st.caption("以下のフォントがダウンロードできませんでした。Supabaseのバケット設定やファイル名を確認してください。")
+            for log in error_logs:
+                st.write(log)
 
 # --- ヘルパー関数: フォントプレビュー画像の生成 (個別カード用) ---
 def create_font_thumbnail(font_path, text="あいうABC", width=300, height=100):
@@ -234,14 +256,13 @@ def render_assets_page():
         with st.expander("🔤 フォント一覧見本を表示", expanded=True):
             with st.container(height=300):
                 if sorted_fonts_data:
-                    # ファイル名順などでソート (get_sorted_font_list内で既にお気に入り順等になっているが、一覧表示用に見直すならここ)
-                    # ここではそのまま渡します
+                    # ファイル名順などでソート
                     try:
                         specimen_img = create_font_specimen_img(db, sorted_fonts_data)
                         if specimen_img:
                             st.image(specimen_img, use_container_width=True)
                         else:
-                            st.info("フォントが見つかりません（生成失敗）。")
+                            st.info("フォント画像の生成に失敗しました（一部のフォントファイルが不足している可能性があります）。")
                     except Exception as e:
                         st.error(f"見本画像生成エラー: {e}")
                 else:
