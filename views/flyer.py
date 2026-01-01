@@ -8,13 +8,6 @@ import zipfile
 import pandas as pd
 from datetime import datetime, date
 
-# ReportLab imports for PDF
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-
 from constants import FONT_DIR
 from database import get_db, TimetableProject, Asset, get_image_url, SystemFontConfig
 from utils import get_sorted_font_list, create_font_specimen_img
@@ -143,7 +136,6 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
         date_str = ""
         if date_val:
             if isinstance(date_val, str):
-                # 文字列ならパースを試みる
                 try: date_val = datetime.strptime(date_val, "%Y-%m-%d").date()
                 except: pass
             
@@ -179,7 +171,7 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
                 if n and str(n).strip():
                     text += f"\n※{str(n).strip()}"
 
-        # 出演者 (data_jsonから)
+        # 出演者
         if proj.data_json:
             try:
                 data = json.loads(proj.data_json)
@@ -196,7 +188,7 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
                         text += f"\n{c_num}{a_name}"
             except: pass
 
-        # 自由記述 (free_text_jsonから)
+        # 自由記述
         if getattr(proj, "free_text_json", None):
             try:
                 free_list = json.loads(proj.free_text_json)
@@ -211,39 +203,6 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
     except Exception as e:
         return f"テキスト生成エラー: {e}"
 
-def create_pdf_from_text(text, font_path=None):
-    """テキストをPDFバイナリに変換"""
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    
-    font_name = "Helvetica"
-    if font_path and os.path.exists(font_path):
-        try:
-            # フォント登録
-            pdfmetrics.registerFont(TTFont('CustomFont', font_path))
-            font_name = 'CustomFont'
-        except Exception as e:
-            print(f"PDF Font register error: {e}")
-    
-    c.setFont(font_name, 10)
-    
-    y = height - 30*mm
-    x = 20*mm
-    line_height = 14
-    
-    lines = text.split('\n')
-    for line in lines:
-        if y < 20*mm:
-            c.showPage()
-            c.setFont(font_name, 10)
-            y = height - 30*mm
-        c.drawString(x, y, line)
-        y -= line_height
-        
-    c.save()
-    return buffer.getvalue()
-
 def generate_timetable_csv_string(proj):
     """
     タイムテーブルデータをCSV文字列として生成
@@ -255,9 +214,8 @@ def generate_timetable_csv_string(proj):
         # データの整形
         rows = []
         for d in data:
-            # 内部キーをCSVヘッダーにマップ
             row = {
-                "START ": d.get("START", ""), # スペースあり注意
+                "START ": d.get("START", ""), # スペースあり
                 "END": d.get("END", ""),
                 "グループ名": d.get("ARTIST", ""),
                 "持ち時間": d.get("DURATION", ""),
@@ -269,9 +227,7 @@ def generate_timetable_csv_string(proj):
             rows.append(row)
         
         df = pd.DataFrame(rows)
-        # カラム順序指定
         cols = ["START ", "END", "グループ名", "持ち時間", "物販開始", "物販終了", "物販時間", "物販場所"]
-        # データにないカラムがあれば追加
         for c in cols:
             if c not in df.columns: df[c] = ""
             
@@ -564,7 +520,7 @@ def create_flyer_image_shadow(
     left_max_w = int(W * 0.55)
     right_max_w = int(W * 0.35)
 
-    # 左側 (日付・会場)
+    # 左側
     h_date = draw_text_with_shadow(
         base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
         s_date["font"], s_date["size"], left_max_w, s_date["color"], "la",
@@ -870,8 +826,7 @@ def render_flyer_editor(project_id):
             style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
             for k in target_keys:
                 for p in style_params:
-                    val = st.session_state.get(f"flyer_{k}_{p}")
-                    save_data[f"{k}_{p}"] = val
+                    save_data[f"{k}_{p}"] = st.session_state.get(f"flyer_{k}_{p}")
 
             if hasattr(proj, "flyer_json"):
                 proj.flyer_json = json.dumps(save_data)
@@ -944,7 +899,7 @@ def render_flyer_editor(project_id):
                 if tt_src:
                     st.session_state.flyer_result_tt = create_flyer_image_shadow(main_source=tt_src, **args)
 
-        t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要PDF", "一括ダウンロード"])
+        t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
         # Tab 1: Grid Image
         with t1:
@@ -964,29 +919,18 @@ def render_flyer_editor(project_id):
                 st.download_button("DL (TT)", buf.getvalue(), "flyer_tt.png", "image/png", key="dl_tt_single")
             else: st.info("プレビューを生成してください")
             
-        # Tab 3: Event Overview PDF
+        # Tab 3: Event Overview Text (Changed from PDF)
         with t3:
             st.markdown("### 告知用テキストプレビュー")
             summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
             st.text_area("内容", value=summary_text, height=300, disabled=True)
             
-            # フォント準備
-            fallback_filename = st.session_state.get("flyer_fallback_font")
-            font_path_for_pdf = None
-            if fallback_filename:
-                font_path_for_pdf = ensure_font_file_exists(db, fallback_filename)
-            else:
-                # 設定がない場合はシステム標準フォントを取得
-                sys_conf = db.query(SystemFontConfig).first()
-                if sys_conf:
-                    font_path_for_pdf = ensure_font_file_exists(db, sys_conf.filename)
-                
-            pdf_bytes = create_pdf_from_text(summary_text, font_path_for_pdf)
+            # Text download button
             st.download_button(
-                label="📄 PDFをダウンロード",
-                data=pdf_bytes,
-                file_name=f"event_outline_{proj.id}.pdf",
-                mime="application/pdf"
+                label="📄 テキストをダウンロード",
+                data=summary_text,
+                file_name=f"event_outline_{proj.id}.txt",
+                mime="text/plain"
             )
 
         # Tab 4: Batch Download
@@ -1012,20 +956,9 @@ def render_flyer_editor(project_id):
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
-                            # 3. Event Overview PDF
+                            # 3. Event Outline Text (Always included now)
                             summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
-                            
-                            fallback_filename = st.session_state.get("flyer_fallback_font")
-                            font_path_for_pdf = None
-                            if fallback_filename:
-                                font_path_for_pdf = ensure_font_file_exists(db, fallback_filename)
-                            else:
-                                sys_conf = db.query(SystemFontConfig).first()
-                                if sys_conf:
-                                    font_path_for_pdf = ensure_font_file_exists(db, sys_conf.filename)
-
-                            pdf_bytes = create_pdf_from_text(summary_text, font_path_for_pdf)
-                            zip_file.writestr("Event_Outline.pdf", pdf_bytes)
+                            zip_file.writestr("Event_Outline.txt", summary_text)
 
                             # --- 素材データを含める場合 ---
                             if include_assets:
@@ -1045,9 +978,6 @@ def render_flyer_editor(project_id):
                                 csv_str = generate_timetable_csv_string(proj)
                                 if csv_str:
                                     zip_file.writestr("Timetable_Data.csv", csv_str)
-                                
-                                # Outline Text
-                                zip_file.writestr("Event_Outline.txt", summary_text)
 
                         st.download_button(
                             label="⬇️ ZIPをダウンロード",
