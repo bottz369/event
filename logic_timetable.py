@@ -95,8 +95,8 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
-    # ★超診断ログ: 処理しようとしているアーティスト名を表示
-    # st.write(f"🔍 処理中: [{name_str}]")
+    # ★ここが変更点: 必ずログを出す
+    # print(f"Processing row: {name_str}") 
 
     # 特殊行以外のみ画像処理
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
@@ -106,23 +106,22 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
             
             # 1. DB検索
             artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
-            
-            # 検索ログ
-            # if artist: st.write(f"  ✅ DBヒット: ID={artist.id}")
-            # else: st.write(f"  ❌ DBヒットせず")
-
             if not artist:
                 # スペース除去して再トライ
                 clean = name_str.replace(" ", "").replace("　", "")
-                if clean: 
-                    artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
-                    # if artist: st.write(f"  ✅ あいまい検索でヒット: ID={artist.id}")
+                if clean: artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
 
             if artist:
+                # ★ログ: DBヒット確認
+                # st.write(f"  ✅ DB Hit: {name_str} -> {artist.image_filename}")
+                
                 if artist.image_filename:
                     # 2. URL取得
                     url = get_image_url(artist.image_filename)
-                    # st.write(f"  🔗 画像URL: {url}") # ログ出し
+                    
+                    # ★ログ: URL確認
+                    print(f"[{name_str}] URL: {url}")
+                    # st.write(f"    🔗 URL: {url}")
 
                     if url:
                         # 3. 画像読み込み
@@ -131,30 +130,27 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
                             # 成功！画像を貼り付け
                             img_fitted = ImageOps.fit(img, (SINGLE_COL_WIDTH, ROW_HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
                             canvas.paste(img_fitted, (int(base_x), int(base_y)))
-                            # st.write("  ✨ 画像貼り付け成功！")
                         else:
                             # URLはあるが読み込めない (404, 権限エラー)
                             draw_debug_msg(draw, "Load Error", base_x+10, base_y, "red")
+                            # どんなURLだったか書き込む
                             short_url = url.split('/')[-1][:10] + "..."
                             draw_debug_msg(draw, short_url, base_x+10, base_y+30, "yellow")
-                            # st.error(f"  ⚠️ 画像ダウンロード失敗: {url}")
                     else:
                         draw_debug_msg(draw, "URL None", base_x+10, base_y, "orange")
-                        # st.warning("  ⚠️ URL生成失敗")
                 else:
                     # DBにあるがファイル名がNULL
                     # draw_debug_msg(draw, "No File", base_x+10, base_y, "gray")
-                    # st.info("  ℹ️ 画像ファイル名が未登録(NULL)")
                     pass
             else:
                 # DBにアーティストが見つからない
                 draw_debug_msg(draw, "DB Not Found", base_x+10, base_y, "magenta")
-                # st.warning(f"  ❓ DBに見つかりません: {name_str}")
+                # st.write(f"  ❌ DB Not Found: {name_str}")
                 
         except Exception as e:
             print(f"Draw Error: {e}")
             draw_debug_msg(draw, "Sys Error", base_x+10, base_y, "red")
-            st.error(f"  🔥 システムエラー: {e}")
+            st.error(f"Draw Error ({name_str}): {e}")
 
     # 背景(半透明黒) - 画像の上に重ねる
     draw.rectangle([(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], fill=COLOR_ROW_BG)
