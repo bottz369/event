@@ -72,7 +72,6 @@ def create_flyer_image_shadow(
     # 3. レイアウト計算 (シミュレーション)
     # --------------------------------------------------------------------------------
     
-    # ロゴの高さ計算
     current_y = int(H * 0.03)
     logo_img_obj = load_image_from_source(logo_source)
     if logo_img_obj:
@@ -84,7 +83,6 @@ def create_flyer_image_shadow(
     current_sim_y = header_start_y
     
     # 日付 (シミュレーション)
-    # ★修正: 日本語が含まれる場合は、ここで明示的にフォントパスを切り替える
     date_str = str(date_text)
     use_font_date = fallback_font_path if contains_japanese(date_str) and fallback_font_path else s_date["font_path"]
     
@@ -229,7 +227,7 @@ def create_flyer_image_shadow(
         footer_lines.append({"text": txt, "style": s_ticket, "gap": gap})
         is_first = False
 
-    # フッター高さ計算 (安全策付き)
+    # フッター高さ計算
     ft_h = int(H * 0.05)
     processed_footer = []
     
@@ -258,7 +256,7 @@ def create_flyer_image_shadow(
     for item in footer_lines:
         has_jp = contains_japanese(item["text"])
         
-        # ★修正: 計算時も日本語判定を行う
+        # 計算時も日本語判定
         if item["style"] == s_ticket:
             u_font = f_fb_ticket if has_jp else f_ticket_obj
         else:
@@ -278,8 +276,7 @@ def create_flyer_image_shadow(
     for item in reversed(processed_footer):
         st_obj = item["style"]
         
-        # ★重要修正: ここでフォントパスを切り替える！
-        # これにより、日本語フォントでも st_obj["size"] が適用される
+        # ★重要修正: 日本語が含まれる場合、フォントパスを強制的に補助フォントに切り替える
         use_font_path = st_obj["font_path"]
         if contains_japanese(item["text"]) and fallback_font_path:
             use_font_path = fallback_font_path
