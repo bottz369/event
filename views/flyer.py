@@ -102,11 +102,13 @@ def render_flyer_editor(project_id):
     init_s("flyer_logo_pos_x", 0.0)
     init_s("flyer_logo_pos_y", 0.0)
 
-    # サイズ設定 (Grid / TT)
+    # サイズ・位置設定 (Grid / TT)
     init_s("flyer_grid_scale_w", 95)
     init_s("flyer_grid_scale_h", 100)
+    init_s("flyer_grid_pos_y", 0)   # ★追加: Grid Y位置
     init_s("flyer_tt_scale_w", 95)
     init_s("flyer_tt_scale_h", 100)
+    init_s("flyer_tt_pos_y", 0)     # ★追加: TT Y位置
     init_s("flyer_grid_link", True) # 縦横比リンク用
     init_s("flyer_tt_link", True)
 
@@ -230,8 +232,8 @@ def render_flyer_editor(project_id):
                 else: st.info("フォントが見つかりません")
 
         with st.expander("📐 コンテンツ・余白調整", expanded=False):
-            st.markdown("**メイン画像サイズ**")
-            t_sz1, t_sz2 = st.tabs(["グリッド画像サイズ", "TT画像サイズ"])
+            st.markdown("**メイン画像サイズ・位置**")
+            t_sz1, t_sz2 = st.tabs(["グリッド画像", "TT画像"])
             
             # --- Grid ---
             with t_sz1:
@@ -244,6 +246,9 @@ def render_flyer_editor(project_id):
                     st.session_state.flyer_grid_scale_h = new_w
                 with c2:
                     st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
+                
+                # ★追加: Grid Y位置スライダー
+                st.slider("上下位置調整 (Y)", -500, 500, step=10, key="flyer_grid_pos_y", help="グリッド画像の表示位置を上下に調整します")
 
             # --- TT ---
             with t_sz2:
@@ -256,6 +261,9 @@ def render_flyer_editor(project_id):
                     st.session_state.flyer_tt_scale_h = new_w
                 with c2:
                     st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
+                
+                # ★追加: TT Y位置スライダー
+                st.slider("上下位置調整 (Y)", -500, 500, step=10, key="flyer_tt_pos_y", help="タイムテーブル画像の表示位置を上下に調整します")
 
             st.markdown("---")
             st.markdown("**間隔設定**")
@@ -263,7 +271,6 @@ def render_flyer_editor(project_id):
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
             st.slider("備考行間", 0, 100, step=1, key="flyer_note_gap")
-            # ★追加: フッター全体位置調整
             st.slider("フッターエリア位置 (Y移動)", -200, 200, step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
@@ -277,10 +284,13 @@ def render_flyer_editor(project_id):
             # Session State から保存用辞書を作成
             save_data = {}
             # 基本設定
-            base_keys = ["bg_id", "logo_id", "date_format", "logo_scale", "logo_pos_x", "logo_pos_y",
-                         "grid_scale_w", "grid_scale_h", "tt_scale_w", "tt_scale_h",
-                         "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
-                         "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment"]
+            base_keys = [
+                "bg_id", "logo_id", "date_format", "logo_scale", "logo_pos_x", "logo_pos_y",
+                "grid_scale_w", "grid_scale_h", "grid_pos_y",  # ★追加
+                "tt_scale_w", "tt_scale_h", "tt_pos_y",        # ★追加
+                "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
+                "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment"
+            ]
             for k in base_keys:
                 save_data[k] = st.session_state.get(f"flyer_{k}")
             
@@ -336,6 +346,7 @@ def render_flyer_editor(project_id):
                     s_grid = styles.copy()
                     s_grid["content_scale_w"] = st.session_state.flyer_grid_scale_w
                     s_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
+                    s_grid["content_pos_y"] = st.session_state.flyer_grid_pos_y  # ★追加: Y位置を渡す
                     
                     st.session_state.flyer_result_grid = create_flyer_image_shadow(
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
@@ -354,6 +365,7 @@ def render_flyer_editor(project_id):
                     s_tt = styles.copy()
                     s_tt["content_scale_w"] = st.session_state.flyer_tt_scale_w
                     s_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
+                    s_tt["content_pos_y"] = st.session_state.flyer_tt_pos_y  # ★追加: Y位置を渡す
                     
                     st.session_state.flyer_result_tt = create_flyer_image_shadow(
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
