@@ -124,14 +124,11 @@ def get_circled_number(n):
     else: return f"({n})"
 
 def generate_event_summary_text_from_proj(proj, tickets, notes):
-    """
-    プロジェクト情報から告知用テキストを生成する
-    """
     try:
         title = proj.title or ""
         date_val = proj.event_date
         venue = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
-        url = getattr(proj, "url", "") or "" # カラムがあれば
+        url = getattr(proj, "url", "") or "" 
         
         date_str = ""
         if date_val:
@@ -151,7 +148,6 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
         if url: text += f"\n {url}"
         text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
 
-        # チケット
         text += "\n\n■チケット"
         if tickets:
             for t in tickets:
@@ -164,14 +160,12 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
         else:
             text += "\n(情報なし)"
 
-        # 備考
         if notes:
             text += "\n\n<備考>"
             for n in notes:
                 if n and str(n).strip():
                     text += f"\n※{str(n).strip()}"
 
-        # 出演者
         if proj.data_json:
             try:
                 data = json.loads(proj.data_json)
@@ -188,7 +182,6 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
                         text += f"\n{c_num}{a_name}"
             except: pass
 
-        # 自由記述
         if getattr(proj, "free_text_json", None):
             try:
                 free_list = json.loads(proj.free_text_json)
@@ -204,9 +197,6 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
         return f"テキスト生成エラー: {e}"
 
 def generate_timetable_csv_string(proj):
-    """
-    タイムテーブルデータをCSV文字列として生成
-    """
     if not proj.data_json: return ""
     try:
         data = json.loads(proj.data_json)
@@ -332,15 +322,17 @@ def draw_text_with_shadow(base_img, text, x, y, font, font_size_px, max_width, f
     return text_h
 
 # --- ★カスタム時間描画 (三角形対応) ---
-def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
-                  shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
-                  tri_visible=True, tri_scale=1.0, tri_color=None):
+def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
+                          shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
+                          tri_visible=True, tri_scale=1.0, tri_color=None,
+                          alignment="right", fixed_label_w=0):
     
     fallback_font = font
     if fallback_font_path and os.path.exists(fallback_font_path):
         try: fallback_font = ImageFont.truetype(fallback_font_path, int(font_size_px))
         except: pass
 
+    # 計測
     dummy = ImageDraw.Draw(Image.new("RGBA", (1,1)))
     w_label, h_label = draw_text_mixed(dummy, (0,0), label, font, fallback_font, fill_color)
     w_time, h_time = draw_text_mixed(dummy, (0,0), time_str, font, fallback_font, fill_color)
@@ -349,11 +341,20 @@ def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width
     tri_w = tri_h * 0.8
     tri_padding = font_size_px * 0.3
     
-    total_w_content = w_label + w_time
-    if tri_visible:
-        total_w_content += tri_w + (tri_padding * 2)
+    if alignment == "triangle":
+        label_area_w = fixed_label_w
+        total_w_content = label_area_w
+        if tri_visible:
+            total_w_content += tri_w + (tri_padding * 2)
+        else:
+            total_w_content += tri_padding
+        total_w_content += w_time
     else:
-        total_w_content += tri_padding
+        total_w_content = w_label + w_time
+        if tri_visible:
+            total_w_content += tri_w + (tri_padding * 2)
+        else:
+            total_w_content += tri_padding
         
     margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
     canvas_w = int(total_w_content + margin * 2)
@@ -365,9 +366,14 @@ def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width
     cur_x = margin
     draw_y = margin
     
-    # Label
-    draw_text_mixed(draw, (cur_x, draw_y), label, font, fallback_font, fill_color)
-    cur_x += w_label
+    # Draw
+    if alignment == "triangle":
+        label_draw_x = cur_x + (fixed_label_w - w_label)
+        draw_text_mixed(draw, (label_draw_x, draw_y), label, font, fallback_font, fill_color)
+        cur_x += fixed_label_w
+    else:
+        draw_text_mixed(draw, (cur_x, draw_y), label, font, fallback_font, fill_color)
+        cur_x += w_label
     
     # Triangle
     if tri_visible:
@@ -397,37 +403,19 @@ def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width
         
     final_layer.paste(txt_img, (0, 0), txt_img)
     
-    paste_x = x - canvas_w + margin
+    # Position
+    paste_x = x
     paste_y = y - margin
+    
+    if alignment == "right" or alignment == "triangle":
+        paste_x = x - canvas_w + margin
+    elif alignment == "center":
+        paste_x = x - (canvas_w // 2) + margin
+    else:
+        paste_x = x - margin
     
     base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
     return max(h_label, h_time)
-
-# ==========================================
-# 2. UI コンポーネント
-# ==========================================
-
-def render_visual_selector(label, assets, key_prefix, current_id, allow_none=False):
-    st.markdown(f"**{label}**")
-    if allow_none:
-        is_none = (not current_id or current_id == 0)
-        if st.button(f"🚫 {label}なし", key=f"btn_none_{key_prefix}", type="primary" if is_none else "secondary"):
-            st.session_state[key_prefix] = 0
-            st.rerun()
-
-    if not assets:
-        st.info("画像が見つかりません。")
-        return
-
-    cols = st.columns(4)
-    for i, asset in enumerate(assets):
-        with cols[i % 4]:
-            img_url = get_image_url(asset.image_filename)
-            st.image(img_url, use_container_width=True) 
-            is_sel = (asset.id == current_id)
-            if st.button("選択", key=f"btn_{key_prefix}_{asset.id}", type="primary" if is_sel else "secondary", use_container_width=True):
-                st.session_state[key_prefix] = asset.id
-                st.rerun()
 
 # ==========================================
 # 3. フライヤー生成ロジック
@@ -462,7 +450,6 @@ def create_flyer_image_shadow(
     
     W, H = base_img.size
     
-    # スタイル取得
     def get_style(key, default_size=50, default_color="#FFFFFF"):
         f_name = styles.get(f"{key}_font", "keifont.ttf")
         f_size_val = styles.get(f"{key}_size", default_size)
@@ -502,7 +489,6 @@ def create_flyer_image_shadow(
         logo_pos_y = styles.get("logo_pos_y", 0)
         base_logo_w = int(W * 0.5 * logo_scale)
         logo_img = resize_image_to_width(logo_img, base_logo_w)
-        
         base_x = (W - logo_img.width) // 2
         base_y = current_y
         offset_x = int(W * (logo_pos_x / 100.0))
@@ -518,7 +504,6 @@ def create_flyer_image_shadow(
     left_max_w = int(W * 0.55)
     right_max_w = int(W * 0.35)
 
-    # 左側 (日付・会場)
     h_date = draw_text_with_shadow(
         base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
         s_date["font"], s_date["size"], left_max_w, s_date["color"], "la",
@@ -546,23 +531,42 @@ def create_flyer_image_shadow(
     tri_vis = styles.get("time_tri_visible", True)
     tri_scale = styles.get("time_tri_scale", 1.0)
     
+    # Alignment Logic
+    align_mode = styles.get("time_alignment", "right")
+    
+    fixed_label_w = 0
+    if align_mode == "triangle":
+        dummy = ImageDraw.Draw(Image.new("RGBA", (1,1)))
+        fb_font = s_time["font"]
+        w1, _ = draw_text_mixed(dummy, (0,0), "OPEN", s_time["font"], fb_font, (0,0,0))
+        w2, _ = draw_text_mixed(dummy, (0,0), "START", s_time["font"], fb_font, (0,0,0))
+        fixed_label_w = max(w1, w2)
+
+    base_time_x = right_x + s_time["pos_x"]
+    if align_mode == "left":
+        base_time_x = int(W * 0.6) + s_time["pos_x"]
+    elif align_mode == "center":
+        base_time_x = int(W * 0.775) + s_time["pos_x"]
+
     # OPEN
-    draw_time_row(
-        base_img, "OPEN", o_str, right_x + s_time["pos_x"], header_y + s_time["pos_y"],
+    draw_time_row_aligned(
+        base_img, "OPEN", o_str, base_time_x, header_y + s_time["pos_y"],
         s_time["font"], s_time["size"], right_max_w, s_time["color"],
         s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
         fallback_font_path,
-        tri_visible=tri_vis, tri_scale=tri_scale
+        tri_visible=tri_vis, tri_scale=tri_scale,
+        alignment=align_mode, fixed_label_w=fixed_label_w
     )
     
     # START
     start_y = header_y + line_h_time + time_line_gap
-    draw_time_row(
-        base_img, "START", s_str, right_x + s_time["pos_x"], start_y + s_time["pos_y"],
+    draw_time_row_aligned(
+        base_img, "START", s_str, base_time_x, start_y + s_time["pos_y"],
         s_time["font"], s_time["size"], right_max_w, s_time["color"],
         s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
         fallback_font_path,
-        tri_visible=tri_vis, tri_scale=tri_scale
+        tri_visible=tri_vis, tri_scale=tri_scale,
+        alignment=align_mode, fixed_label_w=fixed_label_w
     )
     
     right_bottom_y = start_y + line_h_time
@@ -624,8 +628,10 @@ def create_flyer_image_shadow(
     
     main_img = load_image_from_source(main_source)
     if main_img and available_h > 100:
+        # ★ここでサイズ設定をstylesから取得 (呼び出し元でGrid/TT用に切り替えられている)
         scale_w = styles.get("content_scale_w", 95) / 100.0
         scale_h = styles.get("content_scale_h", 100) / 100.0
+        
         target_w = int(W * scale_w)
         target_h = int(available_h * scale_h)
         
@@ -673,10 +679,22 @@ def render_flyer_editor(project_id):
     if "flyer_logo_pos_x" not in st.session_state: st.session_state.flyer_logo_pos_x = saved_config.get("logo_pos_x", 0.0)
     if "flyer_logo_pos_y" not in st.session_state: st.session_state.flyer_logo_pos_y = saved_config.get("logo_pos_y", 0.0)
 
-    # Resize & Gap Config
-    if "flyer_content_scale_w" not in st.session_state: st.session_state.flyer_content_scale_w = saved_config.get("content_scale_w", 95)
-    if "flyer_content_scale_h" not in st.session_state: st.session_state.flyer_content_scale_h = saved_config.get("content_scale_h", 100)
+    # Individual Size Configs (Grid / TT)
+    # Default to generic "content_scale_w" if individual not set, for backward compatibility
+    default_w = saved_config.get("content_scale_w", 95)
+    default_h = saved_config.get("content_scale_h", 100)
+
+    if "flyer_grid_scale_w" not in st.session_state: st.session_state.flyer_grid_scale_w = saved_config.get("grid_scale_w", default_w)
+    if "flyer_grid_scale_h" not in st.session_state: st.session_state.flyer_grid_scale_h = saved_config.get("grid_scale_h", default_h)
     
+    if "flyer_tt_scale_w" not in st.session_state: st.session_state.flyer_tt_scale_w = saved_config.get("tt_scale_w", default_w)
+    if "flyer_tt_scale_h" not in st.session_state: st.session_state.flyer_tt_scale_h = saved_config.get("tt_scale_h", default_h)
+
+    # Links
+    if "flyer_grid_link" not in st.session_state: st.session_state.flyer_grid_link = True
+    if "flyer_tt_link" not in st.session_state: st.session_state.flyer_tt_link = True
+
+    # Gaps
     if "flyer_date_venue_gap" not in st.session_state: st.session_state.flyer_date_venue_gap = saved_config.get("date_venue_gap", 10)
     if "flyer_ticket_gap" not in st.session_state: st.session_state.flyer_ticket_gap = saved_config.get("ticket_gap", 20)
     if "flyer_area_gap" not in st.session_state: st.session_state.flyer_area_gap = saved_config.get("area_gap", 40)
@@ -686,6 +704,7 @@ def render_flyer_editor(project_id):
     if "flyer_time_tri_visible" not in st.session_state: st.session_state.flyer_time_tri_visible = saved_config.get("time_tri_visible", True)
     if "flyer_time_tri_scale" not in st.session_state: st.session_state.flyer_time_tri_scale = saved_config.get("time_tri_scale", 1.0)
     if "flyer_time_line_gap" not in st.session_state: st.session_state.flyer_time_line_gap = saved_config.get("time_line_gap", 0)
+    if "flyer_time_alignment" not in st.session_state: st.session_state.flyer_time_alignment = saved_config.get("time_alignment", "right")
 
     # Fallback
     if "flyer_fallback_font" not in st.session_state:
@@ -698,7 +717,6 @@ def render_flyer_editor(project_id):
         def_size = 50
         def_color = "#FFFFFF"
         
-        # Init states
         if f"flyer_{key_prefix}_font" not in st.session_state: st.session_state[f"flyer_{key_prefix}_font"] = saved_config.get(f"{key_prefix}_font", def_font)
         if f"flyer_{key_prefix}_size" not in st.session_state: st.session_state[f"flyer_{key_prefix}_size"] = saved_config.get(f"{key_prefix}_size", def_size)
         if f"flyer_{key_prefix}_color" not in st.session_state: st.session_state[f"flyer_{key_prefix}_color"] = saved_config.get(f"{key_prefix}_color", def_color)
@@ -740,10 +758,20 @@ def render_flyer_editor(project_id):
             if key_prefix == "time":
                 st.markdown("---")
                 st.markdown("**時間表示オプション**")
-                st.checkbox("三角形(▶)を表示", key="flyer_time_tri_visible")
+                align_map = {"right":"右揃え", "center":"中央揃え", "left":"左揃え", "triangle":"▶揃え"}
+                c_al1, c_al2 = st.columns(2)
+                with c_al1:
+                    sel_align = st.selectbox("配置モード", list(align_map.keys()), 
+                                             format_func=lambda x: align_map[x],
+                                             index=list(align_map.keys()).index(st.session_state.flyer_time_alignment))
+                    st.session_state.flyer_time_alignment = sel_align
+                with c_al2:
+                    st.checkbox("三角形(▶)を表示", key="flyer_time_tri_visible")
+                
                 if st.session_state.flyer_time_tri_visible:
                     st.slider("三角形サイズ", 0.1, 2.0, step=0.1, key="flyer_time_tri_scale")
-                st.slider("OPEN/STARTの行間", 0, 100, step=1, key="flyer_time_line_gap")
+                
+                st.slider("OPEN/STARTの行間", -100, 100, step=1, key="flyer_time_line_gap")
 
     c_conf, c_prev = st.columns([1, 1.2])
 
@@ -783,12 +811,35 @@ def render_flyer_editor(project_id):
 
         with st.expander("📐 コンテンツ・余白調整", expanded=False):
             st.markdown("**メイン画像サイズ**")
-            c1, c2 = st.columns(2)
-            with c1: st.slider("横幅 (%)", 50, 100, step=1, key="flyer_content_scale_w")
-            with c2: st.slider("高さ (%)", 50, 100, step=1, key="flyer_content_scale_h")
             
+            t_sz1, t_sz2 = st.tabs(["グリッド画像サイズ", "TT画像サイズ"])
+            
+            # --- Grid ---
+            with t_sz1:
+                c_link1, c_link2 = st.columns([0.15, 0.85])
+                with c_link1: st.checkbox("🔗", key="flyer_grid_link", help="縦横比を固定")
+                c1, c2 = st.columns(2)
+                with c1:
+                    new_w = st.slider("横幅 (%)", 10, 150, step=1, key="flyer_grid_scale_w")
+                if st.session_state.flyer_grid_link:
+                    st.session_state.flyer_grid_scale_h = new_w
+                with c2:
+                    st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
+
+            # --- TT ---
+            with t_sz2:
+                c_link1, c_link2 = st.columns([0.15, 0.85])
+                with c_link1: st.checkbox("🔗", key="flyer_tt_link", help="縦横比を固定")
+                c1, c2 = st.columns(2)
+                with c1:
+                    new_w = st.slider("横幅 (%)", 10, 150, step=1, key="flyer_tt_scale_w")
+                if st.session_state.flyer_tt_link:
+                    st.session_state.flyer_tt_scale_h = new_w
+                with c2:
+                    st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
+
             st.markdown("---")
-            st.markdown("**フッター行間**")
+            st.markdown("**間隔設定**")
             st.slider("日付と会場の間隔", 0, 100, step=1, key="flyer_date_venue_gap")
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
@@ -809,8 +860,13 @@ def render_flyer_editor(project_id):
                 "logo_scale": st.session_state.flyer_logo_scale,
                 "logo_pos_x": st.session_state.flyer_logo_pos_x,
                 "logo_pos_y": st.session_state.flyer_logo_pos_y,
-                "content_scale_w": st.session_state.flyer_content_scale_w,
-                "content_scale_h": st.session_state.flyer_content_scale_h,
+                
+                # New scale params
+                "grid_scale_w": st.session_state.flyer_grid_scale_w,
+                "grid_scale_h": st.session_state.flyer_grid_scale_h,
+                "tt_scale_w": st.session_state.flyer_tt_scale_w,
+                "tt_scale_h": st.session_state.flyer_tt_scale_h,
+                
                 "date_venue_gap": st.session_state.flyer_date_venue_gap,
                 "ticket_gap": st.session_state.flyer_ticket_gap,
                 "area_gap": st.session_state.flyer_area_gap,
@@ -818,7 +874,8 @@ def render_flyer_editor(project_id):
                 "fallback_font": st.session_state.flyer_fallback_font,
                 "time_tri_visible": st.session_state.flyer_time_tri_visible,
                 "time_tri_scale": st.session_state.flyer_time_tri_scale,
-                "time_line_gap": st.session_state.flyer_time_line_gap
+                "time_line_gap": st.session_state.flyer_time_line_gap,
+                "time_alignment": st.session_state.flyer_time_alignment
             }
             target_keys = ["date", "venue", "time", "ticket_name", "ticket_note"]
             style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
@@ -834,7 +891,6 @@ def render_flyer_editor(project_id):
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
         
-        # ★ Fix: Define tickets and notes here
         tickets = []
         if getattr(proj, "tickets_json", None):
             try: tickets = json.loads(proj.tickets_json)
@@ -856,48 +912,65 @@ def render_flyer_editor(project_id):
                 asset = db.query(Asset).get(st.session_state.flyer_logo_id)
                 if asset: logo_url = get_image_url(asset.image_filename)
 
-            style_dict = {
+            # Common styles
+            base_style_dict = {
                 "logo_scale": st.session_state.flyer_logo_scale,
                 "logo_pos_x": st.session_state.flyer_logo_pos_x,
                 "logo_pos_y": st.session_state.flyer_logo_pos_y,
-                "content_scale_w": st.session_state.flyer_content_scale_w,
-                "content_scale_h": st.session_state.flyer_content_scale_h,
                 "date_venue_gap": st.session_state.flyer_date_venue_gap,
                 "ticket_gap": st.session_state.flyer_ticket_gap,
                 "area_gap": st.session_state.flyer_area_gap,
                 "note_gap": st.session_state.flyer_note_gap,
                 "time_tri_visible": st.session_state.flyer_time_tri_visible,
                 "time_tri_scale": st.session_state.flyer_time_tri_scale,
-                "time_line_gap": st.session_state.flyer_time_line_gap
+                "time_line_gap": st.session_state.flyer_time_line_gap,
+                "time_alignment": st.session_state.flyer_time_alignment
             }
             target_keys = ["date", "venue", "time", "ticket_name", "ticket_note"]
             style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
             for k in target_keys:
                 for p in style_params:
-                    style_dict[f"{k}_{p}"] = st.session_state.get(f"flyer_{k}_{p}")
+                    base_style_dict[f"{k}_{p}"] = st.session_state.get(f"flyer_{k}_{p}")
+
+            # Prepare separate dicts for Grid and TT
+            style_grid = base_style_dict.copy()
+            style_grid["content_scale_w"] = st.session_state.flyer_grid_scale_w
+            style_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
+            
+            style_tt = base_style_dict.copy()
+            style_tt["content_scale_w"] = st.session_state.flyer_tt_scale_w
+            style_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
 
             v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
             d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
-
             fallback_filename = st.session_state.get("flyer_fallback_font")
 
-            args = {
-                "db": db, 
-                "bg_source": bg_url, "logo_source": logo_url, "styles": style_dict,
-                "date_text": d_text, "venue_text": v_text,
-                "open_time": format_time_str(proj.open_time),
-                "start_time": format_time_str(proj.start_time),
-                "ticket_info_list": tickets, "common_notes_list": notes,
-                "system_fallback_filename": fallback_filename 
-            }
-
             with st.spinner("生成中..."):
+                # Generate Grid Flyer
                 grid_src = st.session_state.get("last_generated_grid_image")
                 if grid_src:
-                    st.session_state.flyer_result_grid = create_flyer_image_shadow(main_source=grid_src, **args)
+                    st.session_state.flyer_result_grid = create_flyer_image_shadow(
+                        db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
+                        styles=style_grid, # Use Grid specific styles
+                        date_text=d_text, venue_text=v_text,
+                        open_time=format_time_str(proj.open_time),
+                        start_time=format_time_str(proj.start_time),
+                        ticket_info_list=tickets, common_notes_list=notes,
+                        system_fallback_filename=fallback_filename 
+                    )
+                
+                # Generate TT Flyer
                 tt_src = st.session_state.get("last_generated_tt_image")
                 if tt_src:
-                    st.session_state.flyer_result_tt = create_flyer_image_shadow(main_source=tt_src, **args)
+                    st.session_state.flyer_result_tt = create_flyer_image_shadow(
+                        db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
+                        styles=style_tt, # Use TT specific styles
+                        date_text=d_text, venue_text=v_text,
+                        open_time=format_time_str(proj.open_time),
+                        start_time=format_time_str(proj.start_time),
+                        ticket_info_list=tickets, common_notes_list=notes,
+                        system_fallback_filename=fallback_filename 
+                    )
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
@@ -919,12 +992,11 @@ def render_flyer_editor(project_id):
                 st.download_button("DL (TT)", buf.getvalue(), "flyer_tt.png", "image/png", key="dl_tt_single")
             else: st.info("プレビューを生成してください")
             
-        # Tab 3: Event Overview Text (Changed from PDF)
+        # Tab 3: Event Overview Text
         with t3:
             st.markdown("### 告知用テキストプレビュー")
             summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
             st.text_area("内容", value=summary_text, height=300, disabled=True)
-            
             st.download_button(
                 label="📄 テキストをダウンロード",
                 data=summary_text,
@@ -955,25 +1027,22 @@ def render_flyer_editor(project_id):
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
-                            # 3. Event Outline Text (Always included)
+                            # 3. Event Outline Text
                             summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
                             zip_file.writestr("Event_Outline.txt", summary_text)
 
-                            # --- 素材データを含める場合 ---
+                            # --- Assets ---
                             if include_assets:
-                                # Source Grid (Transparent)
                                 if st.session_state.get("last_generated_grid_image"):
                                     buf = io.BytesIO()
                                     st.session_state.last_generated_grid_image.save(buf, format="PNG")
                                     zip_file.writestr("Source_Grid_Transparent.png", buf.getvalue())
                                 
-                                # Source TT (Transparent)
                                 if st.session_state.get("last_generated_tt_image"):
                                     buf = io.BytesIO()
                                     st.session_state.last_generated_tt_image.save(buf, format="PNG")
                                     zip_file.writestr("Source_Timetable_Transparent.png", buf.getvalue())
                                 
-                                # Timetable CSV
                                 csv_str = generate_timetable_csv_string(proj)
                                 if csv_str:
                                     zip_file.writestr("Timetable_Data.csv", csv_str)
