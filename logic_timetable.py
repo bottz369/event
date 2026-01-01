@@ -15,12 +15,9 @@ FONT_SIZE_TIME = 60
 FONT_SIZE_ARTIST = 60       
 FONT_SIZE_GOODS = 48        
 
-COLOR_BG_ALL = (0, 0, 0, 0)        # 全体の背景（透明）
-
-# ★修正: 画像がより見えやすいように、黒の濃さを下げました (160 -> 100)
-# 数値が小さいほど透明になります (0=透明, 255=真っ黒)
+COLOR_BG_ALL = (0, 0, 0, 0)        
 COLOR_ROW_BG = (0, 0, 0, 100)      
-COLOR_TEXT = (255, 255, 255, 255)  # 白文字
+COLOR_TEXT = (255, 255, 255, 255)  
 
 AREA_TIME_X = 20
 AREA_TIME_W = 320 
@@ -45,7 +42,6 @@ def load_image_from_url(url):
         response.raise_for_status()
         return Image.open(BytesIO(response.content)).convert("RGBA")
     except Exception as e:
-        print(f"Image DL Error: {e}")
         return None
 
 def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_font_size, align="center"):
@@ -74,6 +70,13 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
 
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
+# ★デバッグ用: 画像に文字を書く関数
+def draw_debug_info(draw, text, x, y, color="red"):
+    try:
+        font = get_font(None, 20)
+        draw.text((x, y), text, fill=color, font=font)
+    except: pass
+
 def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path):
     time_str = row_data[0]
     name_str = str(row_data[1]).strip()
@@ -81,71 +84,58 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path):
     goods_place = row_data[3]
 
     # ---------------------------------------------------------
-    # [レイヤー1] アーティスト写真描画 (遅延インポートで安全に実行)
+    # [レイヤー1] アーティスト写真描画 (診断モード)
     # ---------------------------------------------------------
-    # 特殊な行でなければ処理開始
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
         try:
-            # ★重要: ここでインポートすることで、循環参照エラーを回避します
             from database import SessionLocal, Artist, get_image_url
             
             db = SessionLocal()
             try:
-                # 1. まず完全一致で検索
-                artist = db.query(Artist).filter(Artist.name == name_str).first()
+                # 1. 検索 (削除フラグも考慮)
+                artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
                 
-                # ★追加: 見つからない場合、スペース(全角・半角)を除去して部分一致検索を試みる
+                # 見つからない場合、あいまい検索
                 if not artist:
                     clean_name = name_str.replace(" ", "").replace("　", "")
                     if clean_name:
-                        # 名前の中に clean_name が含まれるものを探す (簡易的なあいまい検索)
-                        artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean_name}%")).first()
-                        if artist:
-                            print(f"ℹ️ あいまい検索でヒット: '{name_str}' -> '{artist.name}'")
+                        artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean_name}%"), Artist.is_deleted == False).first()
 
                 if artist:
                     if artist.image_filename:
-                        # 2. URL取得
                         url = get_image_url(artist.image_filename)
                         if url:
-                            # 3. 画像ダウンロード
                             img = load_image_from_url(url)
                             if img:
-                                # 4. 切り抜いて貼り付け
-                                img_fitted = ImageOps.fit(
-                                    img, 
-                                    (SINGLE_COL_WIDTH, ROW_HEIGHT), 
-                                    method=Image.LANCZOS, 
-                                    centering=(0.5, 0.5)
-                                )
-                                # 座標を整数にして貼り付け
+                                # ★成功時
+                                img_fitted = ImageOps.fit(img, (SINGLE_COL_WIDTH, ROW_HEIGHT), method=Image.LANCZOS, centering=(0.5, 0.5))
                                 canvas.paste(img_fitted, (int(base_x), int(base_y)))
-                                print(f"✅ 画像貼り付け成功: {name_str}")
+                                # 青文字で成功を記録 (確認できたら消してください)
+                                # draw_debug_info(draw, "OK", base_x + 10, base_y + 10, "cyan")
                             else:
-                                print(f"⚠️ 画像DL失敗: {name_str} (URL: {url[:30]}...)")
+                                # 画像DL失敗
+                                draw_debug_info(draw, f"DL Error: {url[:30]}...", base_x + 10, base_y + 10, "red")
                         else:
-                            print(f"⚠️ 画像URL生成失敗: {name_str}")
+                            # URL生成失敗
+                            draw_debug_info(draw, "URL Gen Fail", base_x + 10, base_y + 10, "red")
                     else:
-                        print(f"ℹ️ 画像未登録: {name_str}")
+                        # DBにはいるが画像なし
+                        draw_debug_info(draw, "No Image File", base_x + 10, base_y + 10, "yellow")
                 else:
-                    print(f"⚠️ DB未登録: {name_str}")
+                    # DBにいない
+                    draw_debug_info(draw, f"Not Found: {name_str}", base_x + 10, base_y + 10, "magenta")
             finally:
                 db.close()
         except Exception as e:
-            # エラーが出ても止まらず、ログに出して黒背景処理へ進む
-            print(f"❌ 画像処理エラー ({name_str}): {e}")
-            pass
+            draw_debug_info(draw, f"Sys Error: {e}", base_x + 10, base_y + 10, "red")
 
     # ---------------------------------------------------------
-    # [レイヤー2] 行全体の背景（半透明の黒）- 常に描画
+    # [レイヤー2] 行全体の背景（半透明の黒）
     # ---------------------------------------------------------
-    draw.rectangle(
-        [(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], 
-        fill=COLOR_ROW_BG
-    )
+    draw.rectangle([(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], fill=COLOR_ROW_BG)
 
     # ---------------------------------------------------------
-    # [レイヤー3] テキスト情報 - 常に描画
+    # [レイヤー3] テキスト情報
     # ---------------------------------------------------------
     draw_centered_text(draw, time_str, base_x + AREA_TIME_X, base_y, AREA_TIME_W, ROW_HEIGHT, font_path, FONT_SIZE_TIME, align="left")
     draw_centered_text(draw, name_str, base_x + AREA_ARTIST_X, base_y, AREA_ARTIST_W, ROW_HEIGHT, font_path, FONT_SIZE_ARTIST, align="center")
@@ -169,23 +159,18 @@ def generate_timetable_image(timetable_data, font_path=None):
     half_idx = math.ceil(len(timetable_data) / 2)
     left_data = timetable_data[:half_idx]
     right_data = timetable_data[half_idx:]
-    
     rows_in_column = max(len(left_data), len(right_data))
     if rows_in_column == 0: rows_in_column = 1
     total_height = rows_in_column * (ROW_HEIGHT + ROW_MARGIN)
-    
     canvas = Image.new('RGBA', (WIDTH, total_height), COLOR_BG_ALL)
     draw = ImageDraw.Draw(canvas)
-
     y = 0
     for row in left_data:
         draw_one_row(draw, canvas, 0, y, row, font_path)
         y += (ROW_HEIGHT + ROW_MARGIN)
-
     right_col_start_x = SINGLE_COL_WIDTH + COLUMN_GAP
     y = 0 
     for row in right_data:
         draw_one_row(draw, canvas, right_col_start_x, y, row, font_path)
         y += (ROW_HEIGHT + ROW_MARGIN)
-
     return canvas
