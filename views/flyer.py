@@ -98,6 +98,7 @@ def render_flyer_editor(project_id):
     init_s("flyer_bg_id", 0)
     init_s("flyer_logo_id", 0)
     init_s("flyer_date_format", "EN")
+    init_s("flyer_sub_title", "")  # ★追加: サブタイトル
     init_s("flyer_logo_scale", 1.0)
     init_s("flyer_logo_pos_x", 0.0)
     init_s("flyer_logo_pos_y", 0.0)
@@ -105,11 +106,11 @@ def render_flyer_editor(project_id):
     # サイズ・位置設定 (Grid / TT)
     init_s("flyer_grid_scale_w", 95)
     init_s("flyer_grid_scale_h", 100)
-    init_s("flyer_grid_pos_y", 0)   # ★追加: Grid Y位置
+    init_s("flyer_grid_pos_y", 0)   
     init_s("flyer_tt_scale_w", 95)
     init_s("flyer_tt_scale_h", 100)
-    init_s("flyer_tt_pos_y", 0)     # ★追加: TT Y位置
-    init_s("flyer_grid_link", True) # 縦横比リンク用
+    init_s("flyer_tt_pos_y", 0)     
+    init_s("flyer_grid_link", True) 
     init_s("flyer_tt_link", True)
 
     # 余白・位置設定
@@ -211,6 +212,10 @@ def render_flyer_editor(project_id):
                 with c_l3: st.slider("Y位置", -100.0, 100.0, step=1.0, key="flyer_logo_pos_y")
             
             st.markdown("---")
+            # ★追加: サブタイトル入力欄
+            st.text_input("サブタイトル", key="flyer_sub_title", placeholder="例: 〇〇 Tour 2025 -Final-")
+
+            st.markdown("---")
             date_opts = ["EN (例: 2025.2.15.SUN)", "JP (例: 2025年2月15日 (日))"]
             
             # ラジオボタンの初期値設定
@@ -247,7 +252,6 @@ def render_flyer_editor(project_id):
                 with c2:
                     st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
                 
-                # ★追加: Grid Y位置スライダー
                 st.slider("上下位置調整 (Y)", -500, 500, step=10, key="flyer_grid_pos_y", help="グリッド画像の表示位置を上下に調整します")
 
             # --- TT ---
@@ -262,7 +266,6 @@ def render_flyer_editor(project_id):
                 with c2:
                     st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
                 
-                # ★追加: TT Y位置スライダー
                 st.slider("上下位置調整 (Y)", -500, 500, step=10, key="flyer_tt_pos_y", help="タイムテーブル画像の表示位置を上下に調整します")
 
             st.markdown("---")
@@ -274,6 +277,8 @@ def render_flyer_editor(project_id):
             st.slider("フッターエリア位置 (Y移動)", -200, 200, step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
+        # ★追加: サブタイトルのスタイルエディタ
+        render_style_editor("サブタイトル (Subtitle)", "subtitle")
         render_style_editor("日付 (DATE)", "date")
         render_style_editor("会場名 (VENUE)", "venue")
         render_style_editor("時間 (OPEN/START)", "time")
@@ -285,9 +290,10 @@ def render_flyer_editor(project_id):
             save_data = {}
             # 基本設定
             base_keys = [
-                "bg_id", "logo_id", "date_format", "logo_scale", "logo_pos_x", "logo_pos_y",
-                "grid_scale_w", "grid_scale_h", "grid_pos_y",  # ★追加
-                "tt_scale_w", "tt_scale_h", "tt_pos_y",        # ★追加
+                "bg_id", "logo_id", "date_format", "sub_title", # ★追加: sub_title
+                "logo_scale", "logo_pos_x", "logo_pos_y",
+                "grid_scale_w", "grid_scale_h", "grid_pos_y", 
+                "tt_scale_w", "tt_scale_h", "tt_pos_y",       
                 "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
                 "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment"
             ]
@@ -295,7 +301,8 @@ def render_flyer_editor(project_id):
                 save_data[k] = st.session_state.get(f"flyer_{k}")
             
             # スタイル設定
-            target_keys = ["date", "venue", "time", "ticket_name", "ticket_note"]
+            # ★追加: "subtitle" をターゲットに追加
+            target_keys = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
             style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
             for k in target_keys:
                 for p in style_params:
@@ -337,6 +344,9 @@ def render_flyer_editor(project_id):
             v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
             d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
             fallback_filename = st.session_state.get("flyer_fallback_font")
+            
+            # ★追加: サブタイトル取得
+            subtitle_text = st.session_state.get("flyer_sub_title", "")
 
             with st.spinner("生成中..."):
                 # 1. Generate Grid Flyer
@@ -346,12 +356,13 @@ def render_flyer_editor(project_id):
                     s_grid = styles.copy()
                     s_grid["content_scale_w"] = st.session_state.flyer_grid_scale_w
                     s_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
-                    s_grid["content_pos_y"] = st.session_state.flyer_grid_pos_y  # ★追加: Y位置を渡す
+                    s_grid["content_pos_y"] = st.session_state.flyer_grid_pos_y 
                     
                     st.session_state.flyer_result_grid = create_flyer_image_shadow(
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
                         styles=s_grid,
                         date_text=d_text, venue_text=v_text,
+                        subtitle_text=subtitle_text, # ★追加: 引数渡し
                         open_time=format_time_str(proj.open_time),
                         start_time=format_time_str(proj.start_time),
                         ticket_info_list=tickets, common_notes_list=notes,
@@ -365,12 +376,13 @@ def render_flyer_editor(project_id):
                     s_tt = styles.copy()
                     s_tt["content_scale_w"] = st.session_state.flyer_tt_scale_w
                     s_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
-                    s_tt["content_pos_y"] = st.session_state.flyer_tt_pos_y  # ★追加: Y位置を渡す
+                    s_tt["content_pos_y"] = st.session_state.flyer_tt_pos_y 
                     
                     st.session_state.flyer_result_tt = create_flyer_image_shadow(
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
                         styles=s_tt,
                         date_text=d_text, venue_text=v_text,
+                        subtitle_text=subtitle_text, # ★追加: 引数渡し
                         open_time=format_time_str(proj.open_time),
                         start_time=format_time_str(proj.start_time),
                         ticket_info_list=tickets, common_notes_list=notes,
