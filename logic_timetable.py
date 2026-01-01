@@ -5,10 +5,6 @@ import requests
 from io import BytesIO
 import streamlit as st
 
-# ★ここでインポートして、読み込めるかテストします
-# もしここでエラーが出るなら、database.py に問題があります
-from database import SessionLocal, Artist, get_image_url
-
 # ================= 設定エリア =================
 SINGLE_COL_WIDTH = 1450      
 COLUMN_GAP = 80             
@@ -20,8 +16,13 @@ FONT_SIZE_TIME = 60
 FONT_SIZE_ARTIST = 60       
 FONT_SIZE_GOODS = 48        
 
-COLOR_BG_ALL = (0, 0, 0, 0)        
-COLOR_ROW_BG = (0, 0, 0, 100)      # 背景の濃さ
+# 全体の背景色（ダークグレー）
+COLOR_BG_ALL = (50, 50, 50, 255)        
+
+# ★変更点: 行の背景色を「完全透明 (0,0,0,0)」に設定しました
+# これで画像の上に何も被さらなくなります
+COLOR_ROW_BG = (0, 0, 0, 0)      
+
 COLOR_TEXT = (255, 255, 255, 255)   
 
 AREA_TIME_X = 20
@@ -47,16 +48,20 @@ def get_font(path, size):
     return ImageFont.load_default()
 
 def load_image(path_or_url):
+    """URLまたはローカルパスから画像を読み込む"""
     if not path_or_url: return None
-    # タイムアウト付きでダウンロード
-    if path_or_url.startswith("http"):
-        response = requests.get(path_or_url, timeout=5)
-        response.raise_for_status() # 404ならここでエラーにする
-        return Image.open(BytesIO(response.content)).convert("RGBA")
-    
-    if os.path.exists(path_or_url):
-            return Image.open(path_or_url).convert("RGBA")
-    return None
+    try:
+        if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+            response = requests.get(path_or_url, timeout=10)
+            if response.status_code != 200:
+                return None
+            return Image.open(BytesIO(response.content)).convert("RGBA")
+        
+        if os.path.exists(path_or_url):
+             return Image.open(path_or_url).convert("RGBA")
+        return None
+    except Exception:
+        return None
 
 def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_font_size, align="center"):
     text = str(text).strip()
@@ -79,49 +84,64 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     else: final_x = box_x
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
+def draw_debug_msg(draw, text, x, y, color="red"):
+    """デバッグメッセージを書き込む"""
+    try:
+        font = get_font(None, 30)
+        # 背景をつけて読みやすくする
+        bbox = draw.textbbox((x, y), text, font=font)
+        draw.rectangle(bbox, fill="black")
+        draw.text((x, y), text, fill=color, font=font)
+    except: pass
+
 def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
     # 特殊行以外のみ画像処理
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
-        
-        # ★エラーハンドリングなしで実行（エラーならアプリを落として原因を表示）
-        # 1. DB検索
-        artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
-        
-        # ヒットしなければあいまい検索
-        if not artist:
-            clean = name_str.replace(" ", "").replace("　", "")
-            if clean: artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
-
-        if artist:
-            # st.write(f"✅ DB発見: {name_str} (File: {artist.image_filename})") # 動作確認用
+        try:
+            from database import Artist, get_image_url
             
-            if artist.image_filename:
-                # 2. URL取得
-                url = get_image_url(artist.image_filename)
-                
-                if url:
-                    # 3. 画像読み込み
-                    try:
+            # 1. DB検索
+            artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
+            if not artist:
+                clean = name_str.replace(" ", "").replace("　", "")
+                if clean: artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
+
+            if artist:
+                if artist.image_filename:
+                    # 2. URL取得
+                    url = get_image_url(artist.image_filename)
+                    if url:
+                        # 3. 画像読み込み
                         img = load_image(url)
                         if img:
+                            # ★成功: 画像を貼り付け
                             img_fitted = ImageOps.fit(img, (SINGLE_COL_WIDTH, ROW_HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
                             canvas.paste(img_fitted, (int(base_x), int(base_y)))
+                            
+                            # 確認用: 成功マーク
+                            draw_debug_msg(draw, "OK", base_x + 10, base_y + 10, "#00FF00") 
                         else:
-                            st.warning(f"⚠️ 画像読み込み失敗 (中身なし): {url}")
-                    except Exception as e:
-                        st.error(f"❌ 画像ダウンロードエラー [{name_str}]: {e}")
+                            draw_debug_msg(draw, "LOAD ERROR", base_x + 10, base_y + 10, "red")
+                    else:
+                        draw_debug_msg(draw, "URL ERROR", base_x + 10, base_y + 10, "orange")
                 else:
-                    st.warning(f"⚠️ URL生成失敗: {name_str}")
-        else:
-            # DBにない場合（これは正常なケースもありうるのでエラーにはしない）
-            # st.info(f"ℹ️ DB未登録: {name_str}")
-            pass
+                    # DBにはあるがファイル名がない (正常)
+                    pass
+            else:
+                # DBにない
+                draw_debug_msg(draw, "DB MISSING", base_x + 10, base_y + 10, "magenta")
+                
+        except Exception as e:
+            print(f"Error: {e}")
+            draw_debug_msg(draw, "SYS ERROR", base_x + 10, base_y + 10, "red")
 
-    # 背景(半透明黒) - 画像の上に重ねる
-    draw.rectangle([(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], fill=COLOR_ROW_BG)
+    # 背景(半透明黒)の描画
+    # ★今回は透明度100%(COLOR_ROW_BG = (0,0,0,0))なので何も描画されません
+    if COLOR_ROW_BG[3] > 0:
+        draw.rectangle([(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], fill=COLOR_ROW_BG)
 
     # テキスト描画
     draw_centered_text(draw, time_str, base_x + AREA_TIME_X, base_y, AREA_TIME_W, ROW_HEIGHT, font_path, FONT_SIZE_TIME, align="left")
@@ -144,9 +164,9 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
 def generate_timetable_image(timetable_data, font_path=None):
     if not timetable_data: return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (0,0,0,255))
     
-    st.write("🔄 画像生成を開始します...")
+    st.write("🔄 画像生成プロセス実行中 (透過テスト)...")
     
-    # DBセッション作成
+    from database import SessionLocal
     db = SessionLocal()
 
     try:
@@ -158,6 +178,7 @@ def generate_timetable_image(timetable_data, font_path=None):
         if rows_in_column == 0: rows_in_column = 1
         total_height = rows_in_column * (ROW_HEIGHT + ROW_MARGIN)
         
+        # 背景色: 全体はダークグレー
         canvas = Image.new('RGBA', (WIDTH, total_height), COLOR_BG_ALL)
         draw = ImageDraw.Draw(canvas)
 
@@ -172,8 +193,11 @@ def generate_timetable_image(timetable_data, font_path=None):
             draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db)
             y += (ROW_HEIGHT + ROW_MARGIN)
             
-        st.success("✅ 画像生成完了")
+        st.write("✅ 生成完了")
         return canvas
 
+    except Exception as e:
+        st.error(f"全体エラー: {e}")
+        return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (255,0,0,255))
     finally:
         db.close()
