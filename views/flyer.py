@@ -6,7 +6,6 @@ import requests
 import json
 import zipfile
 import pandas as pd
-import math
 from datetime import datetime, date
 
 from constants import FONT_DIR
@@ -227,14 +226,7 @@ def generate_timetable_csv_string(proj):
 # ==========================================
 
 def render_visual_selector(label, options, key_name, current_value, allow_none=False):
-    """
-    画像付きの選択肢を表示するヘルパー関数
-    options: 選択肢のリスト（オブジェクトに .id, .name, .image_filename がある想定）
-    allow_none: Trueの場合「選択なし」ボタンを表示
-    """
     st.markdown(f"**{label}**")
-    
-    # 選択なしボタン (allow_noneがTrueの場合)
     if allow_none:
         is_none = (not current_value or current_value == 0)
         if st.button(f"🚫 {label}なし", key=f"btn_none_{key_name}", type="primary" if is_none else "secondary"):
@@ -245,13 +237,10 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
         st.info("選択肢がありません")
         return
 
-    # 4列のグリッドで表示
     cols = st.columns(4)
     for i, opt in enumerate(options):
         with cols[i % 4]:
             is_selected = (opt.id == current_value)
-            
-            # 画像の表示
             img_url = None
             if hasattr(opt, "image_filename") and opt.image_filename:
                 img_url = get_image_url(opt.image_filename)
@@ -261,7 +250,6 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
             else:
                 st.markdown(f"🔲 {opt.name}")
 
-            # 選択ボタン
             if is_selected:
                 st.button("✅ 選択中", key=f"btn_{key_name}_{opt.id}", disabled=True, use_container_width=True)
             else:
@@ -628,13 +616,15 @@ def create_flyer_image_shadow(
     note_gap_px = int(styles.get("note_gap", 15) * (W / 1200.0))
     ticket_gap_px = int(styles.get("ticket_gap", 20) * (W / 1200.0))
     area_gap_px = int(styles.get("area_gap", 40) * (W / 1200.0))
+    # ★追加: フッター全体Y位置
+    footer_pos_y_px = int(styles.get("footer_pos_y", 0) * (W / 1200.0))
 
-    # Notes
+    # 1. Notes
     for note in reversed(common_notes_list):
         if note and str(note).strip():
             footer_lines.append({"text": str(note).strip(), "style": s_note, "gap": note_gap_px})
     
-    # Tickets
+    # 2. Tickets
     is_first_ticket = True
     for ticket in reversed(ticket_info_list):
         name = ticket.get('name', '')
@@ -659,7 +649,9 @@ def create_flyer_image_shadow(
         processed_footer.append({**item, "h": h})
         footer_h += h + item["gap"]
 
-    footer_start_y = H - footer_h
+    # ★修正: footer_pos_y_px を加算して位置調整
+    footer_start_y = H - footer_h + footer_pos_y_px
+    
     curr_fy = footer_start_y
     for item in reversed(processed_footer):
         st_obj = item["style"]
@@ -680,7 +672,6 @@ def create_flyer_image_shadow(
     if main_img and available_h > 100:
         scale_w = styles.get("content_scale_w", 95) / 100.0
         scale_h = styles.get("content_scale_h", 100) / 100.0
-        
         target_w = int(W * scale_w)
         target_h = int(available_h * scale_h)
         
@@ -747,6 +738,9 @@ def render_flyer_editor(project_id):
     if "flyer_ticket_gap" not in st.session_state: st.session_state.flyer_ticket_gap = saved_config.get("ticket_gap", 20)
     if "flyer_area_gap" not in st.session_state: st.session_state.flyer_area_gap = saved_config.get("area_gap", 40)
     if "flyer_note_gap" not in st.session_state: st.session_state.flyer_note_gap = saved_config.get("note_gap", 15)
+    
+    # ★追加: フッター全体Y位置
+    if "flyer_footer_pos_y" not in st.session_state: st.session_state.flyer_footer_pos_y = saved_config.get("footer_pos_y", 0)
     
     # Time settings
     if "flyer_time_tri_visible" not in st.session_state: st.session_state.flyer_time_tri_visible = saved_config.get("time_tri_visible", True)
@@ -893,6 +887,8 @@ def render_flyer_editor(project_id):
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
             st.slider("備考行間", 0, 100, step=1, key="flyer_note_gap")
+            # ★追加: フッター全体位置調整
+            st.slider("フッターエリア位置 (Y移動)", -200, 200, step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
         render_style_editor_full("日付 (DATE)", "date")
@@ -910,7 +906,6 @@ def render_flyer_editor(project_id):
                 "logo_pos_x": st.session_state.flyer_logo_pos_x,
                 "logo_pos_y": st.session_state.flyer_logo_pos_y,
                 
-                # New scale params
                 "grid_scale_w": st.session_state.flyer_grid_scale_w,
                 "grid_scale_h": st.session_state.flyer_grid_scale_h,
                 "tt_scale_w": st.session_state.flyer_tt_scale_w,
@@ -920,6 +915,8 @@ def render_flyer_editor(project_id):
                 "ticket_gap": st.session_state.flyer_ticket_gap,
                 "area_gap": st.session_state.flyer_area_gap,
                 "note_gap": st.session_state.flyer_note_gap,
+                "footer_pos_y": st.session_state.flyer_footer_pos_y, # 保存
+                
                 "fallback_font": st.session_state.flyer_fallback_font,
                 "time_tri_visible": st.session_state.flyer_time_tri_visible,
                 "time_tri_scale": st.session_state.flyer_time_tri_scale,
@@ -940,7 +937,6 @@ def render_flyer_editor(project_id):
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
         
-        # Define tickets and notes here
         tickets = []
         if getattr(proj, "tickets_json", None):
             try: tickets = json.loads(proj.tickets_json)
@@ -971,6 +967,7 @@ def render_flyer_editor(project_id):
                 "ticket_gap": st.session_state.flyer_ticket_gap,
                 "area_gap": st.session_state.flyer_area_gap,
                 "note_gap": st.session_state.flyer_note_gap,
+                "footer_pos_y": st.session_state.flyer_footer_pos_y,
                 "time_tri_visible": st.session_state.flyer_time_tri_visible,
                 "time_tri_scale": st.session_state.flyer_time_tri_scale,
                 "time_line_gap": st.session_state.flyer_time_line_gap,
