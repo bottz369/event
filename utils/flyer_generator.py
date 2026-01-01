@@ -70,14 +70,12 @@ def create_flyer_image_shadow(
 
     # --------------------------------------------------------------------------------
     # 3. レイアウト計算 (シミュレーション)
-    # テキストが実際にどのくらいの高さになるかを計算し、アー写の開始位置を決める
     # --------------------------------------------------------------------------------
     
     # ロゴの高さ計算
     current_y = int(H * 0.03)
     logo_img_obj = load_image_from_source(logo_source)
     if logo_img_obj:
-        # 実際にリサイズした場合の高さを計算
         logo_w_scaled = int(W * 0.5 * styles.get("logo_scale", 1.0))
         logo_h_scaled = int(logo_img_obj.height * (logo_w_scaled / logo_img_obj.width))
         current_y += logo_h_scaled + int(H * styles.get("logo_pos_y", 0) / 100.0)
@@ -85,45 +83,42 @@ def create_flyer_image_shadow(
     header_start_y = current_y + int(H * 0.02)
     current_sim_y = header_start_y
     
-    # 日付の高さシミュレーション (measure_only=True)
-    # ★修正: 日本語判定してフォントを切り替える
-    use_font_date = fallback_font_path if contains_japanese(str(date_text)) and fallback_font_path else s_date["font_path"]
+    # 日付 (シミュレーション)
+    # ★修正: 日本語が含まれる場合は、ここで明示的にフォントパスを切り替える
+    date_str = str(date_text)
+    use_font_date = fallback_font_path if contains_japanese(date_str) and fallback_font_path else s_date["font_path"]
+    
     h_date_sim = draw_text_with_shadow(
-        None, str(date_text), 0, 0, use_font_date, s_date["size"], int(W*0.55), "#000",
+        None, date_str, 0, 0, use_font_date, s_date["size"], int(W*0.55), "#000",
         fallback_font_path=fallback_font_path, measure_only=True
     )
     current_sim_y += h_date_sim + s_date["pos_y"]
     
-    # 会場の高さシミュレーション
+    # 会場 (シミュレーション)
     current_sim_y += int(styles.get("date_venue_gap", 10) * scale_f)
-    # ★修正: 日本語判定
-    use_font_venue = fallback_font_path if contains_japanese(str(venue_text)) and fallback_font_path else s_venue["font_path"]
+    venue_str = str(venue_text)
+    use_font_venue = fallback_font_path if contains_japanese(venue_str) and fallback_font_path else s_venue["font_path"]
+    
     h_venue_sim = draw_text_with_shadow(
-        None, str(venue_text), 0, 0, use_font_venue, s_venue["size"], int(W*0.55), "#000",
+        None, venue_str, 0, 0, use_font_venue, s_venue["size"], int(W*0.55), "#000",
         fallback_font_path=fallback_font_path, measure_only=True
     )
     current_sim_y += h_venue_sim + s_venue["pos_y"]
     
-    # 時間エリアの高さ (OPEN/START 2行分)
-    # 時間は通常右側だが、要素被り防止のため「最も下に来る要素」として考慮する
+    # 時間エリア
     time_line_gap = int(styles.get("time_line_gap", 0) * scale_f)
-    h_time_row_sim = int(s_time["size"] * 1.5) # 概算
-    
-    # ヘッダー情報の最下部座標を決定
+    h_time_row_sim = int(s_time["size"] * 1.5)
     header_bottom_y = max(current_sim_y, header_start_y + (h_time_row_sim * 2 + time_line_gap) + s_time["pos_y"])
     
     # --------------------------------------------------------------------------------
     # 4. メイン画像 (アー写) の描画
-    # 「背景」の直後、「テキスト」の前に描画することで背面配置を実現
-    # 位置は先ほど計算した header_bottom_y の下から開始
     # --------------------------------------------------------------------------------
     
-    available_top = header_bottom_y + int(H * 0.02) # 少しマージン
-    available_bottom = H - int(H * 0.25) # フッター領域として下部25%を確保(概算)
+    available_top = header_bottom_y + int(H * 0.02)
+    available_bottom = H - int(H * 0.25)
     available_h = available_bottom - available_top
     
     main_img = load_image_from_source(main_source)
-    # 表示領域が十分にある場合のみ描画
     if main_img and available_h > 100:
         target_w = int(W * styles.get("content_scale_w", 95) / 100.0)
         target_h = int(available_h * styles.get("content_scale_h", 100) / 100.0)
@@ -132,7 +127,6 @@ def create_flyer_image_shadow(
         if main_resized:
             paste_x = (W - main_resized.width) // 2
             paste_y = available_top + (available_h - main_resized.height) // 2
-            # ★描画実行
             base_img.paste(main_resized, (paste_x, int(paste_y)), main_resized)
 
     # --------------------------------------------------------------------------------
@@ -150,17 +144,15 @@ def create_flyer_image_shadow(
         current_y = ly + logo_img.height
 
     header_y = current_y + int(H * 0.02)
-    
-    # B. ヘッダー情報
     padding_x = int(W * 0.05)
     left_x = padding_x
     right_x = W - padding_x
     left_max_w = int(W * 0.55)
     right_max_w = int(W * 0.35)
 
-    # 日付 (実際に描画)
+    # 日付 (描画)
     h_date = draw_text_with_shadow(
-        base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
+        base_img, date_str, left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
         use_font_date, s_date["size"], left_max_w, s_date["color"], "la",
         s_date["shadow_on"], s_date["shadow_color"], s_date["shadow_blur"], s_date["shadow_off_x"], s_date["shadow_off_y"],
         fallback_font_path=fallback_font_path
@@ -168,9 +160,9 @@ def create_flyer_image_shadow(
     
     venue_y = header_y + h_date + int(styles.get("date_venue_gap", 10) * scale_f)
     
-    # 会場 (実際に描画)
+    # 会場 (描画)
     draw_text_with_shadow(
-        base_img, str(venue_text), left_x + s_venue["pos_x"], venue_y + s_venue["pos_y"], 
+        base_img, venue_str, left_x + s_venue["pos_x"], venue_y + s_venue["pos_y"], 
         use_font_venue, s_venue["size"], left_max_w, s_venue["color"], "la",
         s_venue["shadow_on"], s_venue["shadow_color"], s_venue["shadow_blur"], s_venue["shadow_off_x"], s_venue["shadow_off_y"],
         fallback_font_path=fallback_font_path
@@ -241,25 +233,32 @@ def create_flyer_image_shadow(
     ft_h = int(H * 0.05)
     processed_footer = []
     
-    # 補助フォントのロード(計算用)
-    f_fb_note = ImageFont.load_default()
-    f_fb_ticket = ImageFont.load_default()
-    if fallback_font_path:
+    # 計算用のフォントオブジェクト準備
+    # (ここではデフォルトのフォントパスを使うが、日本語ならfallbackを使う)
+    def get_calc_font(style_obj):
         try:
-             f_fb_note = ImageFont.truetype(fallback_font_path, s_note["size"])
-             f_fb_ticket = ImageFont.truetype(fallback_font_path, s_ticket["size"])
-        except: pass
-
-    # メインフォントのロード(計算用)
-    try: f_note_obj = ImageFont.truetype(s_note["font_path"], s_note["size"])
-    except: f_note_obj = f_fb_note
-    try: f_ticket_obj = ImageFont.truetype(s_ticket["font_path"], s_ticket["size"])
-    except: f_ticket_obj = f_fb_ticket
+            return ImageFont.truetype(style_obj["font_path"], style_obj["size"])
+        except:
+            return ImageFont.load_default()
     
+    def get_fallback_calc_font(style_obj):
+        if fallback_font_path:
+            try:
+                return ImageFont.truetype(fallback_font_path, style_obj["size"])
+            except:
+                pass
+        return ImageFont.load_default()
+
+    f_note_obj = get_calc_font(s_note)
+    f_ticket_obj = get_calc_font(s_ticket)
+    f_fb_note = get_fallback_calc_font(s_note)
+    f_fb_ticket = get_fallback_calc_font(s_ticket)
+
     # フッター各行の高さを計測
     for item in footer_lines:
-        # ★修正: 日本語が含まれる場合は計測時も日本語フォントを使う
         has_jp = contains_japanese(item["text"])
+        
+        # ★修正: 計算時も日本語判定を行う
         if item["style"] == s_ticket:
             u_font = f_fb_ticket if has_jp else f_ticket_obj
         else:
@@ -279,8 +278,8 @@ def create_flyer_image_shadow(
     for item in reversed(processed_footer):
         st_obj = item["style"]
         
-        # ★重要修正: 日本語が含まれる場合、フォントパスを強制的に補助フォントに切り替える
-        # これにより、ユーザー設定サイズ(st_obj["size"])が日本語フォントに適用される
+        # ★重要修正: ここでフォントパスを切り替える！
+        # これにより、日本語フォントでも st_obj["size"] が適用される
         use_font_path = st_obj["font_path"]
         if contains_japanese(item["text"]) and fallback_font_path:
             use_font_path = fallback_font_path
