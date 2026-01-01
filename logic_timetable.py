@@ -4,34 +4,34 @@ import os
 import requests
 from io import BytesIO
 
-# ★重要: データベース関連のインポート
-# あなたの環境に合わせて database.py からインポートします
+# --- デバッグ用: インポート状況の確認 ---
+print("--- logic_timetable.py 読み込み開始 ---")
 try:
     from database import SessionLocal, Artist, get_image_url
-except ImportError:
+    print("✅ database モジュールのインポートに成功しました")
+except ImportError as e:
+    print(f"❌ database モジュールのインポートに失敗しました: {e}")
     SessionLocal = None
     Artist = None
     get_image_url = None
 
 # ================= 設定エリア =================
 
-# 全体の解像度とサイズ感 (前回決定した広めの設定)
+# 全体の解像度とサイズ感
 SINGLE_COL_WIDTH = 1450     
 COLUMN_GAP = 80             
 WIDTH = (SINGLE_COL_WIDTH * 2) + COLUMN_GAP
 ROW_HEIGHT = 130            
 ROW_MARGIN = 12             
 
-# フォントサイズ設定 (大きく見やすく)
+# フォントサイズ設定
 FONT_SIZE_TIME = 60         
 FONT_SIZE_ARTIST = 60       
 FONT_SIZE_GOODS = 48        
 
 # 色の設定
 COLOR_BG_ALL = (0, 0, 0, 0)        # 全体の背景（透明）
-# ★アー写の上に重ねる「透過黒背景」の濃さ (0=透明, 255=真っ黒)
-# 210だと文字が読みやすいですが、アー写をもう少し見せたいなら180くらいに調整してください
-COLOR_ROW_BG = (0, 0, 0, 210)      
+COLOR_ROW_BG = (0, 0, 0, 210)      # 行の背景（透過黒）
 COLOR_TEXT = (255, 255, 255, 255)  # 白文字
 
 # レイアウトの境界線設定
@@ -49,7 +49,7 @@ def get_font(path, size):
     try:
         if path and os.path.exists(path):
             return ImageFont.truetype(path, size)
-        if os.path.exists("fonts/keifont.ttf"): # パスを少し調整
+        if os.path.exists("fonts/keifont.ttf"):
             return ImageFont.truetype("fonts/keifont.ttf", size)
         if os.path.exists("keifont.ttf"):
             return ImageFont.truetype("keifont.ttf", size)
@@ -58,17 +58,17 @@ def get_font(path, size):
     return ImageFont.load_default()
 
 def load_image_from_url(url):
-    """URLから画像をダウンロードしてPIL Imageとして返す (いただいたコードから移植)"""
+    """URLから画像をダウンロードしてPIL Imageとして返す"""
     try:
-        response = requests.get(url, timeout=10)
+        # print(f"ダウンロード開始: {url}") # デバッグ時はコメントアウト解除してもOK
+        response = requests.get(url, timeout=5)
         response.raise_for_status()
         return Image.open(BytesIO(response.content)).convert("RGBA")
     except Exception as e:
-        # print(f"Image Download Error: {e}") 
+        print(f"❌ 画像ダウンロード失敗: {url}, エラー: {e}") 
         return None
 
 def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_font_size, align="center"):
-    """指定されたボックス内に収まるように文字を描画する（自動縮小機能付き）"""
     text = str(text).strip()
     if not text: return
 
@@ -76,7 +76,6 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     font = get_font(font_path, current_font_size)
     min_font_size = 15
     
-    # 枠に収まるまでフォントサイズを小さくする
     while current_font_size > min_font_size:
         bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=4)
         text_w = bbox[2] - bbox[0]
@@ -86,7 +85,6 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
         current_font_size -= 2
         font = get_font(font_path, current_font_size)
 
-    # 最終描画位置の計算
     bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=4)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
@@ -108,68 +106,87 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path):
     レイヤー順: [最下層:アー写] -> [中間:半透明黒] -> [最上層:テキスト]
     """
     time_str = row_data[0]
-    name_str = row_data[1]
+    name_str = str(row_data[1]).strip() # ★重要: 空白除去
     goods_time = row_data[2]
     goods_place = row_data[3]
 
     # --- [レイヤー1] アーティスト写真の描画 ---
-    # 特定の文字列（休憩など）以外の場合に画像を検索
-    if SessionLocal and Artist and get_image_url and name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
+    
+    # 実行条件のチェック（ログ出力）
+    can_draw_image = False
+    if SessionLocal and Artist and get_image_url:
+        can_draw_image = True
+    else:
+        # 初回のみ警告を出すなどしてもよいが、ここでは毎回ログに出るのを避けるため何もしない
+        pass
+
+    if can_draw_image and name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
         db = SessionLocal()
         try:
             # DBからアーティストを検索
             artist = db.query(Artist).filter(Artist.name == name_str).first()
             
-            if artist and artist.image_filename:
-                # URLを取得
-                img_url = get_image_url(artist.image_filename)
-                
-                if img_url:
-                    # 画像をダウンロード
-                    img = load_image_from_url(img_url)
-                    
-                    if img:
-                        # 画像を枠のサイズに合わせて中央切り抜き (Center Crop)
-                        # OpenCVを使わずPillowの機能で高速に行います
-                        img_fitted = ImageOps.fit(
-                            img, 
-                            (SINGLE_COL_WIDTH, ROW_HEIGHT), 
-                            method=Image.LANCZOS, 
-                            centering=(0.5, 0.5)
-                        )
+            if artist:
+                if artist.image_filename:
+                    # URLを取得
+                    img_url = get_image_url(artist.image_filename)
+                    # print(f"検索中: {name_str} -> {img_url}") 
+
+                    if img_url:
+                        # 画像をダウンロード
+                        img = load_image_from_url(img_url)
                         
-                        # キャンバスに貼り付け
-                        canvas.paste(img_fitted, (base_x, base_y))
-                        
+                        if img:
+                            # 画像を枠のサイズに合わせて中央切り抜き
+                            img_fitted = ImageOps.fit(
+                                img, 
+                                (SINGLE_COL_WIDTH, ROW_HEIGHT), 
+                                method=Image.LANCZOS, 
+                                centering=(0.5, 0.5)
+                            )
+                            
+                            # ★修正: 座標を int にキャストしてから paste
+                            paste_x = int(base_x)
+                            paste_y = int(base_y)
+                            canvas.paste(img_fitted, (paste_x, paste_y))
+                            # print(f"✅ 画像貼り付け成功: {name_str}")
+                        else:
+                            print(f"⚠️ 画像データ取得失敗: {name_str} (URL: {img_url})")
+                    else:
+                        print(f"⚠️ 画像URL生成失敗: {name_str} (Filename: {artist.image_filename})")
+                else:
+                    # print(f"ℹ️ 画像ファイル名未登録: {name_str}")
+                    pass
+            else:
+                print(f"⚠️ DBにアーティストが見つかりません: '{name_str}'")
+
         except Exception as e:
-            print(f"アー写処理エラー ({name_str}): {e}")
+            print(f"❌ アー写処理エラー ({name_str}): {e}")
         finally:
             db.close()
+    elif not can_draw_image:
+         # インポート失敗している場合
+         pass 
 
     # --- [レイヤー2] 行全体の背景（半透明の黒）を描画 ---
-    # 画像があろうとなかろうと、文字を読みやすくするために黒帯を乗せる
     draw.rectangle(
         [(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], 
         fill=COLOR_ROW_BG
     )
 
     # --- [レイヤー3] テキストの描画 ---
-    
-    # 1. 時間
     draw_centered_text(
         draw, time_str, 
         base_x + AREA_TIME_X, base_y, AREA_TIME_W, ROW_HEIGHT, 
         font_path, FONT_SIZE_TIME, align="left"
     )
     
-    # 2. アーティスト名
     draw_centered_text(
         draw, name_str, 
         base_x + AREA_ARTIST_X, base_y, AREA_ARTIST_W, ROW_HEIGHT, 
         font_path, FONT_SIZE_ARTIST, align="center"
     )
     
-    # 3. 物販情報
     goods_info = "-"
     if goods_time:
         if " / " in goods_time:
