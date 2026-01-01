@@ -347,7 +347,6 @@ def render_timetable_page():
 
             # --- Data Editor ---
             current_key = f"tt_editor_{st.session_state.tt_editor_key}"
-            
             edited_df = pd.DataFrame(columns=column_order)
             if not st.session_state.binding_df.empty:
                 if current_key in st.session_state:
@@ -371,14 +370,12 @@ def render_timetable_page():
                 hide_index=True, on_change=force_sync
             )
             
-            # --- 編集内容の反映ロジック ---
+            # --- 編集内容の反映 ---
             new_row_settings_from_edit = []
             current_has_post_check = False
             for i, row in edited_df.iterrows():
                 name = row["ARTIST"]
                 is_post = bool(row.get("IS_POST_GOODS", False))
-                
-                # 特殊行の処理
                 if name == "開演前物販":
                     dur = get_duration_minutes(st.session_state.tt_open_time, st.session_state.tt_start_time)
                     st.session_state.tt_pre_goods_settings = {"GOODS_START_MANUAL": st.session_state.tt_open_time, "GOODS_DURATION": dur, "PLACE": ""}
@@ -386,36 +383,29 @@ def render_timetable_page():
                 if name == "終演後物販":
                     st.session_state.tt_post_goods_settings = {"GOODS_START_MANUAL": safe_str(row["GOODS_START_MANUAL"]), "GOODS_DURATION": safe_int(row["GOODS_DURATION"], 60), "PLACE": ""}
                     continue
-                
-                # 通常アーティストの更新
                 if is_post: current_has_post_check = True
                 st.session_state.tt_artist_settings[name] = {"DURATION": safe_int(row["DURATION"], 20)}
-                
                 g_start = safe_str(row["GOODS_START_MANUAL"])
                 g_dur = safe_int(row["GOODS_DURATION"], 60)
                 add_start = safe_str(row["ADD_GOODS_START"])
                 add_dur = safe_int(row["ADD_GOODS_DURATION"], None)
                 add_place = safe_str(row["ADD_GOODS_PLACE"])
-                
                 if is_post:
                     g_start = ""; g_dur = 60; add_start = ""; add_dur = None; add_place = ""
-
                 new_row_settings_from_edit.append({
                     "ADJUSTMENT": safe_int(row["ADJUSTMENT"], 0),
                     "GOODS_START_MANUAL": g_start, "GOODS_DURATION": g_dur, "PLACE": safe_str(row["PLACE"]),
                     "ADD_GOODS_START": add_start, "ADD_GOODS_DURATION": add_dur, "ADD_GOODS_PLACE": add_place,
                     "IS_POST_GOODS": is_post
                 })
-            
             if len(new_row_settings_from_edit) == len(st.session_state.tt_artists_order):
                 st.session_state.tt_row_settings = new_row_settings_from_edit
             
-            # 終演後物販行の表示/非表示切り替えチェック
             row_exists = any(r["ARTIST"] == "終演後物販" for r in st.session_state.binding_df.to_dict("records"))
             if (current_has_post_check and not row_exists) or (not current_has_post_check and row_exists):
                 st.session_state.rebuild_table_flag = True; mark_dirty(); st.rerun()
 
-            # --- 再計算ロジック ---
+            # --- 再計算 ---
             if st.session_state.request_calc:
                 curr = datetime.strptime(st.session_state.tt_start_time, "%H:%M")
                 for i, name in enumerate(st.session_state.tt_artists_order):
@@ -428,14 +418,12 @@ def render_timetable_page():
                         rd["GOODS_START_MANUAL"] = g_start_obj.strftime("%H:%M")
                         st.session_state.tt_row_settings[i] = rd
                     curr = end_obj + timedelta(minutes=rd.get("ADJUSTMENT", 0))
-                
                 if current_has_post_check:
                     st.session_state.tt_post_goods_settings["GOODS_START_MANUAL"] = curr.strftime("%H:%M")
-                
                 st.session_state.rebuild_table_flag = True; st.session_state.tt_editor_key += 1
                 st.session_state.request_calc = False; st.success("計算完了"); st.rerun()
 
-            # --- 表示用データ作成 ---
+            # --- データ表示 ---
             calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
             st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], use_container_width=True, hide_index=True)
             
