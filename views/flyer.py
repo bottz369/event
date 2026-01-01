@@ -6,6 +6,7 @@ import requests
 import json
 import zipfile
 import pandas as pd
+import math
 from datetime import datetime, date
 
 from constants import FONT_DIR
@@ -221,6 +222,55 @@ def generate_timetable_csv_string(proj):
     except Exception as e:
         return f"CSV Error: {e}"
 
+# ==========================================
+# 2. UI コンポーネント (render_visual_selector)
+# ==========================================
+
+def render_visual_selector(label, options, key_name, current_value, allow_none=False):
+    """
+    画像付きの選択肢を表示するヘルパー関数
+    options: 選択肢のリスト（オブジェクトに .id, .name, .image_filename がある想定）
+    allow_none: Trueの場合「選択なし」ボタンを表示
+    """
+    st.markdown(f"**{label}**")
+    
+    # 選択なしボタン (allow_noneがTrueの場合)
+    if allow_none:
+        is_none = (not current_value or current_value == 0)
+        if st.button(f"🚫 {label}なし", key=f"btn_none_{key_name}", type="primary" if is_none else "secondary"):
+            st.session_state[key_name] = 0
+            st.rerun()
+    
+    if not options:
+        st.info("選択肢がありません")
+        return
+
+    # 4列のグリッドで表示
+    cols = st.columns(4)
+    for i, opt in enumerate(options):
+        with cols[i % 4]:
+            is_selected = (opt.id == current_value)
+            
+            # 画像の表示
+            img_url = None
+            if hasattr(opt, "image_filename") and opt.image_filename:
+                img_url = get_image_url(opt.image_filename)
+            
+            if img_url:
+                st.image(img_url, use_container_width=True)
+            else:
+                st.markdown(f"🔲 {opt.name}")
+
+            # 選択ボタン
+            if is_selected:
+                st.button("✅ 選択中", key=f"btn_{key_name}_{opt.id}", disabled=True, use_container_width=True)
+            else:
+                if st.button("選択", key=f"btn_{key_name}_{opt.id}", use_container_width=True):
+                    st.session_state[key_name] = opt.id
+                    st.rerun()
+    
+    st.divider()
+
 # --- ★フォント描画ロジック ---
 
 def is_glyph_available(font, char):
@@ -414,32 +464,6 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     
     base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
     return max(h_label, h_time)
-
-# ==========================================
-# 2. UI コンポーネント (修正: 定義をここに配置)
-# ==========================================
-
-def render_visual_selector(label, assets, key_prefix, current_id, allow_none=False):
-    st.markdown(f"**{label}**")
-    if allow_none:
-        is_none = (not current_id or current_id == 0)
-        if st.button(f"🚫 {label}なし", key=f"btn_none_{key_prefix}", type="primary" if is_none else "secondary"):
-            st.session_state[key_prefix] = 0
-            st.rerun()
-
-    if not assets:
-        st.info("画像が見つかりません。")
-        return
-
-    cols = st.columns(4)
-    for i, asset in enumerate(assets):
-        with cols[i % 4]:
-            img_url = get_image_url(asset.image_filename)
-            st.image(img_url, use_container_width=True) 
-            is_sel = (asset.id == current_id)
-            if st.button("選択", key=f"btn_{key_prefix}_{asset.id}", type="primary" if is_sel else "secondary", use_container_width=True):
-                st.session_state[key_prefix] = asset.id
-                st.rerun()
 
 # ==========================================
 # 3. フライヤー生成ロジック
@@ -654,7 +678,6 @@ def create_flyer_image_shadow(
     
     main_img = load_image_from_source(main_source)
     if main_img and available_h > 100:
-        # ★ここで Grid / TT 用の設定を反映
         scale_w = styles.get("content_scale_w", 95) / 100.0
         scale_h = styles.get("content_scale_h", 100) / 100.0
         
@@ -706,7 +729,6 @@ def render_flyer_editor(project_id):
     if "flyer_logo_pos_y" not in st.session_state: st.session_state.flyer_logo_pos_y = saved_config.get("logo_pos_y", 0.0)
 
     # Individual Size Configs (Grid / TT)
-    # Default to generic "content_scale_w" if individual not set, for backward compatibility
     default_w = saved_config.get("content_scale_w", 95)
     default_h = saved_config.get("content_scale_h", 100)
 
@@ -743,6 +765,7 @@ def render_flyer_editor(project_id):
         def_size = 50
         def_color = "#FFFFFF"
         
+        # Init states
         if f"flyer_{key_prefix}_font" not in st.session_state: st.session_state[f"flyer_{key_prefix}_font"] = saved_config.get(f"{key_prefix}_font", def_font)
         if f"flyer_{key_prefix}_size" not in st.session_state: st.session_state[f"flyer_{key_prefix}_size"] = saved_config.get(f"{key_prefix}_size", def_size)
         if f"flyer_{key_prefix}_color" not in st.session_state: st.session_state[f"flyer_{key_prefix}_color"] = saved_config.get(f"{key_prefix}_color", def_color)
@@ -917,6 +940,7 @@ def render_flyer_editor(project_id):
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
         
+        # Define tickets and notes here
         tickets = []
         if getattr(proj, "tickets_json", None):
             try: tickets = json.loads(proj.tickets_json)
