@@ -4,7 +4,8 @@ import json
 import io
 import os
 from datetime import datetime, date, timedelta
-from database import get_db, SessionLocal, Artist, TimetableProject
+# ★追加: AssetFile をインポート
+from database import get_db, SessionLocal, Artist, TimetableProject, AssetFile
 from constants import (
     TIME_OPTIONS, DURATION_OPTIONS, ADJUSTMENT_OPTIONS, 
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
@@ -26,9 +27,31 @@ try:
     from logic_timetable import generate_timetable_image
 except Exception as e:
     import_error_msg = str(e)
-    # st.errorは描画時まで取っておくか、ここで出すか
-    # st.error(f"⚠️ モジュール読み込みエラー (logic_timetable): {e}")
     generate_timetable_image = None
+
+# --- ★新規追加: 生成直前にフォントを確実に入手する関数 ---
+def check_and_download_font(db, font_filename):
+    """
+    指定されたフォントファイルがローカルになければ、
+    AssetFileテーブルから即座にダウンロードして保存する
+    """
+    if not font_filename: return
+
+    # パスズレ防止のため絶対パスを使用
+    abs_font_dir = os.path.abspath(FONT_DIR)
+    os.makedirs(abs_font_dir, exist_ok=True)
+    
+    file_path = os.path.join(abs_font_dir, font_filename)
+
+    # ファイルが無い、またはサイズ0ならDBから取得
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        asset = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
+        if asset and asset.file_data:
+            try:
+                with open(file_path, "wb") as f:
+                    f.write(asset.file_data)
+            except Exception as e:
+                print(f"Font write error: {e}")
 
 def render_timetable_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
@@ -450,7 +473,13 @@ def render_timetable_page():
             if st.session_state.get("last_generated_tt_image") is None:
                 if generate_timetable_image and gen_list:
                     try:
-                        auto_img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
+                        # ★追加: ここでも念のためフォント確保
+                        check_and_download_font(db, st.session_state.tt_font)
+                        
+                        # ★修正: 絶対パスを使用
+                        font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
+                        
+                        auto_img = generate_timetable_image(gen_list, font_path=font_path)
                         st.session_state.last_generated_tt_image = auto_img
                         st.session_state.tt_last_generated_params = current_tt_params
                     except Exception as e: pass
@@ -462,10 +491,16 @@ def render_timetable_page():
                     st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
                 elif generate_timetable_image:
                     if gen_list:
+                        # ★重要: 生成直前に、選択されているフォントを確実にダウンロードする
+                        check_and_download_font(db, st.session_state.tt_font)
+
                         with st.spinner("画像を生成＆保存中..."):
                             try:
+                                # ★修正: 絶対パスを作成して渡す
+                                font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
+
                                 # 1. 画像生成
-                                img = generate_timetable_image(gen_list, font_path=os.path.join(FONT_DIR, st.session_state.tt_font))
+                                img = generate_timetable_image(gen_list, font_path=font_path)
                                 st.session_state.last_generated_tt_image = img
                                 st.session_state.tt_last_generated_params = current_tt_params
                                 
@@ -515,7 +550,7 @@ def render_timetable_page():
                                             "IS_POST_GOODS": rd.get("IS_POST_GOODS", False)
                                         }
                                         data_export.append(item)
-                                        
+                                    
                                     # 終演後
                                     has_post = any(r.get("IS_POST_GOODS") for r in st.session_state.tt_row_settings)
                                     if has_post:
