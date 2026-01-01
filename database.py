@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, Float, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, Float, ForeignKey, LargeBinary # ★追加: LargeBinary
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from supabase import create_client, Client
 import streamlit as st
@@ -36,8 +36,6 @@ except Exception as e:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ★重要: 以前の開発環境とバケット名が同じか確認してください。
-# もし以前は "fonts" や "assets" というバケットを使っていた場合、ここを合わせるか、
-# 移行する必要があります。今回は "images" のままで進めます。
 BUCKET_NAME = "images" 
 
 IMAGE_DIR = "images" 
@@ -111,6 +109,14 @@ class Asset(Base):
     asset_type = Column(String)
     image_filename = Column(String)
     is_deleted = Column(Boolean, default=False)
+
+# ★追加: フォントファイル保存用の新しいテーブルモデル
+# 既存のAssetテーブルとは別に管理します
+class AssetFile(Base):
+    __tablename__ = "asset_files"
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String, unique=True, index=True)
+    file_data = Column(LargeBinary) # バイナリデータそのもの
 
 class FavoriteFont(Base):
     __tablename__ = "favorite_fonts"
