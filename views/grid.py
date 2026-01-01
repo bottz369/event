@@ -2,8 +2,10 @@ import streamlit as st
 import os
 import json
 import io
-# ★追加: AssetFile をインポート
-from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset, AssetFile
+import requests # ★追加: URLダウンロード用
+
+# Asset, AssetFile, get_image_url をインポート
+from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
 from constants import FONT_DIR
 from logic_project import save_current_project
 from utils import create_font_specimen_img, get_sorted_font_list
@@ -18,11 +20,13 @@ try:
 except ImportError:
     generate_grid_image = None
 
-# --- ★フォント確保関数 (強化版) ---
+# --- ★修正: フォント確保関数 (URL対応版) ---
 def check_and_download_font(db, font_filename):
     """
     指定されたフォントファイルがローカルになければ、
-    AssetFileテーブルから即座にダウンロードして保存する
+    1. Assetテーブル (Storage URL)
+    2. AssetFileテーブル (Binary)
+    の順で検索してダウンロードする
     """
     if not font_filename: return
 
@@ -36,23 +40,31 @@ def check_and_download_font(db, font_filename):
     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
         return
 
-    # ファイルが無い場合はDBから取得
-    # print(f"Downloading font for grid: {font_filename}")
-    asset = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
-    
-    if asset and asset.file_data:
-        try:
+    # 1. Assetテーブル (Storage URL) から取得を試みる
+    try:
+        asset = db.query(Asset).filter(Asset.image_filename == font_filename).first()
+        if asset:
+            url = get_image_url(asset.image_filename)
+            if url:
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    with open(file_path, "wb") as f:
+                        f.write(response.content)
+                    st.toast(f"フォント(URL)を準備しました: {font_filename}", icon="🔤")
+                    return
+    except Exception as e:
+        print(f"URL Download Error: {e}")
+
+    # 2. AssetFileテーブル (Binary) から取得を試みる (予備)
+    try:
+        asset_file = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
+        if asset_file and asset_file.file_data:
             with open(file_path, "wb") as f:
-                f.write(asset.file_data)
-            # 成功したらトーストで通知（デバッグ用）
-            st.toast(f"フォント「{font_filename}」を準備しました", icon="🔤")
-        except Exception as e:
-            print(f"Font write error: {e}")
-            st.error(f"フォント書き込みエラー: {e}")
-    else:
-        # DBにもない場合
-        # st.warning(f"フォント「{font_filename}」がデータベースに見つかりません")
-        pass
+                f.write(asset_file.file_data)
+            st.toast(f"フォント(DB)を準備しました: {font_filename}", icon="🔤")
+            return
+    except Exception as e:
+        print(f"Binary Write Error: {e}")
 
 def render_grid_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
