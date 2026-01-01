@@ -1,246 +1,39 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
 import io
-import os
-import requests
 import json
 import zipfile
-import pandas as pd
-from datetime import datetime, date
+import os
 
-from constants import FONT_DIR
 from database import get_db, TimetableProject, Asset, get_image_url, SystemFontConfig
 from utils import get_sorted_font_list, create_font_specimen_img
 
-# ==========================================
-# 1. ヘルパー関数群
-# ==========================================
-
-def load_image_from_source(source):
-    if source is None: return None
-    try:
-        if isinstance(source, Image.Image): return source.convert("RGBA")
-        if isinstance(source, str):
-            if source.startswith("http"):
-                response = requests.get(source, timeout=10)
-                response.raise_for_status()
-                return Image.open(io.BytesIO(response.content)).convert("RGBA")
-            else:
-                return Image.open(source).convert("RGBA")
-        return Image.open(source).convert("RGBA")
-    except Exception as e:
-        print(f"Image Load Error: {e}")
-        return None
-
-def ensure_font_file_exists(db, filename):
-    if not filename: return None
-    local_path = os.path.join(FONT_DIR, filename)
-    if os.path.exists(local_path):
-        return local_path
-    
-    try:
-        asset = db.query(Asset).filter(Asset.image_filename == filename).first()
-        if asset:
-            url = get_image_url(asset.image_filename)
-            if url:
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    # ディレクトリがない場合は作成
-                    os.makedirs(FONT_DIR, exist_ok=True)
-                    with open(local_path, "wb") as f:
-                        f.write(response.content)
-                    return local_path
-    except Exception as e:
-        print(f"Font download error: {e}")
-    return None
-
-def crop_center_to_a4(img):
-    if not img: return None
-    A4_RATIO = 1.4142
-    img_w, img_h = img.size
-    current_ratio = img_h / img_w
-    if current_ratio > A4_RATIO:
-        new_h = int(img_w * A4_RATIO)
-        top = (img_h - new_h) // 2
-        img = img.crop((0, top, img_w, top + new_h))
-    else:
-        new_w = int(img_h / A4_RATIO)
-        left = (img_w - new_w) // 2
-        img = img.crop((left, 0, left + new_w, img_h))
-    return img
-
-def resize_image_contain(img, max_w, max_h):
-    if not img: return None
-    ratio = min(max_w / img.width, max_h / img.height)
-    new_w = int(img.width * ratio)
-    new_h = int(img.height * ratio)
-    return img.resize((new_w, new_h), Image.LANCZOS)
-
-def resize_image_to_width(img, target_width):
-    if not img: return None
-    w_percent = (target_width / float(img.size[0]))
-    h_size = int((float(img.size[1]) * float(w_percent)))
-    return img.resize((target_width, h_size), Image.LANCZOS)
-
-def format_event_date(dt_obj, mode="EN"):
-    if not dt_obj: return ""
-    target_date = dt_obj
-    if isinstance(dt_obj, str):
-        try:
-            for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"]:
-                try:
-                    target_date = datetime.strptime(dt_obj, fmt).date()
-                    break
-                except ValueError:
-                    continue
-        except:
-            return str(dt_obj)
-    try:
-        if mode == "JP":
-            weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
-            wd = weekdays_jp[target_date.weekday()]
-            return f"{target_date.year}年{target_date.month}月{target_date.day}日 ({wd})"
-        else:
-            weekdays_en = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
-            wd = weekdays_en[target_date.weekday()]
-            return f"{target_date.year}.{target_date.month}.{target_date.day}.{wd}"
-    except Exception:
-        return str(dt_obj)
-
-def format_time_str(t_val):
-    if not t_val or t_val == 0 or t_val == "0": return ""
-    if isinstance(t_val, str): return t_val[:5]
-    try: return t_val.strftime("%H:%M")
-    except: return str(t_val)
-
-# --- 告知テキスト生成用ヘルパー ---
-def get_day_of_week_jp(dt):
-    if not dt: return ""
-    w_list = ['(月)', '(火)', '(水)', '(木)', '(金)', '(土)', '(日)']
-    try: return w_list[dt.weekday()]
-    except: return ""
-
-def get_circled_number(n):
-    if 1 <= n <= 20: return chr(0x2460 + (n - 1))
-    elif 21 <= n <= 35: return chr(0x3251 + (n - 21))
-    elif 36 <= n <= 50: return chr(0x32B1 + (n - 36))
-    else: return f"({n})"
-
-def generate_event_summary_text_from_proj(proj, tickets, notes):
-    try:
-        title = proj.title or ""
-        date_val = proj.event_date
-        venue = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
-        url = getattr(proj, "url", "") or "" 
-        
-        date_str = ""
-        if date_val:
-            if isinstance(date_val, str):
-                try: date_val = datetime.strptime(date_val, "%Y-%m-%d").date()
-                except: pass
-            if isinstance(date_val, (date, datetime)):
-                date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
-            else:
-                date_str = str(date_val)
-
-        open_t = format_time_str(proj.open_time) or "※調整中"
-        start_t = format_time_str(proj.start_time) or "※調整中"
-
-        text = f"【公演概要】\n{date_str}\n『{title}』\n\n■会場: {venue}"
-        if url: text += f"\n {url}"
-        text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
-
-        text += "\n\n■チケット"
-        if tickets:
-            for t in tickets:
-                name = t.get("name", "")
-                price = t.get("price", "")
-                note = t.get("note", "")
-                line = f"- {name}: {price}"
-                if note: line += f" ({note})"
-                if name or price: text += "\n" + line
-        else:
-            text += "\n(情報なし)"
-
-        if notes:
-            text += "\n\n<備考>"
-            for n in notes:
-                if n and str(n).strip():
-                    text += f"\n※{str(n).strip()}"
-
-        # タイムテーブルデータ
-        if proj.data_json:
-            try:
-                data = json.loads(proj.data_json)
-                artists = []
-                for d in data:
-                    a = d.get("ARTIST", "")
-                    if a and a not in ["開演前物販", "終演後物販", "調整中", ""] and a not in artists:
-                        artists.append(a)
-                if artists:
-                    text += f"\n\n■出演者（{len(artists)}組予定）"
-                    for i, a_name in enumerate(artists, 1):
-                        c_num = get_circled_number(i)
-                        text += f"\n{c_num}{a_name}"
-            except: pass
-
-        if getattr(proj, "free_text_json", None):
-            try:
-                free_list = json.loads(proj.free_text_json)
-                for f in free_list:
-                    ft = f.get("title", "")
-                    fc = f.get("content", "")
-                    if ft or fc:
-                        text += f"\n\n■{ft}\n{fc}"
-            except: pass
-
-        return text
-    except Exception as e:
-        return f"テキスト生成エラー: {e}"
-
-def generate_timetable_csv_string(proj):
-    if not proj.data_json: return ""
-    try:
-        data = json.loads(proj.data_json)
-        rows = []
-        for d in data:
-            row = {
-                "START ": d.get("START", ""),
-                "END": d.get("END", ""),
-                "グループ名": d.get("ARTIST", ""),
-                "持ち時間": d.get("DURATION", ""),
-                "物販開始": d.get("GOODS_START", ""),
-                "物販終了": d.get("GOODS_END", ""),
-                "物販時間": d.get("GOODS_DURATION", ""),
-                "物販場所": d.get("GOODS_LOC", "")
-            }
-            rows.append(row)
-        
-        df = pd.DataFrame(rows)
-        cols = ["START ", "END", "グループ名", "持ち時間", "物販開始", "物販終了", "物販時間", "物販場所"]
-        for c in cols:
-            if c not in df.columns: df[c] = ""
-            
-        return df[cols].to_csv(index=False, encoding='utf-8_sig')
-    except Exception as e:
-        return f"CSV Error: {e}"
+# ★ 作成したモジュールから関数をインポート
+from utils.flyer_helpers import (
+    format_event_date, format_time_str,
+    generate_event_summary_text_from_proj, generate_timetable_csv_string
+)
+from utils.flyer_generator import create_flyer_image_shadow
 
 # ==========================================
-# 2. UI コンポーネント
+# UI コンポーネント
 # ==========================================
 
 def render_visual_selector(label, options, key_name, current_value, allow_none=False):
+    """画像アセットを選択するグリッドUI"""
     st.markdown(f"**{label}**")
+    
+    # 「なし」ボタン
     if allow_none:
         is_none = (not current_value or current_value == 0)
         if st.button(f"🚫 {label}なし", key=f"btn_none_{key_name}", type="primary" if is_none else "secondary"):
             st.session_state[key_name] = 0
             st.rerun()
-    
+            
     if not options:
         st.info("選択肢がありません")
         return
 
+    # 4列グリッドで表示
     cols = st.columns(4)
     for i, opt in enumerate(options):
         with cols[i % 4]:
@@ -254,6 +47,7 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
             else:
                 st.markdown(f"🔲 {opt.name}")
 
+            # 選択ボタン
             if is_selected:
                 st.button("✅ 選択中", key=f"btn_{key_name}_{opt.id}", disabled=True, use_container_width=True)
             else:
@@ -263,596 +57,123 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
     
     st.divider()
 
-# --- ★フォント描画ロジック ---
-
-def is_glyph_available(font, char):
-    if char.isspace() or ord(char) < 32: return True
-    try:
-        mask = font.getmask(char)
-        if mask.size[0] == 0 or mask.size[1] == 0:
-            return False
-        return True
-    except:
-        return True 
-
-def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
-    x, y = xy
-    total_w = 0
-    max_h = 0
-    current_x = x
-    for char in text:
-        use_font = primary_font
-        if not is_glyph_available(primary_font, char):
-            if fallback_font:
-                use_font = fallback_font
-        bbox = draw.textbbox((0, 0), char, font=use_font)
-        char_w = bbox[2] - bbox[0]
-        char_h = bbox[3] - bbox[1] 
-        draw.text((current_x, y), char, font=use_font, fill=fill)
-        try:
-            advance = use_font.getlength(char)
-        except:
-            advance = char_w
-        current_x += advance
-        total_w += advance
-        if char_h > max_h:
-            max_h = char_h
-    return total_w, max_h
-
-# --- ★Autoscaling機能付きテキスト描画 ---
-def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_width, fill_color, 
-                          anchor="la", 
-                          shadow_on=False, shadow_color="#000000", shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
-                          fallback_font_path=None):
-    if not text: return 0
-    
-    current_size = int(font_size_px)
-    min_size = 10
-    
-    # フォントロード用関数
-    def load_fonts(size):
-        try:
-            p_font = ImageFont.truetype(font_path, size) if font_path and os.path.exists(font_path) else ImageFont.load_default()
-        except:
-            p_font = ImageFont.load_default()
-        
-        f_font = p_font
-        if fallback_font_path and os.path.exists(fallback_font_path):
-            try:
-                f_font = ImageFont.truetype(fallback_font_path, size)
-            except:
-                pass
-        return p_font, f_font
-
-    primary_font, fallback_font = load_fonts(current_size)
-    dummy_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-    
-    can_resize = True if font_path and os.path.exists(font_path) else False
-
-    # Autoscaling Loop: 枠に収まるまでフォントサイズを小さくする
-    while can_resize and current_size > min_size:
-        w, h = draw_text_mixed(dummy_draw, (0, 0), text, primary_font, fallback_font, fill_color)
-        margin_estimate = max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 5
-        if w + (margin_estimate * 2) <= max_width:
-            break
-        current_size -= 2
-        primary_font, fallback_font = load_fonts(current_size)
-
-    # 最終的なサイズで描画
-    text_w, text_h = draw_text_mixed(dummy_draw, (0, 0), text, primary_font, fallback_font, fill_color)
-    
-    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
-    canvas_w = int(text_w + margin * 2)
-    canvas_h = int(text_h + margin * 2 + current_size * 0.5) 
-    
-    txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
-    txt_draw = ImageDraw.Draw(txt_img)
-    
-    draw_x = margin
-    draw_y = margin
-    
-    draw_text_mixed(txt_draw, (draw_x, draw_y), text, primary_font, fallback_font, fill_color)
-    
-    final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
-    if shadow_on:
-        alpha = txt_img.getchannel("A")
-        shadow_solid = Image.new("RGBA", (canvas_w, canvas_h), shadow_color)
-        shadow_solid.putalpha(alpha)
-        if shadow_blur > 0:
-            shadow_solid = shadow_solid.filter(ImageFilter.GaussianBlur(shadow_blur))
-        final_layer.paste(shadow_solid, (shadow_off_x, shadow_off_y), shadow_solid)
-        
-    final_layer.paste(txt_img, (0, 0), txt_img)
-    
-    content_w = canvas_w
-    content_h = canvas_h
-    effective_text_w = text_w + (max(abs(shadow_off_x), shadow_blur*2)) 
-    
-    # 万が一まだはみ出る場合は強制縮小
-    if effective_text_w > max_width:
-        ratio = max_width / effective_text_w
-        new_w = int(content_w * ratio)
-        new_h = int(content_h * ratio)
-        final_layer = final_layer.resize((new_w, new_h), Image.LANCZOS)
-        content_w = new_w
-    
-    paste_x = x - int(margin * (content_w / canvas_w))
-    paste_y = y - margin
-    
-    if anchor == "ra":
-        paste_x = x - content_w + int(margin * (content_w / canvas_w))
-    elif anchor == "ma":
-        paste_x = x - (content_w // 2)
-
-    base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
-    return text_h # 次の行のために高さを返す
-
-# --- ★カスタム時間描画 (三角形対応 / 配置オプション対応) ---
-def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
-                          shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
-                          tri_visible=True, tri_scale=1.0, tri_color=None,
-                          alignment="right", fixed_label_w=0):
-    
-    fallback_font = font
-    if fallback_font_path and os.path.exists(fallback_font_path):
-        try: fallback_font = ImageFont.truetype(fallback_font_path, int(font_size_px))
-        except: pass
-
-    # 計測
-    dummy = ImageDraw.Draw(Image.new("RGBA", (1,1)))
-    w_label, h_label = draw_text_mixed(dummy, (0,0), label, font, fallback_font, fill_color)
-    w_time, h_time = draw_text_mixed(dummy, (0,0), time_str, font, fallback_font, fill_color)
-    
-    tri_h = font_size_px * 0.6 * tri_scale
-    tri_w = tri_h * 0.8
-    tri_padding = font_size_px * 0.3
-    
-    if alignment == "triangle":
-        label_area_w = fixed_label_w
-        total_w_content = label_area_w
-        if tri_visible:
-            total_w_content += tri_w + (tri_padding * 2)
-        else:
-            total_w_content += tri_padding
-        total_w_content += w_time
-    else:
-        total_w_content = w_label + w_time
-        if tri_visible:
-            total_w_content += tri_w + (tri_padding * 2)
-        else:
-            total_w_content += tri_padding
-        
-    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
-    canvas_w = int(total_w_content + margin * 2)
-    canvas_h = int(max(h_label, h_time, tri_h) + margin * 2 + font_size_px * 0.5)
-    
-    txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
-    draw = ImageDraw.Draw(txt_img)
-    
-    cur_x = margin
-    draw_y = margin
-    
-    # Draw
-    if alignment == "triangle":
-        label_draw_x = cur_x + (fixed_label_w - w_label)
-        draw_text_mixed(draw, (label_draw_x, draw_y), label, font, fallback_font, fill_color)
-        cur_x += fixed_label_w
-    else:
-        draw_text_mixed(draw, (cur_x, draw_y), label, font, fallback_font, fill_color)
-        cur_x += w_label
-    
-    # Triangle
-    if tri_visible:
-        cur_x += tri_padding
-        cy = draw_y + (font_size_px * 0.5)
-        ty = cy - (tri_h / 2)
-        by = cy + (tri_h / 2)
-        lx = cur_x
-        rx = cur_x + tri_w
-        t_col = tri_color if tri_color else fill_color
-        draw.polygon([(lx, ty), (lx, by), (rx, cy)], fill=t_col)
-        cur_x += tri_w + tri_padding
-    else:
-        cur_x += tri_padding
-
-    # Time
-    draw_text_mixed(draw, (cur_x, draw_y), time_str, font, fallback_font, fill_color)
-    
-    final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
-    if shadow_on:
-        alpha = txt_img.getchannel("A")
-        shadow_solid = Image.new("RGBA", (canvas_w, canvas_h), shadow_color)
-        shadow_solid.putalpha(alpha)
-        if shadow_blur > 0:
-            shadow_solid = shadow_solid.filter(ImageFilter.GaussianBlur(shadow_blur))
-        final_layer.paste(shadow_solid, (shadow_off_x, shadow_off_y), shadow_solid)
-        
-    final_layer.paste(txt_img, (0, 0), txt_img)
-    
-    # Position
-    paste_x = x
-    paste_y = y - margin
-    
-    if alignment == "right" or alignment == "triangle":
-        paste_x = x - canvas_w + margin
-    elif alignment == "center":
-        paste_x = x - (canvas_w // 2) + margin
-    else:
-        paste_x = x - margin
-    
-    base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
-    return max(h_label, h_time)
-
 # ==========================================
-# 3. フライヤー生成ロジック (修正版)
-# ==========================================
-
-def create_flyer_image_shadow(
-    db, bg_source, logo_source, main_source,
-    styles,
-    date_text, venue_text, open_time, start_time,
-    ticket_info_list, common_notes_list,
-    system_fallback_filename=None
-):
-    # フォントファイルの存在確認
-    for k in ["date", "venue", "time", "ticket_name", "ticket_note"]:
-        fname = styles.get(f"{k}_font", "keifont.ttf")
-        ensure_font_file_exists(db, fname)
-    
-    fallback_font_path = None
-    if system_fallback_filename:
-        fallback_font_path = ensure_font_file_exists(db, system_fallback_filename)
-
-    # 背景
-    raw_bg = load_image_from_source(bg_source)
-    if raw_bg is None:
-        W, H = 2480, 3508
-        base_img = Image.new("RGBA", (W, H), (20, 20, 30, 255))
-    else:
-        base_img = crop_center_to_a4(raw_bg)
-        if base_img.width < 1200:
-            scale = 1200 / base_img.width
-            base_img = base_img.resize((1200, int(base_img.height * scale)), Image.LANCZOS)
-    
-    W, H = base_img.size
-    
-    # スタイル取得関数
-    def get_style_config(key, default_size=50, default_color="#FFFFFF"):
-        f_name = styles.get(f"{key}_font", "keifont.ttf")
-        f_size_val = styles.get(f"{key}_size", default_size)
-        scale_factor = W / 1200.0
-        final_size_px = int(f_size_val * scale_factor)
-        
-        path = os.path.join(FONT_DIR, f_name)
-        
-        return {
-            "font_path": path,
-            "size": final_size_px,
-            "color": styles.get(f"{key}_color", default_color),
-            "shadow_on": styles.get(f"{key}_shadow_on", False),
-            "shadow_color": styles.get(f"{key}_shadow_color", "#000000"),
-            "shadow_blur": styles.get(f"{key}_shadow_blur", 0),
-            "shadow_off_x": int(styles.get(f"{key}_shadow_off_x", 5) * scale_factor),
-            "shadow_off_y": int(styles.get(f"{key}_shadow_off_y", 5) * scale_factor),
-            "pos_x": int(styles.get(f"{key}_pos_x", 0) * scale_factor),
-            "pos_y": int(styles.get(f"{key}_pos_y", 0) * scale_factor)
-        }
-
-    s_date = get_style_config("date", 90)
-    s_venue = get_style_config("venue", 50)
-    s_time = get_style_config("time", 60) 
-    s_ticket = get_style_config("ticket_name", 45)
-    s_note = get_style_config("ticket_note", 30)
-
-    # 描画位置の初期値
-    current_y = int(H * 0.03)
-    header_h_est = int(H * 0.25)
-    footer_h_est = int(H * 0.25)
-
-    # -----------------------------------------------------------------
-    # メイン画像（アー写/TT画像）を、背景の直後（テキストより前）に描画する
-    # -----------------------------------------------------------------
-    available_top = header_h_est
-    available_bottom = H - footer_h_est
-    available_h = available_bottom - available_top
-    
-    main_img = load_image_from_source(main_source)
-    if main_img and available_h > 100:
-        scale_w = styles.get("content_scale_w", 95) / 100.0
-        scale_h = styles.get("content_scale_h", 100) / 100.0
-        target_w = int(W * scale_w)
-        target_h = int(available_h * scale_h)
-        
-        main_resized = resize_image_contain(main_img, target_w, target_h)
-        if main_resized:
-            paste_x = (W - main_resized.width) // 2
-            paste_y = available_top + (available_h - main_resized.height) // 2
-            base_img.paste(main_resized, (paste_x, int(paste_y)), main_resized)
-
-    # A. ロゴ
-    logo_img = load_image_from_source(logo_source)
-    if logo_img:
-        logo_scale = styles.get("logo_scale", 1.0)
-        logo_pos_x = styles.get("logo_pos_x", 0)
-        logo_pos_y = styles.get("logo_pos_y", 0)
-        base_logo_w = int(W * 0.5 * logo_scale)
-        logo_img = resize_image_to_width(logo_img, base_logo_w)
-        
-        base_x = (W - logo_img.width) // 2
-        base_y = current_y
-        offset_x = int(W * (logo_pos_x / 100.0))
-        offset_y = int(H * (logo_pos_y / 100.0))
-        base_img.paste(logo_img, (base_x + offset_x, base_y + offset_y), logo_img)
-        current_y = base_y + offset_y + logo_img.height
-
-    header_y = current_y + int(H * 0.02)
-    
-    # B. Header info
-    padding_x = int(W * 0.05)
-    left_x = padding_x
-    right_x = W - padding_x
-    left_max_w = int(W * 0.55)
-    right_max_w = int(W * 0.35)
-
-    # 左側 (日付・会場)
-    h_date = draw_text_with_shadow(
-        base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
-        s_date["font_path"], s_date["size"], left_max_w, s_date["color"], "la",
-        s_date["shadow_on"], s_date["shadow_color"], s_date["shadow_blur"], s_date["shadow_off_x"], s_date["shadow_off_y"],
-        fallback_font_path=fallback_font_path
-    )
-    
-    date_venue_gap_px = int(styles.get("date_venue_gap", 10) * (W / 1200.0))
-    venue_y = header_y + h_date + date_venue_gap_px
-    
-    h_venue = draw_text_with_shadow(
-        base_img, str(venue_text), left_x + s_venue["pos_x"], venue_y + s_venue["pos_y"], 
-        s_venue["font_path"], s_venue["size"], left_max_w, s_venue["color"], "la",
-        s_venue["shadow_on"], s_venue["shadow_color"], s_venue["shadow_blur"], s_venue["shadow_off_x"], s_venue["shadow_off_y"],
-        fallback_font_path=fallback_font_path
-    )
-    
-    # 右側 (時間)
-    o_str = str(open_time) if open_time else "TBA"
-    s_str = str(start_time) if start_time else "TBA"
-    
-    # 時間描画用フォントオブジェクト
-    try:
-        time_font_obj = ImageFont.truetype(s_time["font_path"], s_time["size"])
-    except:
-        time_font_obj = ImageFont.load_default()
-
-    line_h_time = s_time["size"] * 1.3 
-    time_line_gap = int(styles.get("time_line_gap", 0) * (W / 1200.0))
-    
-    tri_vis = styles.get("time_tri_visible", True)
-    tri_scale = styles.get("time_tri_scale", 1.0)
-    align_mode = styles.get("time_alignment", "right")
-    
-    fixed_label_w = 0
-    if align_mode == "triangle":
-        dummy = ImageDraw.Draw(Image.new("RGBA", (1,1)))
-        fb_font = time_font_obj
-        if fallback_font_path:
-             try: fb_font = ImageFont.truetype(fallback_font_path, s_time["size"])
-             except: pass
-        w1, _ = draw_text_mixed(dummy, (0,0), "OPEN", time_font_obj, fb_font, (0,0,0))
-        w2, _ = draw_text_mixed(dummy, (0,0), "START", time_font_obj, fb_font, (0,0,0))
-        fixed_label_w = max(w1, w2)
-
-    base_time_x = right_x + s_time["pos_x"]
-    if align_mode == "left":
-        base_time_x = int(W * 0.6) + s_time["pos_x"]
-    elif align_mode == "center":
-        base_time_x = int(W * 0.775) + s_time["pos_x"]
-
-    # OPEN
-    draw_time_row_aligned(
-        base_img, "OPEN", o_str, base_time_x, header_y + s_time["pos_y"],
-        time_font_obj, s_time["size"], right_max_w, s_time["color"],
-        s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
-        fallback_font_path,
-        tri_visible=tri_vis, tri_scale=tri_scale,
-        alignment=align_mode, fixed_label_w=fixed_label_w
-    )
-    
-    # START
-    start_y = header_y + line_h_time + time_line_gap
-    draw_time_row_aligned(
-        base_img, "START", s_str, base_time_x, start_y + s_time["pos_y"],
-        time_font_obj, s_time["size"], right_max_w, s_time["color"],
-        s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
-        fallback_font_path,
-        tri_visible=tri_vis, tri_scale=tri_scale,
-        alignment=align_mode, fixed_label_w=fixed_label_w
-    )
-    
-    # C. Footer
-    footer_lines = []
-    
-    note_gap_px = int(styles.get("note_gap", 15) * (W / 1200.0))
-    ticket_gap_px = int(styles.get("ticket_gap", 20) * (W / 1200.0))
-    area_gap_px = int(styles.get("area_gap", 40) * (W / 1200.0))
-    footer_pos_y_px = int(styles.get("footer_pos_y", 0) * (W / 1200.0))
-
-    # 1. Notes
-    for note in reversed(common_notes_list):
-        if note and str(note).strip():
-            footer_lines.append({"text": str(note).strip(), "style": s_note, "gap": note_gap_px})
-    
-    # 2. Tickets
-    is_first_ticket = True
-    for ticket in reversed(ticket_info_list):
-        name = ticket.get('name', '')
-        price = ticket.get('price', '')
-        t_note = ticket.get('note', '')
-        main_txt = f"{name} {price}"
-        if t_note: main_txt += f" ({t_note})"
-        
-        current_gap = ticket_gap_px
-        if is_first_ticket and footer_lines:
-            current_gap += area_gap_px
-            is_first_ticket = False
-            
-        footer_lines.append({"text": main_txt, "style": s_ticket, "gap": current_gap})
-
-    # フッターの高さ計算
-    footer_h = int(H * 0.05)
-    processed_footer = []
-    
-    # -------------------------------------------------------------
-    # ★修正箇所: ここでtry-exceptを入れて安全にロードする
-    # -------------------------------------------------------------
-    try:
-        temp_note_font = ImageFont.truetype(s_note["font_path"], s_note["size"])
-    except:
-        temp_note_font = ImageFont.load_default()
-
-    try:
-        temp_ticket_font = ImageFont.truetype(s_ticket["font_path"], s_ticket["size"])
-    except:
-        temp_ticket_font = ImageFont.load_default()
-    # -------------------------------------------------------------
-    
-    for item in footer_lines:
-        use_font = temp_ticket_font if item["style"] == s_ticket else temp_note_font
-        dummy_draw = ImageDraw.Draw(Image.new("RGBA",(1,1)))
-        bbox = dummy_draw.textbbox((0,0), item["text"], font=use_font)
-        h = bbox[3] - bbox[1]
-        processed_footer.append({**item, "h": h})
-        footer_h += h + item["gap"]
-
-    footer_start_y = H - footer_h + footer_pos_y_px
-    
-    curr_fy = footer_start_y
-    for item in reversed(processed_footer):
-        st_obj = item["style"]
-        actual_h = draw_text_with_shadow(
-            base_img, item["text"], W//2 + st_obj["pos_x"], curr_fy + st_obj["pos_y"], 
-            st_obj["font_path"], st_obj["size"], int(W*0.9), st_obj["color"], "ma",
-            st_obj["shadow_on"], st_obj["shadow_color"], st_obj["shadow_blur"], st_obj["shadow_off_x"], st_obj["shadow_off_y"],
-            fallback_font_path=fallback_font_path
-        )
-        curr_fy += item["h"] + item["gap"]
-
-    return base_img
-
-# ==========================================
-# 4. メイン画面描画
+# メイン画面描画
 # ==========================================
 
 def render_flyer_editor(project_id):
     db = next(get_db())
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     
+    # アセットのロード
     logos = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
     bgs = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
     
+    # フォントリスト取得
     font_list_data = get_sorted_font_list(db)
     font_options = [f["filename"] for f in font_list_data]
     font_map = {f["filename"]: f["name"] for f in font_list_data}
     if not font_options: font_options = ["keifont.ttf"]
 
     if not proj:
-        st.error("プロジェクトエラー")
+        st.error("プロジェクトエラー: 指定されたプロジェクトが見つかりません。")
         return
 
-    st.subheader("📑 フライヤー生成 (Custom V5 - Fixed)")
+    st.subheader("📑 フライヤー生成 (Custom V6 - Layout Safe)")
 
+    # 保存済み設定の読み込み
     saved_config = {}
     if getattr(proj, "flyer_json", None):
         try: saved_config = json.loads(proj.flyer_json)
         except: pass
 
-    # Session State
-    if "flyer_bg_id" not in st.session_state: st.session_state.flyer_bg_id = int(saved_config.get("bg_id", 0))
-    if "flyer_logo_id" not in st.session_state: st.session_state.flyer_logo_id = int(saved_config.get("logo_id", 0))
-    if "flyer_date_format" not in st.session_state: st.session_state.flyer_date_format = saved_config.get("date_format", "EN")
+    # --- Session State 初期化 ---
+    def init_s(key, val):
+        if key not in st.session_state:
+            # キー名から "flyer_" を除いたもので保存データを検索
+            short_key = key.replace("flyer_", "")
+            st.session_state[key] = saved_config.get(short_key, val)
+
+    # 基本設定
+    init_s("flyer_bg_id", 0)
+    init_s("flyer_logo_id", 0)
+    init_s("flyer_date_format", "EN")
+    init_s("flyer_logo_scale", 1.0)
+    init_s("flyer_logo_pos_x", 0.0)
+    init_s("flyer_logo_pos_y", 0.0)
+
+    # サイズ設定 (Grid / TT)
+    init_s("flyer_grid_scale_w", 95)
+    init_s("flyer_grid_scale_h", 100)
+    init_s("flyer_tt_scale_w", 95)
+    init_s("flyer_tt_scale_h", 100)
+    init_s("flyer_grid_link", True) # 縦横比リンク用
+    init_s("flyer_tt_link", True)
+
+    # 余白・位置設定
+    init_s("flyer_date_venue_gap", 10)
+    init_s("flyer_ticket_gap", 20)
+    init_s("flyer_area_gap", 40)
+    init_s("flyer_note_gap", 15)
+    init_s("flyer_footer_pos_y", 0)
     
-    if "flyer_logo_scale" not in st.session_state: st.session_state.flyer_logo_scale = saved_config.get("logo_scale", 1.0)
-    if "flyer_logo_pos_x" not in st.session_state: st.session_state.flyer_logo_pos_x = saved_config.get("logo_pos_x", 0.0)
-    if "flyer_logo_pos_y" not in st.session_state: st.session_state.flyer_logo_pos_y = saved_config.get("logo_pos_y", 0.0)
-
-    # Individual Size Configs (Grid / TT)
-    default_w = saved_config.get("content_scale_w", 95)
-    default_h = saved_config.get("content_scale_h", 100)
-
-    if "flyer_grid_scale_w" not in st.session_state: st.session_state.flyer_grid_scale_w = saved_config.get("grid_scale_w", default_w)
-    if "flyer_grid_scale_h" not in st.session_state: st.session_state.flyer_grid_scale_h = saved_config.get("grid_scale_h", default_h)
+    # 時間表示設定
+    init_s("flyer_time_tri_visible", True)
+    init_s("flyer_time_tri_scale", 1.0)
+    init_s("flyer_time_line_gap", 0)
+    init_s("flyer_time_alignment", "right")
     
-    if "flyer_tt_scale_w" not in st.session_state: st.session_state.flyer_tt_scale_w = saved_config.get("tt_scale_w", default_w)
-    if "flyer_tt_scale_h" not in st.session_state: st.session_state.flyer_tt_scale_h = saved_config.get("tt_scale_h", default_h)
+    # フォールバックフォント
+    sys_conf = db.query(SystemFontConfig).first()
+    def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
+    init_s("flyer_fallback_font", def_sys)
 
-    # Links
-    if "flyer_grid_link" not in st.session_state: st.session_state.flyer_grid_link = True
-    if "flyer_tt_link" not in st.session_state: st.session_state.flyer_tt_link = True
-
-    # Gaps
-    if "flyer_date_venue_gap" not in st.session_state: st.session_state.flyer_date_venue_gap = saved_config.get("date_venue_gap", 10)
-    if "flyer_ticket_gap" not in st.session_state: st.session_state.flyer_ticket_gap = saved_config.get("ticket_gap", 20)
-    if "flyer_area_gap" not in st.session_state: st.session_state.flyer_area_gap = saved_config.get("area_gap", 40)
-    if "flyer_note_gap" not in st.session_state: st.session_state.flyer_note_gap = saved_config.get("note_gap", 15)
-    
-    # ★追加: フッター全体Y位置
-    if "flyer_footer_pos_y" not in st.session_state: st.session_state.flyer_footer_pos_y = saved_config.get("footer_pos_y", 0)
-    
-    # Time settings
-    if "flyer_time_tri_visible" not in st.session_state: st.session_state.flyer_time_tri_visible = saved_config.get("time_tri_visible", True)
-    if "flyer_time_tri_scale" not in st.session_state: st.session_state.flyer_time_tri_scale = saved_config.get("time_tri_scale", 1.0)
-    if "flyer_time_line_gap" not in st.session_state: st.session_state.flyer_time_line_gap = saved_config.get("time_line_gap", 0)
-    if "flyer_time_alignment" not in st.session_state: st.session_state.flyer_time_alignment = saved_config.get("time_alignment", "right")
-
-    # Fallback
-    if "flyer_fallback_font" not in st.session_state:
-        sys_conf = db.query(SystemFontConfig).first()
-        def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
-        st.session_state.flyer_fallback_font = saved_config.get("fallback_font", def_sys)
-
-    def render_style_editor_full(label, key_prefix):
-        def_font = "keifont.ttf"
-        def_size = 50
-        def_color = "#FFFFFF"
+    # --- スタイル編集用コンポーネント ---
+    def render_style_editor(label, prefix):
+        """各要素（日付、会場など）のスタイル設定UIを展開する"""
         
-        # Init states
-        if f"flyer_{key_prefix}_font" not in st.session_state: st.session_state[f"flyer_{key_prefix}_font"] = saved_config.get(f"{key_prefix}_font", def_font)
-        if f"flyer_{key_prefix}_size" not in st.session_state: st.session_state[f"flyer_{key_prefix}_size"] = saved_config.get(f"{key_prefix}_size", def_size)
-        if f"flyer_{key_prefix}_color" not in st.session_state: st.session_state[f"flyer_{key_prefix}_color"] = saved_config.get(f"{key_prefix}_color", def_color)
-        if f"flyer_{key_prefix}_shadow_on" not in st.session_state: st.session_state[f"flyer_{key_prefix}_shadow_on"] = saved_config.get(f"{key_prefix}_shadow_on", False)
-        if f"flyer_{key_prefix}_shadow_color" not in st.session_state: st.session_state[f"flyer_{key_prefix}_shadow_color"] = saved_config.get(f"{key_prefix}_shadow_color", "#000000")
-        if f"flyer_{key_prefix}_shadow_blur" not in st.session_state: st.session_state[f"flyer_{key_prefix}_shadow_blur"] = saved_config.get(f"{key_prefix}_shadow_blur", 2)
-        if f"flyer_{key_prefix}_shadow_off_x" not in st.session_state: st.session_state[f"flyer_{key_prefix}_shadow_off_x"] = saved_config.get(f"{key_prefix}_shadow_off_x", 5)
-        if f"flyer_{key_prefix}_shadow_off_y" not in st.session_state: st.session_state[f"flyer_{key_prefix}_shadow_off_y"] = saved_config.get(f"{key_prefix}_shadow_off_y", 5)
-        
-        if f"flyer_{key_prefix}_pos_x" not in st.session_state: st.session_state[f"flyer_{key_prefix}_pos_x"] = saved_config.get(f"{key_prefix}_pos_x", 0)
-        if f"flyer_{key_prefix}_pos_y" not in st.session_state: st.session_state[f"flyer_{key_prefix}_pos_y"] = saved_config.get(f"{key_prefix}_pos_y", 0)
+        # 個別パラメータ初期化
+        init_s(f"flyer_{prefix}_font", "keifont.ttf")
+        init_s(f"flyer_{prefix}_size", 50)
+        init_s(f"flyer_{prefix}_color", "#FFFFFF")
+        init_s(f"flyer_{prefix}_shadow_on", False)
+        init_s(f"flyer_{prefix}_shadow_color", "#000000")
+        init_s(f"flyer_{prefix}_shadow_blur", 2)
+        init_s(f"flyer_{prefix}_shadow_off_x", 5)
+        init_s(f"flyer_{prefix}_shadow_off_y", 5)
+        init_s(f"flyer_{prefix}_pos_x", 0)
+        init_s(f"flyer_{prefix}_pos_y", 0)
 
         with st.expander(f"📝 {label} スタイル", expanded=False):
             c1, c2 = st.columns([2, 1])
             with c1:
-                st.selectbox("フォント", font_options, key=f"flyer_{key_prefix}_font", format_func=lambda x: font_map.get(x, x))
+                st.selectbox("フォント", font_options, key=f"flyer_{prefix}_font", 
+                             format_func=lambda x: font_map.get(x, x))
             with c2:
-                st.color_picker("文字色", key=f"flyer_{key_prefix}_color")
-            st.slider("サイズ", 10, 200, step=5, key=f"flyer_{key_prefix}_size")
+                st.color_picker("文字色", key=f"flyer_{prefix}_color")
+            
+            st.slider("ベースサイズ", 10, 200, step=5, key=f"flyer_{prefix}_size")
             
             st.markdown("**配置微調整**")
             cp1, cp2 = st.columns(2)
-            with cp1: st.number_input("X移動 (横)", -500, 500, step=5, key=f"flyer_{key_prefix}_pos_x")
-            with cp2: st.number_input("Y移動 (縦)", -500, 500, step=5, key=f"flyer_{key_prefix}_pos_y")
+            with cp1: st.number_input("X移動 (横)", -500, 500, step=5, key=f"flyer_{prefix}_pos_x")
+            with cp2: st.number_input("Y移動 (縦)", -500, 500, step=5, key=f"flyer_{prefix}_pos_y")
 
             st.markdown("---")
             sc1, sc2 = st.columns([1, 2])
             with sc1:
-                st.checkbox("影をつける", key=f"flyer_{key_prefix}_shadow_on")
-                if st.session_state[f"flyer_{key_prefix}_shadow_on"]:
-                    st.color_picker("影の色", key=f"flyer_{key_prefix}_shadow_color")
+                st.checkbox("影をつける", key=f"flyer_{prefix}_shadow_on")
+                if st.session_state[f"flyer_{prefix}_shadow_on"]:
+                    st.color_picker("影の色", key=f"flyer_{prefix}_shadow_color")
             with sc2:
-                if st.session_state[f"flyer_{key_prefix}_shadow_on"]:
-                    st.slider("ぼかし", 0, 20, step=1, key=f"flyer_{key_prefix}_shadow_blur")
+                if st.session_state[f"flyer_{prefix}_shadow_on"]:
+                    st.slider("ぼかし", 0, 20, step=1, key=f"flyer_{prefix}_shadow_blur")
                     c1, c2 = st.columns(2)
-                    with c1: st.number_input("影X", -50, 50, key=f"flyer_{key_prefix}_shadow_off_x")
-                    with c2: st.number_input("影Y", -50, 50, key=f"flyer_{key_prefix}_shadow_off_y")
+                    with c1: st.number_input("影X", -50, 50, key=f"flyer_{prefix}_shadow_off_x")
+                    with c2: st.number_input("影Y", -50, 50, key=f"flyer_{prefix}_shadow_off_y")
             
-            if key_prefix == "time":
+            # 時間のみ特別オプション
+            if prefix == "time":
                 st.markdown("---")
                 st.markdown("**時間表示オプション**")
                 align_map = {"right":"右揃え", "center":"中央揃え", "left":"左揃え", "triangle":"▶揃え"}
@@ -860,6 +181,7 @@ def render_flyer_editor(project_id):
                 with c_al1:
                     sel_align = st.selectbox("配置モード", list(align_map.keys()), 
                                              format_func=lambda x: align_map[x],
+                                             key="flyer_time_alignment_sel",
                                              index=list(align_map.keys()).index(st.session_state.flyer_time_alignment))
                     st.session_state.flyer_time_alignment = sel_align
                 with c_al2:
@@ -870,6 +192,7 @@ def render_flyer_editor(project_id):
                 
                 st.slider("OPEN/STARTの行間", -100, 100, step=1, key="flyer_time_line_gap")
 
+    # --- レイアウト構築 ---
     c_conf, c_prev = st.columns([1, 1.2])
 
     with c_conf:
@@ -877,6 +200,7 @@ def render_flyer_editor(project_id):
             render_visual_selector("背景画像", bgs, "flyer_bg_id", st.session_state.flyer_bg_id)
             st.markdown("---")
             render_visual_selector("ロゴ画像", logos, "flyer_logo_id", st.session_state.flyer_logo_id, allow_none=True)
+            
             if st.session_state.flyer_logo_id:
                 st.markdown("**ロゴ微調整**")
                 c_l1, c_l2, c_l3 = st.columns(3)
@@ -886,19 +210,18 @@ def render_flyer_editor(project_id):
             
             st.markdown("---")
             date_opts = ["EN (例: 2025.2.15.SUN)", "JP (例: 2025年2月15日 (日))"]
-            if "flyer_date_format_radio" not in st.session_state:
-                if st.session_state.flyer_date_format == "EN":
-                    st.session_state.flyer_date_format_radio = date_opts[0]
-                else:
-                    st.session_state.flyer_date_format_radio = date_opts[1]
-            st.radio("📅 日付表示形式", date_opts, key="flyer_date_format_radio")
-            st.session_state.flyer_date_format = "EN" if st.session_state.flyer_date_format_radio.startswith("EN") else "JP"
+            
+            # ラジオボタンの初期値設定
+            curr_fmt = st.session_state.flyer_date_format
+            idx = 0 if curr_fmt == "EN" else 1
+            sel_fmt = st.radio("📅 日付表示形式", date_opts, index=idx)
+            st.session_state.flyer_date_format = "EN" if sel_fmt.startswith("EN") else "JP"
             
             st.markdown("---")
             st.selectbox("🇯🇵 日本語用フォント (補助)", font_options, 
                          key="flyer_fallback_font", 
                          format_func=lambda x: font_map.get(x, x),
-                         help="英字フォントで日本語が表示できない場合に、このフォントを使用します。")
+                         help="デザインフォントで日本語が表示できない場合に、このフォントを使用します。")
 
         with st.expander("🔤 フォント一覧見本を表示"):
             with st.container(height=300):
@@ -908,7 +231,6 @@ def render_flyer_editor(project_id):
 
         with st.expander("📐 コンテンツ・余白調整", expanded=False):
             st.markdown("**メイン画像サイズ**")
-            
             t_sz1, t_sz2 = st.tabs(["グリッド画像サイズ", "TT画像サイズ"])
             
             # --- Grid ---
@@ -945,38 +267,24 @@ def render_flyer_editor(project_id):
             st.slider("フッターエリア位置 (Y移動)", -200, 200, step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
-        render_style_editor_full("日付 (DATE)", "date")
-        render_style_editor_full("会場名 (VENUE)", "venue")
-        render_style_editor_full("時間 (OPEN/START)", "time")
-        render_style_editor_full("チケット情報 (List)", "ticket_name")
-        render_style_editor_full("チケット共通備考 (Notes)", "ticket_note")
+        render_style_editor("日付 (DATE)", "date")
+        render_style_editor("会場名 (VENUE)", "venue")
+        render_style_editor("時間 (OPEN/START)", "time")
+        render_style_editor("チケット情報 (List)", "ticket_name")
+        render_style_editor("チケット共通備考 (Notes)", "ticket_note")
 
         if st.button("💾 設定を保存", use_container_width=True):
-            save_data = {
-                "bg_id": st.session_state.flyer_bg_id,
-                "logo_id": st.session_state.flyer_logo_id,
-                "date_format": st.session_state.flyer_date_format,
-                "logo_scale": st.session_state.flyer_logo_scale,
-                "logo_pos_x": st.session_state.flyer_logo_pos_x,
-                "logo_pos_y": st.session_state.flyer_logo_pos_y,
-                
-                "grid_scale_w": st.session_state.flyer_grid_scale_w,
-                "grid_scale_h": st.session_state.flyer_grid_scale_h,
-                "tt_scale_w": st.session_state.flyer_tt_scale_w,
-                "tt_scale_h": st.session_state.flyer_tt_scale_h,
-                
-                "date_venue_gap": st.session_state.flyer_date_venue_gap,
-                "ticket_gap": st.session_state.flyer_ticket_gap,
-                "area_gap": st.session_state.flyer_area_gap,
-                "note_gap": st.session_state.flyer_note_gap,
-                "footer_pos_y": st.session_state.flyer_footer_pos_y, # 保存
-                
-                "fallback_font": st.session_state.flyer_fallback_font,
-                "time_tri_visible": st.session_state.flyer_time_tri_visible,
-                "time_tri_scale": st.session_state.flyer_time_tri_scale,
-                "time_line_gap": st.session_state.flyer_time_line_gap,
-                "time_alignment": st.session_state.flyer_time_alignment
-            }
+            # Session State から保存用辞書を作成
+            save_data = {}
+            # 基本設定
+            base_keys = ["bg_id", "logo_id", "date_format", "logo_scale", "logo_pos_x", "logo_pos_y",
+                         "grid_scale_w", "grid_scale_h", "tt_scale_w", "tt_scale_h",
+                         "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
+                         "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment"]
+            for k in base_keys:
+                save_data[k] = st.session_state.get(f"flyer_{k}")
+            
+            # スタイル設定
             target_keys = ["date", "venue", "time", "ticket_name", "ticket_note"]
             style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
             for k in target_keys:
@@ -1012,47 +320,26 @@ def render_flyer_editor(project_id):
                 asset = db.query(Asset).get(st.session_state.flyer_logo_id)
                 if asset: logo_url = get_image_url(asset.image_filename)
 
-            # Common styles
-            base_style_dict = {
-                "logo_scale": st.session_state.flyer_logo_scale,
-                "logo_pos_x": st.session_state.flyer_logo_pos_x,
-                "logo_pos_y": st.session_state.flyer_logo_pos_y,
-                "date_venue_gap": st.session_state.flyer_date_venue_gap,
-                "ticket_gap": st.session_state.flyer_ticket_gap,
-                "area_gap": st.session_state.flyer_area_gap,
-                "note_gap": st.session_state.flyer_note_gap,
-                "footer_pos_y": st.session_state.flyer_footer_pos_y,
-                "time_tri_visible": st.session_state.flyer_time_tri_visible,
-                "time_tri_scale": st.session_state.flyer_time_tri_scale,
-                "time_line_gap": st.session_state.flyer_time_line_gap,
-                "time_alignment": st.session_state.flyer_time_alignment
-            }
-            target_keys = ["date", "venue", "time", "ticket_name", "ticket_note"]
-            style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
-            for k in target_keys:
-                for p in style_params:
-                    base_style_dict[f"{k}_{p}"] = st.session_state.get(f"flyer_{k}_{p}")
-
-            # Prepare separate dicts for Grid and TT
-            style_grid = base_style_dict.copy()
-            style_grid["content_scale_w"] = st.session_state.flyer_grid_scale_w
-            style_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
+            # スタイル辞書の構築
+            styles = {k.replace("flyer_",""): v for k, v in st.session_state.items() if k.startswith("flyer_")}
             
-            style_tt = base_style_dict.copy()
-            style_tt["content_scale_w"] = st.session_state.flyer_tt_scale_w
-            style_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
-
+            # 必要なテキスト情報
             v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
             d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
             fallback_filename = st.session_state.get("flyer_fallback_font")
 
             with st.spinner("生成中..."):
-                # Generate Grid Flyer
+                # 1. Generate Grid Flyer
                 grid_src = st.session_state.get("last_generated_grid_image")
                 if grid_src:
+                    # グリッド用サイズ設定を適用
+                    s_grid = styles.copy()
+                    s_grid["content_scale_w"] = st.session_state.flyer_grid_scale_w
+                    s_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
+                    
                     st.session_state.flyer_result_grid = create_flyer_image_shadow(
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
-                        styles=style_grid, # Use Grid specific styles
+                        styles=s_grid,
                         date_text=d_text, venue_text=v_text,
                         open_time=format_time_str(proj.open_time),
                         start_time=format_time_str(proj.start_time),
@@ -1060,12 +347,17 @@ def render_flyer_editor(project_id):
                         system_fallback_filename=fallback_filename 
                     )
                 
-                # Generate TT Flyer
+                # 2. Generate TT Flyer
                 tt_src = st.session_state.get("last_generated_tt_image")
                 if tt_src:
+                    # TT用サイズ設定を適用
+                    s_tt = styles.copy()
+                    s_tt["content_scale_w"] = st.session_state.flyer_tt_scale_w
+                    s_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
+                    
                     st.session_state.flyer_result_tt = create_flyer_image_shadow(
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
-                        styles=style_tt, # Use TT specific styles
+                        styles=s_tt,
                         date_text=d_text, venue_text=v_text,
                         open_time=format_time_str(proj.open_time),
                         start_time=format_time_str(proj.start_time),
