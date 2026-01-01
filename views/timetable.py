@@ -11,7 +11,7 @@ from constants import (
 )
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
 
-# ★修正: 新しい保存関数をインポート
+# 新しい保存関数をインポート
 from logic_project import save_current_project, save_timetable_rows
 
 try:
@@ -19,9 +19,13 @@ try:
 except ImportError:
     sort_items = None
 
+# エラーハンドリング付きインポート
+import_error_msg = None
 try:
     from logic_timetable import generate_timetable_image
-except ImportError:
+except Exception as e:
+    import_error_msg = str(e)
+    st.error(f"⚠️ モジュール読み込みエラー (logic_timetable): {e}")
     generate_timetable_image = None
 
 def render_timetable_page():
@@ -42,11 +46,8 @@ def render_timetable_page():
         if selected_label != "(選択してください)": selected_id = proj_map[selected_label]
 
     if selected_id:
-        # --- プロジェクトデータの読み込み (初回 or 切り替え時) ---
+        # --- プロジェクトデータの読み込み ---
         if st.session_state.get("tt_current_proj_id") != selected_id:
-            # Note: データロード自体は views/workspace.py 側で行われている想定ですが
-            # ここでも念のため再ロードが必要な場合のロジックは残しています
-            # (ただし、tt_data が既にセッションにある場合はスキップする設計が望ましいです)
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             if proj:
                 st.session_state.tt_title = proj.title
@@ -57,7 +58,6 @@ def render_timetable_page():
                 st.session_state.tt_start_time = proj.start_time or "10:30"
                 st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
                 
-                # フォント設定ロード
                 if "tt_font" not in st.session_state:
                     st.session_state.tt_font = "keifont.ttf"
                 
@@ -68,11 +68,7 @@ def render_timetable_page():
                             st.session_state.tt_font = settings["tt_font"]
                     except: pass
 
-                # データ展開 (tt_artists_order等が未設定の場合のみ実行)
-                # workspace.py でロード済みの場合はスキップ
                 if "tt_artists_order" not in st.session_state or not st.session_state.tt_artists_order:
-                    # ここでは簡易的にJSONから復元するロジックのみ残しておきます
-                    # (本格的なロードは workspace.py に任せる)
                     if proj.data_json:
                         try:
                             data = json.loads(proj.data_json)
@@ -98,7 +94,6 @@ def render_timetable_page():
                                     }
                                     continue
                                 
-                                # 通常アーティスト
                                 if name:
                                     new_order.append(name)
                                     new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
@@ -460,7 +455,10 @@ def render_timetable_page():
 
             # ★重要: 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
-                if generate_timetable_image:
+                # ★修正: エラーメッセージがあれば表示
+                if import_error_msg:
+                    st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
+                elif generate_timetable_image:
                     if gen_list:
                         with st.spinner("画像を生成＆保存中..."):
                             try:
@@ -499,7 +497,7 @@ def render_timetable_page():
                                     
                                     # 本編
                                     for i, name in enumerate(st.session_state.tt_artists_order):
-                                        ad = st.session_state.tt_artist_settings.get(name, {})
+                                        ad = st.session_state.tt_artist_settings.get(name, {"DURATION": 20})
                                         rd = st.session_state.tt_row_settings[i] if i < len(st.session_state.tt_row_settings) else {}
                                         
                                         item = {
@@ -546,7 +544,8 @@ def render_timetable_page():
                     else:
                         st.warning("データがありません")
                 else:
-                    st.error("ロジックエラー: generate_timetable_image がロードされていません")
+                    # ここに来るということは import_error_msg もなく、generate_timetable_image も None
+                    st.error("ロジックエラー: 理由不明のロード失敗です。アプリを再起動してください。")
 
             is_outdated = False
             if st.session_state.tt_last_generated_params is None: is_outdated = True
