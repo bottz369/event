@@ -11,11 +11,14 @@ from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
-from PIL import Image, ImageDraw, ImageFont
+# ★追加: ImageOps をインポート
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 # 定数とDBモデルのインポート
-from constants import FONT_DIR
-from database import get_db, Asset, FavoriteFont, SystemFontConfig
+# ★追加: ASSETS_DIR をインポート（存在しない場合は適宜修正してください）
+from constants import FONT_DIR, ASSETS_DIR
+# ★追加: Artist をインポート
+from database import get_db, Asset, Artist, FavoriteFont, SystemFontConfig
 
 # =========================================================
 # ユーティリティ関数群
@@ -147,7 +150,7 @@ def create_font_specimen_img(session, font_assets):
     Args:
         session: DBセッション (SystemFontConfig取得用)
         font_assets: Assetモデルのリスト、または辞書リスト({'name':..., 'filename':...})
-                     ※ views/assets.py はモデルオブジェクト、grid/timetable は辞書を渡す可能性があるため両対応
+                      ※ views/assets.py はモデルオブジェクト、grid/timetable は辞書を渡す可能性があるため両対応
     
     Returns:
         Imageオブジェクト
@@ -235,6 +238,57 @@ def create_font_specimen_img(session, font_assets):
         current_y += row_height
 
     return img
+
+# ★新規追加: アーティスト背景画像描画関数
+def draw_artist_background(base_img, box, artist_name, db, opacity=128):
+    """
+    指定されたboxエリア(x, y, w, h)にアーティスト画像を配置し、
+    その上に半透明の黒(Overlay)をかける関数
+    
+    Args:
+        base_img: 描画対象のキャンバス (Imageオブジェクト)
+        box: (x, y, w, h) のタプル
+        artist_name: アーティスト名
+        db: データベースセッション
+        opacity: 黒背景の濃さ (0=透明 〜 255=真っ黒)。デフォルト128(約50%)
+    """
+    x, y, w, h = box
+    
+    # 1. DBからアーティスト画像を検索
+    artist = db.query(Artist).filter(Artist.name == artist_name).first()
+    
+    target_image_path = None
+    if artist and artist.image_filename:
+        # 画像パスの構築: 定数ASSETS_DIRを使用
+        possible_path = os.path.join(ASSETS_DIR, "artists", artist.image_filename)
+        if os.path.exists(possible_path):
+            target_image_path = possible_path
+
+    # 画像が見つからない場合は処理をスキップ（呼び出し元で背景色を塗っている前提、あるいはそのまま返す）
+    if not target_image_path:
+        return base_img
+
+    try:
+        # 2. 画像を開いて、行のサイズに合わせてリサイズ＆トリミング
+        with Image.open(target_image_path) as img:
+            img = img.convert("RGBA")
+            
+            # アスペクト比を維持して、エリアを埋めるサイズにリサイズ (ImageOps.fitが便利)
+            fitted_img = ImageOps.fit(img, (w, h), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            
+            # 3. 半透明の黒レイヤー(Overlay)を作成
+            overlay = Image.new('RGBA', fitted_img.size, (0, 0, 0, opacity))
+            
+            # 画像と黒レイヤーを合成
+            composite_img = Image.alpha_composite(fitted_img, overlay)
+            
+            # 4. 元のキャンバスに貼り付け
+            base_img.paste(composite_img, (x, y), composite_img)
+            
+    except Exception as e:
+        print(f"画像描画エラー ({artist_name}): {e}")
+
+    return base_img
 
 # =========================================================
 # タイムテーブル計算・PDF生成関連
