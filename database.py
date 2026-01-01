@@ -1,5 +1,5 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from supabase import create_client, Client
 import streamlit as st
 import os
@@ -74,6 +74,38 @@ class TimetableProject(Base):
     flyer_json = Column(Text)      # フライヤー設定
     settings_json = Column(Text)   # その他設定
 
+    # ★追加: 行データへのリレーション
+    rows = relationship("TimetableRow", back_populates="project", cascade="all, delete-orphan")
+
+# ★追加: タイムテーブル行データ保存用テーブル
+class TimetableRow(Base):
+    __tablename__ = "timetable_rows"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    # 既存の projects_v4 テーブルの id を参照
+    project_id = Column(Integer, ForeignKey("projects_v4.id"), nullable=False)
+    
+    sort_order = Column(Integer, nullable=False)
+    
+    artist_name = Column(String)
+    duration = Column(Integer)
+    is_post_goods = Column(Boolean, default=False)
+    adjustment = Column(Integer)
+    
+    goods_start_time = Column(String)
+    goods_duration = Column(Integer)
+    place = Column(String)
+    
+    add_goods_start_time = Column(String)
+    add_goods_duration = Column(Integer, nullable=True)
+    add_goods_place = Column(String)
+    
+    created_at = Column(String, nullable=True) # 必要なら追加
+    
+    # 親へのリレーション
+    project = relationship("TimetableProject", back_populates="rows")
+
+
 # 素材アーカイブ用テーブル
 class Asset(Base):
     __tablename__ = "assets"
@@ -89,7 +121,7 @@ class FavoriteFont(Base):
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String)
 
-# ★追加: 標準フォント設定（1つだけ保存用）
+# 標準フォント設定（1つだけ保存用）
 class SystemFontConfig(Base):
     __tablename__ = "system_font_config"
     id = Column(Integer, primary_key=True, index=True)
