@@ -40,10 +40,6 @@ def load_image_from_source(source):
         return None
 
 def ensure_font_file_exists(db, filename):
-    """
-    指定されたフォントファイルがローカル(FONT_DIR)にあるか確認し、
-    なければDB(Asset)からURLを取得してダウンロードする。
-    """
     if not filename: return None
     local_path = os.path.join(FONT_DIR, filename)
     if os.path.exists(local_path):
@@ -121,70 +117,114 @@ def format_time_str(t_val):
     try: return t_val.strftime("%H:%M")
     except: return str(t_val)
 
-# --- 告知テキスト生成 ---
-def generate_event_summary_text(proj, date_str):
-    """プロジェクト情報から告知用テキストを生成する"""
-    venue_name = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
-    
-    text = f"【イベント名】\n{proj.title}\n\n"
-    text += f"【日時】\n{date_str}\n"
-    text += f"OPEN {format_time_str(proj.open_time)} / START {format_time_str(proj.start_time)}\n\n"
-    text += f"【会場】\n{venue_name}\n\n"
-    
-    # チケット情報
-    text += "【チケット】\n"
+# --- 告知テキスト生成用ヘルパー ---
+def get_day_of_week_jp(dt):
+    if not dt: return ""
+    w_list = ['(月)', '(火)', '(水)', '(木)', '(金)', '(土)', '(日)']
+    try: return w_list[dt.weekday()]
+    except: return ""
+
+def get_circled_number(n):
+    if 1 <= n <= 20: return chr(0x2460 + (n - 1))
+    elif 21 <= n <= 35: return chr(0x3251 + (n - 21))
+    elif 36 <= n <= 50: return chr(0x32B1 + (n - 36))
+    else: return f"({n})"
+
+def generate_event_summary_text_from_proj(proj, tickets, notes):
+    """
+    プロジェクト情報から告知用テキストを生成する
+    """
     try:
-        tickets = json.loads(proj.tickets_json) if proj.tickets_json else []
-        for t in tickets:
-            t_name = t.get("name", "")
-            t_price = t.get("price", "")
-            t_note = t.get("note", "")
-            line = f"{t_name} {t_price}"
-            if t_note: line += f" ({t_note})"
-            text += line + "\n"
-    except: pass
-    
-    # 備考
-    try:
-        notes = json.loads(proj.ticket_notes_json) if proj.ticket_notes_json else []
+        title = proj.title or ""
+        date_val = proj.event_date
+        venue = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
+        url = getattr(proj, "url", "") or "" # カラムがあれば
+        
+        date_str = ""
+        if date_val:
+            if isinstance(date_val, str):
+                # 文字列ならパースを試みる
+                try: date_val = datetime.strptime(date_val, "%Y-%m-%d").date()
+                except: pass
+            
+            if isinstance(date_val, (date, datetime)):
+                date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
+            else:
+                date_str = str(date_val)
+
+        open_t = format_time_str(proj.open_time) or "※調整中"
+        start_t = format_time_str(proj.start_time) or "※調整中"
+
+        text = f"【公演概要】\n{date_str}\n『{title}』\n\n■会場: {venue}"
+        if url: text += f"\n {url}"
+        text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
+
+        # チケット
+        text += "\n\n■チケット"
+        if tickets:
+            for t in tickets:
+                name = t.get("name", "")
+                price = t.get("price", "")
+                note = t.get("note", "")
+                line = f"- {name}: {price}"
+                if note: line += f" ({note})"
+                if name or price: text += "\n" + line
+        else:
+            text += "\n(情報なし)"
+
+        # 備考
         if notes:
-            text += "\n<備考>\n"
+            text += "\n\n<備考>"
             for n in notes:
-                text += f"・{n}\n"
-    except: pass
-    
-    text += "\n"
+                if n and str(n).strip():
+                    text += f"\n※{str(n).strip()}"
 
-    # 出演者 (タイムテーブルデータから抽出)
-    text += "【出演】\n"
-    try:
+        # 出演者 (data_jsonから)
         if proj.data_json:
-            data = json.loads(proj.data_json)
-            # 重複除外してリスト化
-            artists = []
-            for d in data:
-                a_name = d.get("ARTIST", "")
-                if a_name and a_name not in ["開演前物販", "終演後物販", "調整中", ""] and a_name not in artists:
-                    artists.append(a_name)
-            text += " / ".join(artists)
-    except: pass
-    
-    return text
+            try:
+                data = json.loads(proj.data_json)
+                artists = []
+                for d in data:
+                    a = d.get("ARTIST", "")
+                    if a and a not in ["開演前物販", "終演後物販", "調整中", ""] and a not in artists:
+                        artists.append(a)
+                
+                if artists:
+                    text += f"\n\n■出演者（{len(artists)}組予定）"
+                    for i, a_name in enumerate(artists, 1):
+                        c_num = get_circled_number(i)
+                        text += f"\n{c_num}{a_name}"
+            except: pass
 
-# --- PDF生成 ---
+        # 自由記述 (free_text_jsonから)
+        if getattr(proj, "free_text_json", None):
+            try:
+                free_list = json.loads(proj.free_text_json)
+                for f in free_list:
+                    ft = f.get("title", "")
+                    fc = f.get("content", "")
+                    if ft or fc:
+                        text += f"\n\n■{ft}\n{fc}"
+            except: pass
+
+        return text
+    except Exception as e:
+        return f"テキスト生成エラー: {e}"
+
 def create_pdf_from_text(text, font_path=None):
-    """テキストをPDFバイナリに変換する (日本語対応)"""
+    """テキストをPDFバイナリに変換"""
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     
-    # フォント登録
-    font_name = "Helvetica" # デフォルト
+    font_name = "Helvetica"
     if font_path and os.path.exists(font_path):
         try:
+            # フォント登録
             pdfmetrics.registerFont(TTFont('CustomFont', font_path))
             font_name = 'CustomFont'
-        except: pass
+        except Exception as e:
+            print(f"PDF Font register error: {e}")
     
     c.setFont(font_name, 10)
     
@@ -194,18 +234,50 @@ def create_pdf_from_text(text, font_path=None):
     
     lines = text.split('\n')
     for line in lines:
-        if y < 20*mm: # 改ページ
+        if y < 20*mm:
             c.showPage()
             c.setFont(font_name, 10)
             y = height - 30*mm
-        
-        # PDFでは文字化け防止のため、日本語を含まないフォントの場合は注意が必要だが
-        # ここでは登録したフォントを使う前提
         c.drawString(x, y, line)
         y -= line_height
         
     c.save()
     return buffer.getvalue()
+
+def generate_timetable_csv_string(proj):
+    """
+    タイムテーブルデータをCSV文字列として生成
+    形式: START , END, グループ名, 持ち時間, 物販開始, 物販終了, 物販時間, 物販場所
+    """
+    if not proj.data_json: return ""
+    try:
+        data = json.loads(proj.data_json)
+        # データの整形
+        rows = []
+        for d in data:
+            # 内部キーをCSVヘッダーにマップ
+            row = {
+                "START ": d.get("START", ""), # スペースあり注意
+                "END": d.get("END", ""),
+                "グループ名": d.get("ARTIST", ""),
+                "持ち時間": d.get("DURATION", ""),
+                "物販開始": d.get("GOODS_START", ""),
+                "物販終了": d.get("GOODS_END", ""),
+                "物販時間": d.get("GOODS_DURATION", ""),
+                "物販場所": d.get("GOODS_LOC", "")
+            }
+            rows.append(row)
+        
+        df = pd.DataFrame(rows)
+        # カラム順序指定
+        cols = ["START ", "END", "グループ名", "持ち時間", "物販開始", "物販終了", "物販時間", "物販場所"]
+        # データにないカラムがあれば追加
+        for c in cols:
+            if c not in df.columns: df[c] = ""
+            
+        return df[cols].to_csv(index=False, encoding='utf-8_sig')
+    except Exception as e:
+        return f"CSV Error: {e}"
 
 # --- ★フォント描画ロジック ---
 
@@ -476,6 +548,7 @@ def create_flyer_image_shadow(
         logo_pos_y = styles.get("logo_pos_y", 0)
         base_logo_w = int(W * 0.5 * logo_scale)
         logo_img = resize_image_to_width(logo_img, base_logo_w)
+        
         base_x = (W - logo_img.width) // 2
         base_y = current_y
         offset_x = int(W * (logo_pos_x / 100.0))
@@ -761,7 +834,7 @@ def render_flyer_editor(project_id):
             with c2: st.slider("高さ (%)", 50, 100, step=1, key="flyer_content_scale_h")
             
             st.markdown("---")
-            st.markdown("**間隔設定**")
+            st.markdown("**フッター行間**")
             st.slider("日付と会場の間隔", 0, 100, step=1, key="flyer_date_venue_gap")
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
@@ -873,7 +946,7 @@ def render_flyer_editor(project_id):
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要PDF", "一括ダウンロード"])
         
-        # Tab1: アー写グリッド版
+        # Tab 1: Grid Image
         with t1:
             if st.session_state.get("flyer_result_grid"):
                 st.image(st.session_state.flyer_result_grid, use_container_width=True)
@@ -882,7 +955,7 @@ def render_flyer_editor(project_id):
                 st.download_button("DL (Grid)", buf.getvalue(), "flyer_grid.png", "image/png", key="dl_grid_single")
             else: st.info("プレビューを生成してください")
             
-        # Tab2: タイムテーブル版
+        # Tab 2: Timetable Image
         with t2:
             if st.session_state.get("flyer_result_tt"):
                 st.image(st.session_state.flyer_result_tt, use_container_width=True)
@@ -891,18 +964,22 @@ def render_flyer_editor(project_id):
                 st.download_button("DL (TT)", buf.getvalue(), "flyer_tt.png", "image/png", key="dl_tt_single")
             else: st.info("プレビューを生成してください")
             
-        # Tab3: イベント概要PDF
+        # Tab 3: Event Overview PDF
         with t3:
             st.markdown("### 告知用テキストプレビュー")
-            d_str = format_event_date(proj.event_date, "JP")
-            summary_text = generate_event_summary_text(proj, d_str)
+            summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
             st.text_area("内容", value=summary_text, height=300, disabled=True)
             
-            # フォント準備 (PDF用)
+            # フォント準備
             fallback_filename = st.session_state.get("flyer_fallback_font")
             font_path_for_pdf = None
             if fallback_filename:
                 font_path_for_pdf = ensure_font_file_exists(db, fallback_filename)
+            else:
+                # 設定がない場合はシステム標準フォントを取得
+                sys_conf = db.query(SystemFontConfig).first()
+                if sys_conf:
+                    font_path_for_pdf = ensure_font_file_exists(db, sys_conf.filename)
                 
             pdf_bytes = create_pdf_from_text(summary_text, font_path_for_pdf)
             st.download_button(
@@ -912,7 +989,7 @@ def render_flyer_editor(project_id):
                 mime="application/pdf"
             )
 
-        # Tab4: 一括ダウンロード
+        # Tab 4: Batch Download
         with t4:
             st.markdown("### ファイル一括ダウンロード")
             include_assets = st.checkbox("素材データを含める (透過PNG, CSV, テキスト等)")
@@ -935,11 +1012,18 @@ def render_flyer_editor(project_id):
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
-                            # 3. Event Outline PDF
-                            d_str = format_event_date(proj.event_date, "JP")
-                            summary_text = generate_event_summary_text(proj, d_str)
+                            # 3. Event Overview PDF
+                            summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
+                            
                             fallback_filename = st.session_state.get("flyer_fallback_font")
-                            font_path_for_pdf = ensure_font_file_exists(db, fallback_filename) if fallback_filename else None
+                            font_path_for_pdf = None
+                            if fallback_filename:
+                                font_path_for_pdf = ensure_font_file_exists(db, fallback_filename)
+                            else:
+                                sys_conf = db.query(SystemFontConfig).first()
+                                if sys_conf:
+                                    font_path_for_pdf = ensure_font_file_exists(db, sys_conf.filename)
+
                             pdf_bytes = create_pdf_from_text(summary_text, font_path_for_pdf)
                             zip_file.writestr("Event_Outline.pdf", pdf_bytes)
 
@@ -958,12 +1042,9 @@ def render_flyer_editor(project_id):
                                     zip_file.writestr("Source_Timetable_Transparent.png", buf.getvalue())
                                 
                                 # Timetable CSV
-                                if proj.data_json:
-                                    try:
-                                        df = pd.read_json(proj.data_json)
-                                        csv_str = df.to_csv(index=False).encode('utf-8_sig')
-                                        zip_file.writestr("Timetable_Data.csv", csv_str)
-                                    except: pass
+                                csv_str = generate_timetable_csv_string(proj)
+                                if csv_str:
+                                    zip_file.writestr("Timetable_Data.csv", csv_str)
                                 
                                 # Outline Text
                                 zip_file.writestr("Event_Outline.txt", summary_text)
