@@ -79,7 +79,7 @@ def resize_image_contain(img, max_w, max_h):
     new_h = int(img.height * ratio)
     return img.resize((new_w, new_h), Image.LANCZOS)
 
-# ★エラーの原因だった関数をここに定義します
+# エラー修正: 必要な関数定義を維持
 def resize_image_to_width(img, target_width):
     if not img: return None
     w_percent = (target_width / float(img.size[0]))
@@ -167,7 +167,6 @@ def draw_text_with_shadow(base_img, text, x, y, font, font_size_px, max_width, f
     else:
         fallback_font = font
 
-    # 計測
     dummy_img = Image.new("RGBA", (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
     text_w, text_h = draw_text_mixed(dummy_draw, (0, 0), text, font, fallback_font, fill_color)
@@ -282,7 +281,7 @@ def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width
         
     final_layer.paste(txt_img, (0, 0), txt_img)
     
-    paste_x = x - canvas_w + margin # Right Align
+    paste_x = x - canvas_w + margin
     paste_y = y - margin
     
     base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
@@ -386,7 +385,6 @@ def create_flyer_image_shadow(
         logo_pos_x = styles.get("logo_pos_x", 0)
         logo_pos_y = styles.get("logo_pos_y", 0)
         base_logo_w = int(W * 0.5 * logo_scale)
-        # ここで resize_image_to_width を使うため、定義が必要でした
         logo_img = resize_image_to_width(logo_img, base_logo_w)
         
         base_x = (W - logo_img.width) // 2
@@ -404,7 +402,6 @@ def create_flyer_image_shadow(
     left_max_w = int(W * 0.55)
     right_max_w = int(W * 0.35)
 
-    # 左側 (日付・会場)
     h_date = draw_text_with_shadow(
         base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
         s_date["font"], s_date["size"], left_max_w, s_date["color"], "la",
@@ -794,7 +791,6 @@ def render_flyer_editor(project_id):
                 st.image(st.session_state.flyer_result_tt, use_container_width=True)
             else: st.info("生成ボタンを押してください")
         
-        # --- ZIP ダウンロードタブ ---
         with t3:
             st.markdown("生成された画像と素材をまとめてダウンロードします。")
             if st.button("📦 ZIPファイルを生成", type="primary"):
@@ -804,50 +800,44 @@ def render_flyer_editor(project_id):
                     try:
                         zip_buffer = io.BytesIO()
                         with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
-                            # 1. Flyer Grid
                             buf = io.BytesIO()
                             st.session_state.flyer_result_grid.save(buf, format="PNG")
                             zip_file.writestr("Flyer_Grid.png", buf.getvalue())
                             
-                            # 2. Flyer TT
                             if st.session_state.get("flyer_result_tt"):
                                 buf = io.BytesIO()
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
-                            # 3. Source Grid (Transparent)
                             if st.session_state.get("last_generated_grid_image"):
                                 buf = io.BytesIO()
                                 st.session_state.last_generated_grid_image.save(buf, format="PNG")
                                 zip_file.writestr("Source_Grid_Transparent.png", buf.getvalue())
                             
-                            # 4. Source TT (Transparent)
                             if st.session_state.get("last_generated_tt_image"):
                                 buf = io.BytesIO()
                                 st.session_state.last_generated_tt_image.save(buf, format="PNG")
                                 zip_file.writestr("Source_Timetable_Transparent.png", buf.getvalue())
                             
-                            # 5. Simple PDFs using ReportLab
-                            # Event Outline
+                            # Simple PDFs
+                            venue_str = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
+                            
                             pdf_buf = io.BytesIO()
                             c = canvas.Canvas(pdf_buf, pagesize=A4)
                             c.setFont("Helvetica-Bold", 16)
                             c.drawString(20*mm, 280*mm, f"Event: {proj.title}")
                             c.setFont("Helvetica", 12)
                             c.drawString(20*mm, 270*mm, f"Date: {format_event_date(proj.event_date)}")
-                            c.drawString(20*mm, 260*mm, f"Venue: {proj.venue}")
+                            c.drawString(20*mm, 260*mm, f"Venue: {venue_str}")
                             c.save()
                             zip_file.writestr("Event_Outline.pdf", pdf_buf.getvalue())
                             
-                            # Timetable PDF (Embed Image)
                             if st.session_state.get("last_generated_tt_image"):
                                 pdf_buf = io.BytesIO()
                                 c = canvas.Canvas(pdf_buf, pagesize=A4)
-                                # Save TT image to temp to draw in PDF
                                 tt_img = st.session_state.last_generated_tt_image
                                 temp_tt_path = "temp_tt_for_pdf.png"
                                 tt_img.save(temp_tt_path)
-                                # Draw stretched to A4 width
                                 c.drawImage(temp_tt_path, 10*mm, 10*mm, width=190*mm, preserveAspectRatio=True)
                                 c.save()
                                 zip_file.writestr("Timetable.pdf", pdf_buf.getvalue())
