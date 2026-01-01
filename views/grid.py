@@ -2,7 +2,8 @@ import streamlit as st
 import os
 import json
 import io
-from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset
+# ★追加: AssetFile をインポートに追加
+from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset, AssetFile
 from constants import FONT_DIR
 from logic_project import save_current_project
 from utils import create_font_specimen_img, get_sorted_font_list
@@ -16,6 +17,31 @@ try:
     from logic_grid import generate_grid_image
 except ImportError:
     generate_grid_image = None
+
+# --- ★新規追加: 生成直前にフォントを確実に入手する関数 ---
+def check_and_download_font(db, font_filename):
+    """
+    指定されたフォントファイルがローカルになければ、
+    AssetFileテーブルから即座にダウンロードして保存する
+    """
+    if not font_filename: return
+
+    # パスズレ防止のため絶対パスを使用
+    abs_font_dir = os.path.abspath(FONT_DIR)
+    os.makedirs(abs_font_dir, exist_ok=True)
+    
+    file_path = os.path.join(abs_font_dir, font_filename)
+
+    # ファイルが無い、またはサイズ0ならDBから取得
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        # print(f"Downloading font for grid: {font_filename}")
+        asset = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
+        if asset and asset.file_data:
+            try:
+                with open(file_path, "wb") as f:
+                    f.write(asset.file_data)
+            except Exception as e:
+                print(f"Font write error: {e}")
 
 def render_grid_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
@@ -41,7 +67,6 @@ def render_grid_page():
 
         # セッション初期化 (デフォルト値)
         if "grid_order" not in st.session_state: st.session_state.grid_order = []
-        # ★重要: ここで初期値を設定しているので、number_input側ではvalueを指定しない
         if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
         
         if "grid_row_counts_str" not in st.session_state: st.session_state.grid_row_counts_str = "5,5,5,5,5"
@@ -88,7 +113,6 @@ def render_grid_page():
             # --- 設定エリア ---
             c_set1, c_set2 = st.columns([1, 2])
             with c_set1: 
-                # ★修正: value引数を削除しました (key="grid_rows" があるため自動的に session_state.grid_rows が使われます)
                 new_rows = st.number_input("行数", min_value=1, key="grid_rows")
             with c_set2:
                 if st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset"):
@@ -99,6 +123,7 @@ def render_grid_page():
                         # 設定もリセット
                         st.session_state.grid_rows = 5
                         st.session_state.grid_row_counts_str = "5,5,5,5,5"
+                        st.session_state.grid_font = "keifont.ttf"
                         st.rerun()
 
             # --- 行ごとの枚数設定 ---
@@ -221,13 +246,19 @@ def render_grid_page():
                     
                     if target_artists:
                         try:
+                            # ★追加: ここでも念のためフォントを確保
+                            check_and_download_font(db, st.session_state.grid_font)
+
                             is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
                             align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
                             align_val = align_map.get(st.session_state.grid_alignment, "center")
 
+                            # パスズレ防止
+                            abs_font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.grid_font)
+                            
                             auto_img = generate_grid_image(
                                 target_artists, IMAGE_DIR, 
-                                font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
+                                font_path=abs_font_path, 
                                 row_counts=parsed_counts, is_brick_mode=is_brick, alignment=align_val
                             )
                             st.session_state.last_generated_grid_image = auto_img
@@ -245,15 +276,21 @@ def render_grid_page():
                     if not target_artists:
                         st.warning("表示するアーティストデータがありません。")
                     else:
+                        # ★重要: 生成直前に、選択されているフォントを確実にダウンロードする
+                        check_and_download_font(db, st.session_state.grid_font)
+
                         with st.spinner("画像を生成＆保存中..."):
                             try:
                                 is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
                                 align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
                                 align_val = align_map.get(st.session_state.grid_alignment, "center")
 
+                                # ★修正: 絶対パスを作成して渡す
+                                abs_font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.grid_font)
+
                                 img = generate_grid_image(
                                     target_artists, IMAGE_DIR, 
-                                    font_path=os.path.join(FONT_DIR, st.session_state.grid_font), 
+                                    font_path=abs_font_path, 
                                     row_counts=parsed_counts, is_brick_mode=is_brick, alignment=align_val
                                 )
                                 
