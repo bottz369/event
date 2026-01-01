@@ -190,7 +190,7 @@ def load_project_to_session(proj):
     st.session_state.grid_last_generated_params = None
     st.session_state.overview_text_preview = None
 
-# --- ★修正点: フォント準備関数 ---
+# --- フォント準備関数 (絶対パス対応) ---
 def prepare_active_project_fonts(db):
     needed_fonts = set()
     if st.session_state.get("tt_font"): needed_fonts.add(st.session_state.tt_font)
@@ -204,9 +204,9 @@ def prepare_active_project_fonts(db):
         assets = db.query(AssetFile).filter(AssetFile.filename.in_(list(needed_fonts))).all()
         css_styles = ""
         
-        # ★ここを修正: FONT_DIR に保存するように変更
-        font_dir = FONT_DIR 
-        os.makedirs(font_dir, exist_ok=True) # ディレクトリがない場合は作成
+        # ★重要: 絶対パスに変換
+        font_dir = os.path.abspath(FONT_DIR)
+        os.makedirs(font_dir, exist_ok=True)
         
         for asset in assets:
             if not asset.file_data: continue
@@ -222,7 +222,7 @@ def prepare_active_project_fonts(db):
                 except Exception as e:
                     print(f"Failed to write font file {file_path}: {e}")
 
-            # B. CSS注入 (プレビュー用)
+            # B. CSS注入
             try:
                 b64_data = base64.b64encode(asset.file_data).decode()
                 mime_type = "font/ttf"
@@ -245,7 +245,7 @@ def prepare_active_project_fonts(db):
     except Exception as e:
         print(f"Font preparation error: {e}")
 
-# --- コンテンツ自動生成関数 ---
+# --- コンテンツ自動生成関数 (絶対パス対応) ---
 def ensure_generated_contents(db):
     """
     リロード時などに画像キャッシュがない場合、保存された設定とフォントを使って
@@ -266,7 +266,6 @@ def ensure_generated_contents(db):
                 has_post = False
                 for i, name in enumerate(st.session_state.tt_artists_order):
                     ad = st.session_state.tt_artist_settings.get(name, {"DURATION": 20})
-                    # 行設定の安全な取得
                     rd = {}
                     if i < len(st.session_state.tt_row_settings):
                         rd = st.session_state.tt_row_settings[i]
@@ -304,8 +303,10 @@ def ensure_generated_contents(db):
                 
                 # 画像生成実行
                 if gen_list:
-                    # ★修正: 生成時は保存したパス (FONT_DIR) を参照
-                    font_path = os.path.join(FONT_DIR, st.session_state.tt_font)
+                    # ★重要: ここでも絶対パスを作成して渡す
+                    font_dir_abs = os.path.abspath(FONT_DIR)
+                    font_path = os.path.join(font_dir_abs, st.session_state.tt_font)
+                    
                     img = generate_timetable_image(gen_list, font_path=font_path)
                     st.session_state.last_generated_tt_image = img
             
@@ -419,10 +420,10 @@ def render_workspace_page():
 
         project_id = st.session_state.ws_active_project_id
         
-        # 1. フォント準備（ファイル生成）
+        # 1. フォント準備（ファイル生成・絶対パス）
         prepare_active_project_fonts(db)
         
-        # 2. コンテンツ自動生成
+        # 2. コンテンツ自動生成（絶対パス使用）
         ensure_generated_contents(db)
 
         proj_check = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
