@@ -98,7 +98,6 @@ def render_flyer_editor(project_id):
     init_s("flyer_bg_id", 0)
     init_s("flyer_logo_id", 0)
     init_s("flyer_date_format", "EN")
-    # サブタイトルはDBから取るので入力用のState初期化は不要だが、スタイル用は必要
     init_s("flyer_logo_scale", 1.0)
     init_s("flyer_logo_pos_x", 0.0)
     init_s("flyer_logo_pos_y", 0.0)
@@ -114,6 +113,7 @@ def render_flyer_editor(project_id):
     init_s("flyer_tt_link", True)
 
     # 余白・位置設定
+    init_s("flyer_subtitle_date_gap", 10) # ★追加: サブタイトルと日付の間隔
     init_s("flyer_date_venue_gap", 10)
     init_s("flyer_ticket_gap", 20)
     init_s("flyer_area_gap", 40)
@@ -212,7 +212,7 @@ def render_flyer_editor(project_id):
                 with c_l3: st.slider("Y位置", -100.0, 100.0, step=1.0, key="flyer_logo_pos_y")
             
             st.markdown("---")
-            # ★修正: DBからサブタイトルを取得して表示 (入力欄は廃止)
+            # DBからサブタイトルを取得して表示
             current_subtitle = proj.subtitle if proj.subtitle else "(未設定)"
             st.markdown(f"**サブタイトル** (イベント概要から自動取得)")
             if not proj.subtitle:
@@ -275,6 +275,8 @@ def render_flyer_editor(project_id):
 
             st.markdown("---")
             st.markdown("**間隔設定**")
+            # ★追加: サブタイトル間隔スライダー
+            st.slider("サブタイトルと日付の間隔", 0, 100, step=1, key="flyer_subtitle_date_gap")
             st.slider("日付と会場の間隔", 0, 100, step=1, key="flyer_date_venue_gap")
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
@@ -282,7 +284,6 @@ def render_flyer_editor(project_id):
             st.slider("フッターエリア位置 (Y移動)", -200, 200, step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
-        # ★追加: サブタイトルのスタイルエディタ
         render_style_editor("サブタイトル (Subtitle)", "subtitle")
         render_style_editor("日付 (DATE)", "date")
         render_style_editor("会場名 (VENUE)", "venue")
@@ -296,10 +297,11 @@ def render_flyer_editor(project_id):
             # 基本設定
             base_keys = [
                 "bg_id", "logo_id", "date_format", 
-                # "sub_title",  <-- DBから自動取得するため保存対象から除外
+                # "sub_title",  <-- DBから自動取得
                 "logo_scale", "logo_pos_x", "logo_pos_y",
                 "grid_scale_w", "grid_scale_h", "grid_pos_y", 
                 "tt_scale_w", "tt_scale_h", "tt_pos_y",       
+                "subtitle_date_gap", # ★追加: 保存キー
                 "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
                 "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment"
             ]
@@ -307,7 +309,6 @@ def render_flyer_editor(project_id):
                 save_data[k] = st.session_state.get(f"flyer_{k}")
             
             # スタイル設定
-            # ★追加: "subtitle" をターゲットに追加
             target_keys = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
             style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
             for k in target_keys:
@@ -351,14 +352,13 @@ def render_flyer_editor(project_id):
             d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
             fallback_filename = st.session_state.get("flyer_fallback_font")
             
-            # ★修正: DBからサブタイトルを取得
+            # DBからサブタイトルを取得
             subtitle_text = proj.subtitle or ""
 
             with st.spinner("生成中..."):
                 # 1. Generate Grid Flyer
                 grid_src = st.session_state.get("last_generated_grid_image")
                 if grid_src:
-                    # グリッド用サイズ設定を適用
                     s_grid = styles.copy()
                     s_grid["content_scale_w"] = st.session_state.flyer_grid_scale_w
                     s_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
@@ -368,7 +368,7 @@ def render_flyer_editor(project_id):
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
                         styles=s_grid,
                         date_text=d_text, venue_text=v_text,
-                        subtitle_text=subtitle_text, # ★追加
+                        subtitle_text=subtitle_text,
                         open_time=format_time_str(proj.open_time),
                         start_time=format_time_str(proj.start_time),
                         ticket_info_list=tickets, common_notes_list=notes,
@@ -378,7 +378,6 @@ def render_flyer_editor(project_id):
                 # 2. Generate TT Flyer
                 tt_src = st.session_state.get("last_generated_tt_image")
                 if tt_src:
-                    # TT用サイズ設定を適用
                     s_tt = styles.copy()
                     s_tt["content_scale_w"] = st.session_state.flyer_tt_scale_w
                     s_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
@@ -388,7 +387,7 @@ def render_flyer_editor(project_id):
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
                         styles=s_tt,
                         date_text=d_text, venue_text=v_text,
-                        subtitle_text=subtitle_text, # ★追加
+                        subtitle_text=subtitle_text,
                         open_time=format_time_str(proj.open_time),
                         start_time=format_time_str(proj.start_time),
                         ticket_info_list=tickets, common_notes_list=notes,
