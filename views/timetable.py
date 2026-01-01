@@ -497,6 +497,7 @@ def render_timetable_page():
 
             # ★重要: 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
+                # ★修正: エラーメッセージがあれば表示
                 if import_error_msg:
                     st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
                 elif generate_timetable_image:
@@ -532,6 +533,7 @@ def render_timetable_page():
                                     
                                     # データ保存用リスト作成
                                     data_export = []
+                                    # 開演前
                                     if st.session_state.tt_has_pre_goods:
                                         p = st.session_state.tt_pre_goods_settings
                                         data_export.append({
@@ -541,6 +543,7 @@ def render_timetable_page():
                                             "PLACE": p.get("PLACE")
                                         })
                                     
+                                    # 本編
                                     for i, name in enumerate(st.session_state.tt_artists_order):
                                         ad = st.session_state.tt_artist_settings.get(name, {"DURATION": 20})
                                         rd = st.session_state.tt_row_settings[i] if i < len(st.session_state.tt_row_settings) else {}
@@ -559,6 +562,7 @@ def render_timetable_page():
                                         }
                                         data_export.append(item)
                                     
+                                    # 終演後
                                     has_post = any(r.get("IS_POST_GOODS") for r in st.session_state.tt_row_settings)
                                     if has_post:
                                         p = st.session_state.tt_post_goods_settings
@@ -569,9 +573,13 @@ def render_timetable_page():
                                             "PLACE": p.get("PLACE")
                                         })
 
+                                    # JSONにも一応保存 (互換性のため)
                                     proj_to_save.data_json = json.dumps(data_export, ensure_ascii=False)
+
+                                    # 3. DBへコミット (JSON保存分)
                                     save_current_project(db, selected_id)
                                     
+                                    # ★重要: 新しいテーブルにも確実に保存
                                     if save_timetable_rows(db, selected_id, data_export):
                                         st.toast("保存＆プレビュー更新完了！", icon="✅")
                                     else:
@@ -584,6 +592,7 @@ def render_timetable_page():
                     else:
                         st.warning("データがありません")
                 else:
+                    # ここに来るということは import_error_msg もなく、generate_timetable_image も None
                     st.error("ロジックエラー: 理由不明のロード失敗です。アプリを再起動してください。")
 
             is_outdated = False
