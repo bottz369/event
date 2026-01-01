@@ -79,7 +79,7 @@ def load_image_from_url(url):
         return None
 
 # =========================================================
-# ★修正: row_counts(リスト) と alignment(文字列) を受け取る
+# ★修正済み: フォント適用ロジックを強化
 # =========================================================
 def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf", row_counts=None, is_brick_mode=True, alignment="center"):
     """
@@ -177,6 +177,13 @@ def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf"
     current_y = MARGIN 
     default_font = ImageFont.load_default()
 
+    # ★デバッグ用: フォントパスが正しいか一度確認してコンソールに出す
+    font_exists = False
+    if font_path and os.path.exists(font_path):
+        font_exists = True
+    else:
+        print(f"⚠️ Warning: Font file not found at '{font_path}'. Using default font.")
+
     for config in row_configs:
         chunk = config["artists"]
         w = config["w"]
@@ -208,23 +215,35 @@ def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf"
                 text_bg_y = current_y + h
                 draw.rectangle([(x, text_bg_y), (x + w, text_bg_y + th)], fill="white")
 
+                # === ★ここを修正: フォントサイズ自動調整ロジック ===
                 current_font_size = font_max
-                target_font = default_font
+                target_font = default_font # 初期値
+
                 while current_font_size > MIN_FONT_SIZE:
                     try:
-                        if font_path and os.path.exists(font_path):
+                        # フォントファイルが存在する場合のみ読み込みを試行
+                        if font_exists:
                             target_font = ImageFont.truetype(font_path, int(current_font_size))
                         else:
+                            # 存在しない場合はループを抜けてデフォルトフォントを使用
                             target_font = default_font
                             break
-                    except:
+                    except Exception as e:
+                        print(f"Font load error: {e}")
                         target_font = default_font
                         break
+
                     bbox = draw.textbbox((0, 0), artist_name, font=target_font)
                     text_w = bbox[2] - bbox[0]
-                    if text_w < (w - 10): break 
+                    
+                    # 幅に収まれば決定
+                    if text_w < (w - 10):
+                        break 
+                    
+                    # 収まらなければサイズを小さくして再トライ
                     current_font_size -= 2 
 
+                # 最終的な描画
                 bbox = draw.textbbox((0, 0), artist_name, font=target_font)
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
