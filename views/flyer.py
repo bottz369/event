@@ -206,16 +206,14 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
 def generate_timetable_csv_string(proj):
     """
     タイムテーブルデータをCSV文字列として生成
-    形式: START , END, グループ名, 持ち時間, 物販開始, 物販終了, 物販時間, 物販場所
     """
     if not proj.data_json: return ""
     try:
         data = json.loads(proj.data_json)
-        # データの整形
         rows = []
         for d in data:
             row = {
-                "START ": d.get("START", ""), # スペースあり
+                "START ": d.get("START", ""),
                 "END": d.get("END", ""),
                 "グループ名": d.get("ARTIST", ""),
                 "持ち時間": d.get("DURATION", ""),
@@ -520,7 +518,7 @@ def create_flyer_image_shadow(
     left_max_w = int(W * 0.55)
     right_max_w = int(W * 0.35)
 
-    # 左側
+    # 左側 (日付・会場)
     h_date = draw_text_with_shadow(
         base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
         s_date["font"], s_date["size"], left_max_w, s_date["color"], "la",
@@ -835,6 +833,18 @@ def render_flyer_editor(project_id):
 
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
+        
+        # ★ Fix: Define tickets and notes here
+        tickets = []
+        if getattr(proj, "tickets_json", None):
+            try: tickets = json.loads(proj.tickets_json)
+            except: pass
+        
+        notes = []
+        if getattr(proj, "ticket_notes_json", None):
+            try: notes = json.loads(proj.ticket_notes_json)
+            except: pass
+
         if st.button("プレビューを生成する", type="primary", use_container_width=True):
             bg_url = None
             if st.session_state.flyer_bg_id:
@@ -866,16 +876,6 @@ def render_flyer_editor(project_id):
                 for p in style_params:
                     style_dict[f"{k}_{p}"] = st.session_state.get(f"flyer_{k}_{p}")
 
-            tickets = []
-            if getattr(proj, "tickets_json", None):
-                try: tickets = json.loads(proj.tickets_json)
-                except: pass
-            
-            notes = []
-            if getattr(proj, "ticket_notes_json", None):
-                try: notes = json.loads(proj.ticket_notes_json)
-                except: pass
-            
             v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
             d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
 
@@ -925,7 +925,6 @@ def render_flyer_editor(project_id):
             summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
             st.text_area("内容", value=summary_text, height=300, disabled=True)
             
-            # Text download button
             st.download_button(
                 label="📄 テキストをダウンロード",
                 data=summary_text,
@@ -956,7 +955,7 @@ def render_flyer_editor(project_id):
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
-                            # 3. Event Outline Text (Always included now)
+                            # 3. Event Outline Text (Always included)
                             summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
                             zip_file.writestr("Event_Outline.txt", summary_text)
 
