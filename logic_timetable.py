@@ -17,11 +17,11 @@ FONT_SIZE_ARTIST = 60
 FONT_SIZE_GOODS = 48        
 
 # 全体の背景色（ダークグレー）
-COLOR_BG_ALL = (50, 50, 50, 255)        
+COLOR_BG_ALL = (30, 30, 30, 255)        
 
-# ★変更点: 行の背景色を「完全透明 (0,0,0,0)」に設定しました
-# これで画像の上に何も被さらなくなります
-COLOR_ROW_BG = (0, 0, 0, 0)      
+# ★変更点: ここで「黒フィルターの濃さ」を調整します (0=透明 〜 255=真っ黒)
+# 100〜150くらいが文字が見やすくておすすめです
+OVERLAY_OPACITY = 130 
 
 COLOR_TEXT = (255, 255, 255, 255)   
 
@@ -48,20 +48,16 @@ def get_font(path, size):
     return ImageFont.load_default()
 
 def load_image(path_or_url):
-    """URLまたはローカルパスから画像を読み込む"""
     if not path_or_url: return None
     try:
         if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
             response = requests.get(path_or_url, timeout=10)
-            if response.status_code != 200:
-                return None
+            if response.status_code != 200: return None
             return Image.open(BytesIO(response.content)).convert("RGBA")
-        
         if os.path.exists(path_or_url):
              return Image.open(path_or_url).convert("RGBA")
         return None
-    except Exception:
-        return None
+    except Exception: return None
 
 def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_font_size, align="center"):
     text = str(text).strip()
@@ -82,68 +78,52 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     if align == "center": final_x = box_x + (box_w - text_w) / 2
     elif align == "right": final_x = box_x + box_w - text_w
     else: final_x = box_x
+    
+    # 文字に少し影をつけて読みやすくする
+    draw.multiline_text((final_x+2, final_y+2), text, fill=(0,0,0,180), font=font, spacing=4, align=align)
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
-
-def draw_debug_msg(draw, text, x, y, color="red"):
-    """デバッグメッセージを書き込む"""
-    try:
-        font = get_font(None, 30)
-        # 背景をつけて読みやすくする
-        bbox = draw.textbbox((x, y), text, font=font)
-        draw.rectangle(bbox, fill="black")
-        draw.text((x, y), text, fill=color, font=font)
-    except: pass
 
 def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
-    # 特殊行以外のみ画像処理
+    # ★ここが最大の変更点: 画像処理と背景合成ロジック
+    
+    # 1. まずベースとなる行の画像を作る（透明）
+    row_img = Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), (0, 0, 0, 0))
+    
+    # 2. アーティスト画像があれば貼り付ける
+    has_image = False
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
         try:
             from database import Artist, get_image_url
-            
-            # 1. DB検索
             artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
             if not artist:
                 clean = name_str.replace(" ", "").replace("　", "")
                 if clean: artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
 
-            if artist:
-                if artist.image_filename:
-                    # 2. URL取得
-                    url = get_image_url(artist.image_filename)
-                    if url:
-                        # 3. 画像読み込み
-                        img = load_image(url)
-                        if img:
-                            # ★成功: 画像を貼り付け
-                            img_fitted = ImageOps.fit(img, (SINGLE_COL_WIDTH, ROW_HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-                            canvas.paste(img_fitted, (int(base_x), int(base_y)))
-                            
-                            # 確認用: 成功マーク
-                            draw_debug_msg(draw, "OK", base_x + 10, base_y + 10, "#00FF00") 
-                        else:
-                            draw_debug_msg(draw, "LOAD ERROR", base_x + 10, base_y + 10, "red")
-                    else:
-                        draw_debug_msg(draw, "URL ERROR", base_x + 10, base_y + 10, "orange")
-                else:
-                    # DBにはあるがファイル名がない (正常)
-                    pass
-            else:
-                # DBにない
-                draw_debug_msg(draw, "DB MISSING", base_x + 10, base_y + 10, "magenta")
-                
-        except Exception as e:
-            print(f"Error: {e}")
-            draw_debug_msg(draw, "SYS ERROR", base_x + 10, base_y + 10, "red")
+            if artist and artist.image_filename:
+                url = get_image_url(artist.image_filename)
+                if url:
+                    img = load_image(url)
+                    if img:
+                        img_fitted = ImageOps.fit(img, (SINGLE_COL_WIDTH, ROW_HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+                        row_img.paste(img_fitted, (0, 0))
+                        has_image = True
+        except Exception: pass
 
-    # 背景(半透明黒)の描画
-    # ★今回は透明度100%(COLOR_ROW_BG = (0,0,0,0))なので何も描画されません
-    if COLOR_ROW_BG[3] > 0:
-        draw.rectangle([(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], fill=COLOR_ROW_BG)
+    # 3. 半透明の黒フィルター（オーバーレイ）を作成して重ねる
+    # 画像がある場合は薄く、ない場合は濃くするなどの調整も可能ですが、今回は統一
+    overlay = Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), (0, 0, 0, OVERLAY_OPACITY))
+    
+    # 4. 合成 (Alpha Composite)
+    # これにより、画像の上に確実に半透明の黒が乗ります
+    row_composite = Image.alpha_composite(row_img, overlay)
+    
+    # 5. 完成した行画像をキャンバスに貼り付け
+    canvas.paste(row_composite, (int(base_x), int(base_y)), row_composite)
 
-    # テキスト描画
+    # 6. 最後に文字を書く (drawオブジェクトはキャンバス本体のものを使う)
     draw_centered_text(draw, time_str, base_x + AREA_TIME_X, base_y, AREA_TIME_W, ROW_HEIGHT, font_path, FONT_SIZE_TIME, align="left")
     draw_centered_text(draw, name_str, base_x + AREA_ARTIST_X, base_y, AREA_ARTIST_W, ROW_HEIGHT, font_path, FONT_SIZE_ARTIST, align="center")
     
@@ -164,7 +144,7 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
 def generate_timetable_image(timetable_data, font_path=None):
     if not timetable_data: return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (0,0,0,255))
     
-    st.write("🔄 画像生成プロセス実行中 (透過テスト)...")
+    st.write("🔄 画像生成中...")
     
     from database import SessionLocal
     db = SessionLocal()
@@ -178,7 +158,7 @@ def generate_timetable_image(timetable_data, font_path=None):
         if rows_in_column == 0: rows_in_column = 1
         total_height = rows_in_column * (ROW_HEIGHT + ROW_MARGIN)
         
-        # 背景色: 全体はダークグレー
+        # キャンバス作成
         canvas = Image.new('RGBA', (WIDTH, total_height), COLOR_BG_ALL)
         draw = ImageDraw.Draw(canvas)
 
@@ -193,11 +173,11 @@ def generate_timetable_image(timetable_data, font_path=None):
             draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db)
             y += (ROW_HEIGHT + ROW_MARGIN)
             
-        st.write("✅ 生成完了")
+        st.success("✅ 完成しました！")
         return canvas
 
     except Exception as e:
-        st.error(f"全体エラー: {e}")
+        st.error(f"エラー: {e}")
         return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (255,0,0,255))
     finally:
         db.close()
