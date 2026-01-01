@@ -550,7 +550,7 @@ def create_flyer_image_shadow(
     footer_h_est = int(H * 0.25)
 
     # -----------------------------------------------------------------
-    # 【修正ポイント】メイン画像（アー写/TT画像）を、背景の直後（テキストより前）に描画する
+    # メイン画像（アー写/TT画像）を、背景の直後（テキストより前）に描画する
     # -----------------------------------------------------------------
     available_top = header_h_est
     available_bottom = H - footer_h_est
@@ -568,7 +568,6 @@ def create_flyer_image_shadow(
             paste_x = (W - main_resized.width) // 2
             paste_y = available_top + (available_h - main_resized.height) // 2
             base_img.paste(main_resized, (paste_x, int(paste_y)), main_resized)
-    # -----------------------------------------------------------------
 
     # A. ロゴ
     logo_img = load_image_from_source(logo_source)
@@ -668,9 +667,6 @@ def create_flyer_image_shadow(
         alignment=align_mode, fixed_label_w=fixed_label_w
     )
     
-    right_bottom_y = start_y + line_h_time
-    header_bottom = max(venue_y + h_venue, right_bottom_y) + int(H * 0.02)
-
     # C. Footer
     footer_lines = []
     
@@ -704,9 +700,19 @@ def create_flyer_image_shadow(
     footer_h = int(H * 0.05)
     processed_footer = []
     
-    # 計算用に一時的なフォントオブジェクトを作成
-    temp_note_font = ImageFont.truetype(s_note["font_path"], s_note["size"])
-    temp_ticket_font = ImageFont.truetype(s_ticket["font_path"], s_ticket["size"])
+    # -------------------------------------------------------------
+    # ★修正箇所: ここでtry-exceptを入れて安全にロードする
+    # -------------------------------------------------------------
+    try:
+        temp_note_font = ImageFont.truetype(s_note["font_path"], s_note["size"])
+    except:
+        temp_note_font = ImageFont.load_default()
+
+    try:
+        temp_ticket_font = ImageFont.truetype(s_ticket["font_path"], s_ticket["size"])
+    except:
+        temp_ticket_font = ImageFont.load_default()
+    # -------------------------------------------------------------
     
     for item in footer_lines:
         use_font = temp_ticket_font if item["style"] == s_ticket else temp_note_font
