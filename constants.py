@@ -1,19 +1,20 @@
 import os
+import tempfile  # ★追加: システムの一時フォルダを使うために必要
 
 # ==========================================
-# ディレクトリ設定 (エラー修正の重要部分)
+# ディレクトリ設定 (ここを修正)
 # ==========================================
 
 # アプリのルートディレクトリを動的に取得
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 素材(Assets)フォルダ
-# ※ utils.py がこの ASSETS_DIR をインポートしようとしてエラーになっていました
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
-# フォントフォルダ (assetsの中に作成するように変更推奨ですが、元のままでも動くよう調整)
-FONT_DIR = os.path.join(ASSETS_DIR, "fonts")
+# ★修正: フォントフォルダをシステムの一時領域に固定
+# これにより、どの画面からでも確実にアクセスでき、権限エラーも回避します
+FONT_DIR = os.path.join(tempfile.gettempdir(), "app_fonts")
 os.makedirs(FONT_DIR, exist_ok=True)
 
 
