@@ -1,12 +1,13 @@
 import streamlit as st
 from datetime import date, datetime
 import json
-# ★修正: get_image_url を追加インポート
+# ★修正: get_image_url や必要なモデルを追加インポート
 from database import get_db, TimetableProject, SessionLocal, Artist, get_image_url
 from utils import safe_int, safe_str
 
 # ★重要: ロジックを外部ファイルからインポート
-from logic_project import save_current_project, duplicate_project
+# load_timetable_rows を追加
+from logic_project import save_current_project, duplicate_project, load_timetable_rows
 
 # 各機能の読み込み
 from views.overview import render_overview_page 
@@ -33,10 +34,29 @@ def load_project_to_session(proj):
     st.session_state.tt_start_time = proj.start_time or "10:30"
     st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
 
-    # タイムテーブルデータのロード
-    if proj.data_json:
+    # ---------------------------------------------------------
+    # タイムテーブルデータのロード (DBテーブル優先)
+    # ---------------------------------------------------------
+    data = []
+    
+    # 1. まずDBテーブル(timetable_rows)からの読み込みを試みる
+    db = SessionLocal()
+    try:
+        data = load_timetable_rows(db, proj.id)
+    except Exception as e:
+        print(f"Table load error: {e}")
+    finally:
+        db.close()
+
+    # 2. DBが空なら、旧形式(JSON)からの移行を試みる
+    if not data and proj.data_json:
         try:
             data = json.loads(proj.data_json)
+        except:
+            data = []
+
+    if data:
+        try:
             new_order = []
             new_artist_settings = {}
             new_row_settings = []
@@ -44,6 +64,8 @@ def load_project_to_session(proj):
             
             for item in data:
                 name = item.get("ARTIST")
+                
+                # 開演前物販
                 if name == "開演前物販":
                     st.session_state.tt_has_pre_goods = True
                     st.session_state.tt_pre_goods_settings = {
@@ -52,6 +74,8 @@ def load_project_to_session(proj):
                         "PLACE": safe_str(item.get("PLACE")),
                     }
                     continue
+                
+                # 終演後物販
                 if name == "終演後物販":
                     st.session_state.tt_post_goods_settings = {
                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
@@ -60,14 +84,18 @@ def load_project_to_session(proj):
                     }
                     continue
                 
+                # 通常アーティスト
                 if name:
                     new_order.append(name)
                     new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
+                    
+                    # 行設定 (追加物販情報含む)
                     new_row_settings.append({
                         "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                         "PLACE": safe_str(item.get("PLACE")),
+                        # ★ここが重要: 追加物販情報の読み込み
                         "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
                         "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
                         "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
@@ -81,7 +109,7 @@ def load_project_to_session(proj):
             st.session_state.rebuild_table_flag = True 
             
         except Exception as e:
-            print(f"Data load error: {e}")
+            print(f"Data parse error: {e}")
 
     # 設定のロード
     settings = {}
@@ -253,6 +281,7 @@ def render_workspace_page():
         if selected_label not in ["(選択してください)", "➕ 新規プロジェクト作成"]:
             selected_id = proj_map.get(selected_label)
             
+            # プロジェクトIDが変わった場合のみロード処理を行う
             if selected_id != st.session_state.ws_active_project_id:
                 st.session_state.ws_active_project_id = selected_id
                 proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
