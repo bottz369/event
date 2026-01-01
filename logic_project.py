@@ -36,7 +36,6 @@ def format_time_safe(t_val, default="10:00"):
 def save_timetable_rows(db, project_id, rows_data):
     """
     タイムテーブルの行データをDBテーブル(timetable_rows)に保存する。
-    既存の行を削除→新規作成という方式で完全同期を行う。
     """
     try:
         # 1. 既存行の削除
@@ -60,6 +59,7 @@ def save_timetable_rows(db, project_id, rows_data):
                 add_goods_start_time=item.get("ADD_GOODS_START"),
                 add_goods_duration=item.get("ADD_GOODS_DURATION"),
                 add_goods_place=item.get("ADD_GOODS_PLACE")
+                # created_at はDBデフォルトに任せるため指定しない
             )
             new_rows.append(row)
         
@@ -67,6 +67,8 @@ def save_timetable_rows(db, project_id, rows_data):
         db.commit()
         return True
     except Exception as e:
+        # ★エラーの詳細を画面に表示
+        st.error(f"詳細データの保存エラー: {e}")
         print(f"Error saving timetable rows: {e}")
         db.rollback()
         return False
@@ -131,7 +133,6 @@ def load_project_data(db, project_id):
     st.session_state.tt_goods_offset = proj.goods_start_offset or 0
 
     # 2. タイムテーブルデータのロード (DBテーブル優先、なければJSON)
-    # ★修正: ここで新しいテーブルからの読み込みを試みます
     tt_data_from_db = load_timetable_rows(db, project_id)
     if tt_data_from_db:
         st.session_state.tt_data = tt_data_from_db
@@ -172,7 +173,7 @@ def load_project_data(db, project_id):
 def save_current_project(db, project_id):
     """
     現在のセッションステートの内容をデータベースに保存する
-    ※タイムテーブル行データ自体はここでは保存しません（別途呼び出しが必要）
+    ※行データも同時に保存するように変更しました
     """
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     if not proj: return False
@@ -197,7 +198,7 @@ def save_current_project(db, project_id):
     if "proj_ticket_notes" in st.session_state:
         proj.ticket_notes_json = json.dumps(st.session_state.proj_ticket_notes, ensure_ascii=False)
 
-    # タイムテーブルデータ (バックアップとしてJSONにも保存)
+    # タイムテーブルデータ構築
     save_data = []
     if "binding_df" in st.session_state and not st.session_state.binding_df.empty:
         save_data = st.session_state.binding_df.to_dict(orient="records")
@@ -243,7 +244,6 @@ def save_current_project(db, project_id):
     if "tt_start_time" in st.session_state: proj.start_time = st.session_state.tt_start_time
     if "tt_goods_offset" in st.session_state: proj.goods_start_offset = st.session_state.tt_goods_offset
 
-    # グリッド情報
     if "grid_order" in st.session_state:
         grid_data = {
             "cols": st.session_state.get("grid_cols", 5),
@@ -255,14 +255,12 @@ def save_current_project(db, project_id):
         }
         proj.grid_order_json = json.dumps(grid_data, ensure_ascii=False)
 
-    # 設定関連
     settings = {
         "tt_font": st.session_state.get("tt_font", "keifont.ttf"),
         "grid_font": st.session_state.get("grid_font", "keifont.ttf")
     }
     proj.settings_json = json.dumps(settings, ensure_ascii=False)
 
-    # フライヤー情報
     flyer_data = {}
     keys = ["flyer_bg_id", "flyer_logo_id", "flyer_basic_font", "flyer_text_color", "flyer_stroke_color"]
     for k in keys:
@@ -310,7 +308,7 @@ def duplicate_project(db, project_id):
     db.add(new_proj)
     db.commit()
     
-    # ★追加: 行データも複製する
+    # 行データも複製
     src_rows = load_timetable_rows(db, src.id)
     save_timetable_rows(db, new_proj.id, src_rows)
     
