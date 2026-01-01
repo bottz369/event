@@ -16,8 +16,10 @@ FONT_SIZE_ARTIST = 60
 FONT_SIZE_GOODS = 48        
 
 COLOR_BG_ALL = (0, 0, 0, 0)        # 全体の背景（透明）
-# ★修正: 画像が見えやすいように、少し透明度を上げました (210 -> 160)
-COLOR_ROW_BG = (0, 0, 0, 160)      
+
+# ★修正: 画像がより見えやすいように、黒の濃さを下げました (160 -> 100)
+# 数値が小さいほど透明になります (0=透明, 255=真っ黒)
+COLOR_ROW_BG = (0, 0, 0, 100)      
 COLOR_TEXT = (255, 255, 255, 255)  # 白文字
 
 AREA_TIME_X = 20
@@ -89,9 +91,18 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path):
             
             db = SessionLocal()
             try:
-                # 1. DB検索
+                # 1. まず完全一致で検索
                 artist = db.query(Artist).filter(Artist.name == name_str).first()
                 
+                # ★追加: 見つからない場合、スペース(全角・半角)を除去して部分一致検索を試みる
+                if not artist:
+                    clean_name = name_str.replace(" ", "").replace("　", "")
+                    if clean_name:
+                        # 名前の中に clean_name が含まれるものを探す (簡易的なあいまい検索)
+                        artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean_name}%")).first()
+                        if artist:
+                            print(f"ℹ️ あいまい検索でヒット: '{name_str}' -> '{artist.name}'")
+
                 if artist:
                     if artist.image_filename:
                         # 2. URL取得
@@ -111,12 +122,11 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path):
                                 canvas.paste(img_fitted, (int(base_x), int(base_y)))
                                 print(f"✅ 画像貼り付け成功: {name_str}")
                             else:
-                                print(f"⚠️ 画像DL失敗: {name_str}")
+                                print(f"⚠️ 画像DL失敗: {name_str} (URL: {url[:30]}...)")
                         else:
                             print(f"⚠️ 画像URL生成失敗: {name_str}")
                     else:
-                        # 画像登録なし -> スキップ (通常の黒背景のみになる)
-                        pass
+                        print(f"ℹ️ 画像未登録: {name_str}")
                 else:
                     print(f"⚠️ DB未登録: {name_str}")
             finally:
