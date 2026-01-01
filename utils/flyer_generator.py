@@ -16,16 +16,16 @@ def create_flyer_image_shadow(
     styles,
     date_text, venue_text, open_time, start_time,
     ticket_info_list, common_notes_list,
+    subtitle_text="", # ★追加: サブタイトル引数
     system_fallback_filename=None
 ):
     # 1. フォントファイルの存在確認・準備
-    # スタイルで指定されているフォントをダウンロード
-    for k in ["date", "venue", "time", "ticket_name", "ticket_note"]:
+    # ★追加: "subtitle" もチェック対象に追加
+    for k in ["date", "venue", "time", "ticket_name", "ticket_note", "subtitle"]:
         fname = styles.get(f"{k}_font", "keifont.ttf")
         ensure_font_file_exists(db, fname)
     
     # 日本語用補助フォントの準備
-    # 設定がなければデフォルトの 'keifont.ttf' を使用する安全策を追加
     fallback_fname = system_fallback_filename if system_fallback_filename else "keifont.ttf"
     fallback_font_path = ensure_font_file_exists(db, fallback_fname)
 
@@ -69,6 +69,8 @@ def create_flyer_image_shadow(
     s_time = get_style_config("time", 60) 
     s_ticket = get_style_config("ticket_name", 45)
     s_note = get_style_config("ticket_note", 30)
+    # ★追加: サブタイトル用スタイル
+    s_subtitle = get_style_config("subtitle", 40)
 
     # --------------------------------------------------------------------------------
     # 3. レイアウト計算 (シミュレーション)
@@ -81,12 +83,17 @@ def create_flyer_image_shadow(
         logo_h_scaled = int(logo_img_obj.height * (logo_w_scaled / logo_img_obj.width))
         current_y += logo_h_scaled + int(H * styles.get("logo_pos_y", 0) / 100.0)
     
+    # ★追加: サブタイトルの高さ分を計算に含める
+    if subtitle_text:
+        # 簡易計算 (実際の高さはフォント依存だが、概算でスペース確保)
+        sub_h = s_subtitle["size"] * 1.2
+        current_y += int(sub_h + s_subtitle["pos_y"])
+
     header_start_y = current_y + int(H * 0.02)
     current_sim_y = header_start_y
     
     # 日付 (シミュレーション)
     date_str = str(date_text)
-    # 日本語が含まれる場合はフォントを切り替え
     use_font_date = fallback_font_path if contains_japanese(date_str) and fallback_font_path else s_date["font_path"]
     
     h_date_sim = draw_text_with_shadow(
@@ -127,7 +134,6 @@ def create_flyer_image_shadow(
         main_resized = resize_image_contain(main_img, target_w, target_h)
         if main_resized:
             paste_x = (W - main_resized.width) // 2
-            # ★修正: Y位置調整 (content_pos_y) を適用
             offset_y = int(styles.get("content_pos_y", 0) * scale_f)
             paste_y = available_top + (available_h - main_resized.height) // 2 + offset_y
             
@@ -146,6 +152,27 @@ def create_flyer_image_shadow(
         ly = int(H * 0.03) + int(H * styles.get("logo_pos_y", 0) / 100.0)
         base_img.paste(logo_img, (lx, ly), logo_img)
         current_y = ly + logo_img.height
+
+    # ★追加: サブタイトル (ロゴの下)
+    if subtitle_text:
+        sub_str = str(subtitle_text)
+        use_font_sub = fallback_font_path if contains_japanese(sub_str) and fallback_font_path else s_subtitle["font_path"]
+        
+        # ロゴと日付の間隔を考慮して配置 (ロゴのすぐ下)
+        sub_y = current_y + s_subtitle["pos_y"]
+        
+        h_sub = draw_text_with_shadow(
+            base_img, sub_str, W//2 + s_subtitle["pos_x"], sub_y, 
+            use_font_sub, s_subtitle["size"], int(W*0.9), s_subtitle["color"], 
+            anchor="ma", # 中央揃え (Middle Anchor)
+            shadow_on=s_subtitle["shadow_on"], 
+            shadow_color=s_subtitle["shadow_color"], 
+            shadow_blur=s_subtitle["shadow_blur"], 
+            shadow_off_x=s_subtitle["shadow_off_x"], 
+            shadow_off_y=s_subtitle["shadow_off_y"],
+            fallback_font_path=fallback_font_path
+        )
+        current_y += h_sub
 
     header_y = current_y + int(H * 0.02)
     padding_x = int(W * 0.05)
@@ -237,7 +264,6 @@ def create_flyer_image_shadow(
     ft_h = int(H * 0.05)
     processed_footer = []
     
-    # 計算用のフォントオブジェクト準備
     def get_calc_font(style_obj):
         try: return ImageFont.truetype(style_obj["font_path"], style_obj["size"])
         except: return ImageFont.load_default()
@@ -253,11 +279,9 @@ def create_flyer_image_shadow(
     f_fb_note = get_fallback_calc_font(s_note)
     f_fb_ticket = get_fallback_calc_font(s_ticket)
 
-    # フッター各行の高さを計測
     for item in footer_lines:
         has_jp = contains_japanese(item["text"])
         
-        # 計算時も日本語判定してフォントオブジェクトを切り替え
         if item["style"] == s_ticket:
             u_font = f_fb_ticket if has_jp else f_ticket_obj
         else:
@@ -269,22 +293,19 @@ def create_flyer_image_shadow(
         processed_footer.append({**item, "h": h})
         ft_h += h + item["gap"]
 
-    # フッター描画位置決定
     footer_start_y = H - ft_h + footer_pos_y
     curr_fy = footer_start_y
     
-    # 描画ループ
     for item in reversed(processed_footer):
         st_obj = item["style"]
         
-        # ★重要: 日本語が含まれる場合、フォントパスを強制的に補助フォントに切り替える
         use_font_path = st_obj["font_path"]
         if contains_japanese(item["text"]) and fallback_font_path:
             use_font_path = fallback_font_path
         
         actual_h = draw_text_with_shadow(
             base_img, item["text"], W//2 + st_obj["pos_x"], curr_fy + st_obj["pos_y"], 
-            use_font_path, # 切り替えたパスを渡す
+            use_font_path, 
             st_obj["size"], int(W*0.9), st_obj["color"], "ma",
             st_obj["shadow_on"], st_obj["shadow_color"], st_obj["shadow_blur"], st_obj["shadow_off_x"], st_obj["shadow_off_y"],
             fallback_font_path=fallback_font_path
