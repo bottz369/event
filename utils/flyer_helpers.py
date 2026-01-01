@@ -32,22 +32,35 @@ def load_image_from_source(source):
 def ensure_font_file_exists(db, filename):
     """ローカルにフォントがない場合、DBのAsset情報を参照してダウンロードする"""
     if not filename: return None
-    local_path = os.path.join(FONT_DIR, filename)
-    if os.path.exists(local_path):
+    
+    # ★修正: 絶対パス化して安全性を確保
+    abs_font_dir = os.path.abspath(FONT_DIR)
+    os.makedirs(abs_font_dir, exist_ok=True)
+    local_path = os.path.join(abs_font_dir, filename)
+    
+    if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
         return local_path
     
     try:
+        # DB (Assetテーブル) から検索
         asset = db.query(Asset).filter(Asset.image_filename == filename).first()
         if asset:
             url = get_image_url(asset.image_filename)
             if url:
                 response = requests.get(url, timeout=10)
                 if response.status_code == 200:
-                    # ディレクトリがない場合は作成
-                    os.makedirs(FONT_DIR, exist_ok=True)
                     with open(local_path, "wb") as f:
                         f.write(response.content)
                     return local_path
+        
+        # ★追加: AssetFileテーブル (バイナリ保存) からも検索 (互換性のため)
+        from database import AssetFile
+        asset_file = db.query(AssetFile).filter(AssetFile.filename == filename).first()
+        if asset_file and asset_file.file_data:
+            with open(local_path, "wb") as f:
+                f.write(asset_file.file_data)
+            return local_path
+
     except Exception as e:
         print(f"Font download error: {e}")
     return None
