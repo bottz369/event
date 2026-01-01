@@ -19,13 +19,15 @@ def create_flyer_image_shadow(
     system_fallback_filename=None
 ):
     # 1. フォントファイルの存在確認・準備
+    # スタイルで指定されているフォントをダウンロード
     for k in ["date", "venue", "time", "ticket_name", "ticket_note"]:
         fname = styles.get(f"{k}_font", "keifont.ttf")
         ensure_font_file_exists(db, fname)
     
-    fallback_font_path = None
-    if system_fallback_filename:
-        fallback_font_path = ensure_font_file_exists(db, system_fallback_filename)
+    # 日本語用補助フォントの準備
+    # 設定がなければデフォルトの 'keifont.ttf' を使用する安全策を追加
+    fallback_fname = system_fallback_filename if system_fallback_filename else "keifont.ttf"
+    fallback_font_path = ensure_font_file_exists(db, fallback_fname)
 
     # 2. 背景画像の準備
     raw_bg = load_image_from_source(bg_source)
@@ -84,6 +86,7 @@ def create_flyer_image_shadow(
     
     # 日付 (シミュレーション)
     date_str = str(date_text)
+    # 日本語が含まれる場合はフォントを切り替え
     use_font_date = fallback_font_path if contains_japanese(date_str) and fallback_font_path else s_date["font_path"]
     
     h_date_sim = draw_text_with_shadow(
@@ -227,24 +230,19 @@ def create_flyer_image_shadow(
         footer_lines.append({"text": txt, "style": s_ticket, "gap": gap})
         is_first = False
 
-    # フッター高さ計算
+    # フッター高さ計算 (安全策付き)
     ft_h = int(H * 0.05)
     processed_footer = []
     
     # 計算用のフォントオブジェクト準備
-    # (ここではデフォルトのフォントパスを使うが、日本語ならfallbackを使う)
     def get_calc_font(style_obj):
-        try:
-            return ImageFont.truetype(style_obj["font_path"], style_obj["size"])
-        except:
-            return ImageFont.load_default()
+        try: return ImageFont.truetype(style_obj["font_path"], style_obj["size"])
+        except: return ImageFont.load_default()
     
     def get_fallback_calc_font(style_obj):
         if fallback_font_path:
-            try:
-                return ImageFont.truetype(fallback_font_path, style_obj["size"])
-            except:
-                pass
+            try: return ImageFont.truetype(fallback_font_path, style_obj["size"])
+            except: pass
         return ImageFont.load_default()
 
     f_note_obj = get_calc_font(s_note)
@@ -256,7 +254,7 @@ def create_flyer_image_shadow(
     for item in footer_lines:
         has_jp = contains_japanese(item["text"])
         
-        # 計算時も日本語判定
+        # 計算時も日本語判定してフォントオブジェクトを切り替え
         if item["style"] == s_ticket:
             u_font = f_fb_ticket if has_jp else f_ticket_obj
         else:
@@ -276,7 +274,7 @@ def create_flyer_image_shadow(
     for item in reversed(processed_footer):
         st_obj = item["style"]
         
-        # ★重要修正: 日本語が含まれる場合、フォントパスを強制的に補助フォントに切り替える
+        # ★重要: 日本語が含まれる場合、フォントパスを強制的に補助フォントに切り替える
         use_font_path = st_obj["font_path"]
         if contains_japanese(item["text"]) and fallback_font_path:
             use_font_path = fallback_font_path
