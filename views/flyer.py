@@ -456,8 +456,114 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     return max(h_label, h_time)
 
 # ==========================================
-# 3. フライヤー生成ロジック
+# 3. フライヤー生成ロジック (修正版)
 # ==========================================
+
+# ★修正: フォントパスを受け取り、サイズを自動調整して描画する関数に変更
+def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_width, fill_color, 
+                          anchor="la", 
+                          shadow_on=False, shadow_color="#000000", shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
+                          fallback_font_path=None):
+    if not text: return 0
+    
+    # 1. フォントサイズの自動調整 (Autoscaling)
+    # 文字列が max_width に収まるまでフォントサイズを小さくする
+    current_size = int(font_size_px)
+    min_size = 10
+    
+    # フォントロード用の関数
+    def load_fonts(size):
+        try:
+            p_font = ImageFont.truetype(font_path, size)
+        except:
+            p_font = ImageFont.load_default()
+            
+        f_font = p_font
+        if fallback_font_path and os.path.exists(fallback_font_path):
+            try:
+                f_font = ImageFont.truetype(fallback_font_path, size)
+            except:
+                pass
+        return p_font, f_font
+
+    # ループで最適サイズを探す
+    primary_font, fallback_font = load_fonts(current_size)
+    dummy_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    
+    # フォントパスが存在しない場合はループできないので1回で抜けるガード
+    can_resize = os.path.exists(font_path) if font_path else False
+
+    while can_resize and current_size > min_size:
+        # 現在のサイズで幅を計測
+        w, h = draw_text_mixed(dummy_draw, (0, 0), text, primary_font, fallback_font, fill_color)
+        
+        # 影の分のマージンを考慮してチェック
+        margin_estimate = max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 5
+        if w + (margin_estimate * 2) <= max_width:
+            break
+        
+        # 収まらない場合はサイズを小さくして再ロード
+        current_size -= 2
+        primary_font, fallback_font = load_fonts(current_size)
+
+    # 2. 最終的な描画 (決定したフォントサイズを使用)
+    text_w, text_h = draw_text_mixed(dummy_draw, (0, 0), text, primary_font, fallback_font, fill_color)
+    
+    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
+    canvas_w = int(text_w + margin * 2)
+    canvas_h = int(text_h + margin * 2 + current_size * 0.5) 
+    
+    txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+    txt_draw = ImageDraw.Draw(txt_img)
+    
+    draw_x = margin
+    draw_y = margin
+    
+    draw_text_mixed(txt_draw, (draw_x, draw_y), text, primary_font, fallback_font, fill_color)
+    
+    final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+    if shadow_on:
+        alpha = txt_img.getchannel("A")
+        shadow_solid = Image.new("RGBA", (canvas_w, canvas_h), shadow_color)
+        shadow_solid.putalpha(alpha)
+        if shadow_blur > 0:
+            shadow_solid = shadow_solid.filter(ImageFilter.GaussianBlur(shadow_blur))
+        final_layer.paste(shadow_solid, (shadow_off_x, shadow_off_y), shadow_solid)
+        
+    final_layer.paste(txt_img, (0, 0), txt_img)
+    
+    # 3. それでもはみ出る場合の最終安全策 (アスペクト比を維持して縮小)
+    # Autoscalingでほぼ解決するはずですが、万が一のために残します
+    content_w = canvas_w
+    content_h = canvas_h
+    
+    # marginを除いた実質テキスト幅でチェック
+    effective_text_w = text_w + (max(abs(shadow_off_x), shadow_blur*2)) 
+    
+    if effective_text_w > max_width:
+        ratio = max_width / effective_text_w
+        new_w = int(content_w * ratio)
+        new_h = int(content_h * ratio) # ★修正: 高さも比率に合わせて縮小（文字潰れ防止）
+        final_layer = final_layer.resize((new_w, new_h), Image.LANCZOS)
+        content_w = new_w
+        content_h = new_h
+    
+    # アンカー位置調整
+    paste_x = x - int(margin * (content_w / canvas_w))
+    paste_y = y - margin
+    
+    if anchor == "ra":
+        paste_x = x - content_w + int(margin * (content_w / canvas_w))
+    elif anchor == "ma":
+        paste_x = x - (content_w // 2)
+
+    base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
+    
+    # 次の行のために、描画した高さを返す
+    # (縮小されている場合は縮小後の高さを返す必要があるが、行間調整のため元の高さを返すのが無難か、
+    #  あるいは縮小後の高さを返して詰めさせるか。ここでは見た目通りの高さを返します)
+    return content_h - margin  # おおよその高さ
+
 
 def create_flyer_image_shadow(
     db, bg_source, logo_source, main_source,
@@ -466,7 +572,7 @@ def create_flyer_image_shadow(
     ticket_info_list, common_notes_list,
     system_fallback_filename=None
 ):
-    # フォント準備
+    # フォントファイルの存在確認
     for k in ["date", "venue", "time", "ticket_name", "ticket_note"]:
         fname = styles.get(f"{k}_font", "keifont.ttf")
         ensure_font_file_exists(db, fname)
@@ -488,18 +594,18 @@ def create_flyer_image_shadow(
     
     W, H = base_img.size
     
-    def get_style(key, default_size=50, default_color="#FFFFFF"):
+    # ★修正: スタイル取得関数を「パス」を返すように変更
+    def get_style_config(key, default_size=50, default_color="#FFFFFF"):
         f_name = styles.get(f"{key}_font", "keifont.ttf")
         f_size_val = styles.get(f"{key}_size", default_size)
         scale_factor = W / 1200.0
         final_size_px = int(f_size_val * scale_factor)
         
         path = os.path.join(FONT_DIR, f_name)
-        try: font = ImageFont.truetype(path, final_size_px)
-        except: font = ImageFont.load_default()
         
         return {
-            "font": font, "size": final_size_px,
+            "font_path": path, # パスを渡す
+            "size": final_size_px,
             "color": styles.get(f"{key}_color", default_color),
             "shadow_on": styles.get(f"{key}_shadow_on", False),
             "shadow_color": styles.get(f"{key}_shadow_color", "#000000"),
@@ -510,11 +616,11 @@ def create_flyer_image_shadow(
             "pos_y": int(styles.get(f"{key}_pos_y", 0) * scale_factor)
         }
 
-    s_date = get_style("date", 90)
-    s_venue = get_style("venue", 50)
-    s_time = get_style("time", 60) 
-    s_ticket = get_style("ticket_name", 45)
-    s_note = get_style("ticket_note", 30)
+    s_date = get_style_config("date", 90)
+    s_venue = get_style_config("venue", 50)
+    s_time = get_style_config("time", 60) 
+    s_ticket = get_style_config("ticket_name", 45)
+    s_note = get_style_config("ticket_note", 30)
 
     padding_x = int(W * 0.05)
     current_y = int(H * 0.03)
@@ -546,7 +652,7 @@ def create_flyer_image_shadow(
     # 左側 (日付・会場)
     h_date = draw_text_with_shadow(
         base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
-        s_date["font"], s_date["size"], left_max_w, s_date["color"], "la",
+        s_date["font_path"], s_date["size"], left_max_w, s_date["color"], "la",
         s_date["shadow_on"], s_date["shadow_color"], s_date["shadow_blur"], s_date["shadow_off_x"], s_date["shadow_off_y"],
         fallback_font_path=fallback_font_path
     )
@@ -556,7 +662,7 @@ def create_flyer_image_shadow(
     
     h_venue = draw_text_with_shadow(
         base_img, str(venue_text), left_x + s_venue["pos_x"], venue_y + s_venue["pos_y"], 
-        s_venue["font"], s_venue["size"], left_max_w, s_venue["color"], "la",
+        s_venue["font_path"], s_venue["size"], left_max_w, s_venue["color"], "la",
         s_venue["shadow_on"], s_venue["shadow_color"], s_venue["shadow_blur"], s_venue["shadow_off_x"], s_venue["shadow_off_y"],
         fallback_font_path=fallback_font_path
     )
@@ -565,21 +671,28 @@ def create_flyer_image_shadow(
     o_str = str(open_time) if open_time else "TBA"
     s_str = str(start_time) if start_time else "TBA"
     
+    # 時間描画用フォントオブジェクト (Triangle/Aligned関数はまだ旧式仕様のためここでロード)
+    try:
+        time_font_obj = ImageFont.truetype(s_time["font_path"], s_time["size"])
+    except:
+        time_font_obj = ImageFont.load_default()
+
     line_h_time = s_time["size"] * 1.3 
     time_line_gap = int(styles.get("time_line_gap", 0) * (W / 1200.0))
     
     tri_vis = styles.get("time_tri_visible", True)
     tri_scale = styles.get("time_tri_scale", 1.0)
-    
-    # Alignment Logic
     align_mode = styles.get("time_alignment", "right")
     
     fixed_label_w = 0
     if align_mode == "triangle":
         dummy = ImageDraw.Draw(Image.new("RGBA", (1,1)))
-        fb_font = s_time["font"]
-        w1, _ = draw_text_mixed(dummy, (0,0), "OPEN", s_time["font"], fb_font, (0,0,0))
-        w2, _ = draw_text_mixed(dummy, (0,0), "START", s_time["font"], fb_font, (0,0,0))
+        fb_font = time_font_obj
+        if fallback_font_path:
+             try: fb_font = ImageFont.truetype(fallback_font_path, s_time["size"])
+             except: pass
+        w1, _ = draw_text_mixed(dummy, (0,0), "OPEN", time_font_obj, fb_font, (0,0,0))
+        w2, _ = draw_text_mixed(dummy, (0,0), "START", time_font_obj, fb_font, (0,0,0))
         fixed_label_w = max(w1, w2)
 
     base_time_x = right_x + s_time["pos_x"]
@@ -591,7 +704,7 @@ def create_flyer_image_shadow(
     # OPEN
     draw_time_row_aligned(
         base_img, "OPEN", o_str, base_time_x, header_y + s_time["pos_y"],
-        s_time["font"], s_time["size"], right_max_w, s_time["color"],
+        time_font_obj, s_time["size"], right_max_w, s_time["color"],
         s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
         fallback_font_path,
         tri_visible=tri_vis, tri_scale=tri_scale,
@@ -602,7 +715,7 @@ def create_flyer_image_shadow(
     start_y = header_y + line_h_time + time_line_gap
     draw_time_row_aligned(
         base_img, "START", s_str, base_time_x, start_y + s_time["pos_y"],
-        s_time["font"], s_time["size"], right_max_w, s_time["color"],
+        time_font_obj, s_time["size"], right_max_w, s_time["color"],
         s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
         fallback_font_path,
         tri_visible=tri_vis, tri_scale=tri_scale,
@@ -618,7 +731,6 @@ def create_flyer_image_shadow(
     note_gap_px = int(styles.get("note_gap", 15) * (W / 1200.0))
     ticket_gap_px = int(styles.get("ticket_gap", 20) * (W / 1200.0))
     area_gap_px = int(styles.get("area_gap", 40) * (W / 1200.0))
-    # ★追加: フッター全体Y位置
     footer_pos_y_px = int(styles.get("footer_pos_y", 0) * (W / 1200.0))
 
     # 1. Notes
@@ -642,27 +754,36 @@ def create_flyer_image_shadow(
             
         footer_lines.append({"text": main_txt, "style": s_ticket, "gap": current_gap})
 
+    # フッターの高さ計算 (ここではデフォルトフォントサイズで概算)
     footer_h = int(H * 0.05)
     processed_footer = []
+    
+    # 計算用に一時的なフォントオブジェクトを作成
+    temp_note_font = ImageFont.truetype(s_note["font_path"], s_note["size"])
+    temp_ticket_font = ImageFont.truetype(s_ticket["font_path"], s_ticket["size"])
+    
     for item in footer_lines:
+        use_font = temp_ticket_font if item["style"] == s_ticket else temp_note_font
         dummy_draw = ImageDraw.Draw(Image.new("RGBA",(1,1)))
-        bbox = dummy_draw.textbbox((0,0), item["text"], font=item["style"]["font"])
+        bbox = dummy_draw.textbbox((0,0), item["text"], font=use_font)
         h = bbox[3] - bbox[1]
         processed_footer.append({**item, "h": h})
         footer_h += h + item["gap"]
 
-    # ★修正: footer_pos_y_px を加算して位置調整
     footer_start_y = H - footer_h + footer_pos_y_px
     
     curr_fy = footer_start_y
     for item in reversed(processed_footer):
         st_obj = item["style"]
-        draw_text_with_shadow(
+        # ★修正: ここも新しい draw_text_with_shadow を使用
+        actual_h = draw_text_with_shadow(
             base_img, item["text"], W//2 + st_obj["pos_x"], curr_fy + st_obj["pos_y"], 
-            st_obj["font"], st_obj["size"], int(W*0.9), st_obj["color"], "ma",
+            st_obj["font_path"], st_obj["size"], int(W*0.9), st_obj["color"], "ma",
             st_obj["shadow_on"], st_obj["shadow_color"], st_obj["shadow_blur"], st_obj["shadow_off_x"], st_obj["shadow_off_y"],
             fallback_font_path=fallback_font_path
         )
+        # 実際に描画された高さ(縮小されたかもしれない)を使う場合は actual_h を使うが、
+        # 行間を揃えるために元の計算高さを使う方がレイアウト崩れが少ない
         curr_fy += item["h"] + item["gap"]
 
     # D. Main Image
