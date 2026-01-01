@@ -37,18 +37,19 @@ def ensure_font_file_exists(db, filename):
     local_path = os.path.join(FONT_DIR, filename)
     if os.path.exists(local_path):
         return local_path
-    asset = db.query(Asset).filter(Asset.image_filename == filename).first()
-    if asset:
-        url = get_image_url(asset.image_filename)
-        if url:
-            try:
+    
+    try:
+        asset = db.query(Asset).filter(Asset.image_filename == filename).first()
+        if asset:
+            url = get_image_url(asset.image_filename)
+            if url:
                 response = requests.get(url, timeout=10)
                 if response.status_code == 200:
                     with open(local_path, "wb") as f:
                         f.write(response.content)
                     return local_path
-            except Exception as e:
-                print(f"Font download error: {e}")
+    except Exception as e:
+        print(f"Font download error: {e}")
     return None
 
 def crop_center_to_a4(img):
@@ -165,6 +166,7 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
                 if n and str(n).strip():
                     text += f"\n※{str(n).strip()}"
 
+        # タイムテーブルデータ (JSONまたはDBリレーションから取得可能だが、ここではJSONを使用)
         if proj.data_json:
             try:
                 data = json.loads(proj.data_json)
