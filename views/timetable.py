@@ -3,10 +3,11 @@ import pandas as pd
 import json
 import io
 import os
+import requests # ★追加: URLダウンロード用
 from datetime import datetime, date, timedelta
 
-# ★重要: AssetFile を確実にインポート
-from database import get_db, SessionLocal, Artist, TimetableProject, AssetFile
+# ★重要: AssetFile, Asset, get_image_url をインポート
+from database import get_db, SessionLocal, Artist, TimetableProject, AssetFile, Asset, get_image_url
 from constants import (
     TIME_OPTIONS, DURATION_OPTIONS, ADJUSTMENT_OPTIONS, 
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
@@ -26,11 +27,13 @@ except Exception as e:
     import_error_msg = str(e)
     generate_timetable_image = None
 
-# --- ★強化版: フォント確保関数 ---
+# --- ★強化版: フォント確保関数 (URL対応) ---
 def ensure_font_exists(db, font_filename):
     """
-    指定されたフォントがローカル(FONT_DIR)にあるか確認し、
-    なければDB(AssetFile)からダウンロードして保存する。
+    指定されたフォントがローカル(FONT_DIR)にあるか確認し、なければ:
+    1. Assetテーブル (Storage URL)
+    2. AssetFileテーブル (Binary)
+    の順でダウンロードして保存する。
     """
     if not font_filename: 
         return None
@@ -45,24 +48,33 @@ def ensure_font_exists(db, font_filename):
     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
         return file_path
 
-    # DBから取得
-    # print(f"Downloading font: {font_filename}")
-    asset = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
-    
-    if asset and asset.file_data:
-        try:
+    # 1. URL (Storage) から取得
+    try:
+        asset = db.query(Asset).filter(Asset.image_filename == font_filename).first()
+        if asset:
+            url = get_image_url(asset.image_filename)
+            if url:
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    with open(file_path, "wb") as f:
+                        f.write(response.content)
+                    st.toast(f"フォント(URL)を準備しました: {font_filename}", icon="🔤")
+                    return file_path
+    except Exception as e:
+        print(f"URL Font Download Error: {e}")
+
+    # 2. Binary (DB) から取得 (予備)
+    try:
+        asset_file = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
+        if asset_file and asset_file.file_data:
             with open(file_path, "wb") as f:
-                f.write(asset.file_data)
-            st.toast(f"フォント「{font_filename}」を準備しました", icon="🔤")
+                f.write(asset_file.file_data)
+            st.toast(f"フォント(DB)を準備しました: {font_filename}", icon="🔤")
             return file_path
-        except Exception as e:
-            print(f"Font write error: {e}")
-            st.error(f"フォント保存エラー: {e}")
-            return None
-    else:
-        # DBにもない場合
-        # st.warning(f"フォント「{font_filename}」がデータベースに見つかりません")
-        return None
+    except Exception as e:
+        print(f"Binary Font Write Error: {e}")
+
+    return None
 
 def render_timetable_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
