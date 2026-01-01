@@ -3,23 +3,24 @@ from datetime import date, datetime, timedelta
 import json
 import base64
 import os
-import pandas as pd # ★追加
+import pandas as pd
 
 from database import get_db, TimetableProject, SessionLocal, Artist, AssetFile, get_image_url
-from utils import safe_int, safe_str, calculate_timetable_flow, get_default_row_settings # ★追加
-from constants import FONT_DIR # ★追加
+
+# ★修正: get_default_row_settings は constants から、calculate_timetable_flow は utils から
+from constants import FONT_DIR, get_default_row_settings
+from utils import safe_int, safe_str, calculate_timetable_flow
 
 from logic_project import save_current_project, duplicate_project, load_timetable_rows
-# ★画像生成ロジックの読み込み (エラー回避のためtry-except)
+
+# 画像生成ロジックの読み込み
 try:
     from logic_timetable import generate_timetable_image
 except:
     generate_timetable_image = None
 try:
-    # グリッド生成関数がある場所を指定 (もし views.grid ならそちらから)
     from views.grid import generate_grid_image_buffer 
 except:
-    # 関数名が不明な場合のフォールバック定義
     generate_grid_image_buffer = None
 
 from views.overview import render_overview_page 
@@ -239,7 +240,7 @@ def prepare_active_project_fonts(db):
     except Exception as e:
         print(f"Font preparation error: {e}")
 
-# --- ★新規追加: コンテンツ自動生成関数 ---
+# --- コンテンツ自動生成関数 ---
 def ensure_generated_contents(db):
     """
     リロード時などに画像キャッシュがない場合、保存された設定とフォントを使って
@@ -249,7 +250,7 @@ def ensure_generated_contents(db):
     if st.session_state.get("last_generated_tt_image") is None:
         if generate_timetable_image and "tt_artists_order" in st.session_state:
             try:
-                # データの構築 (render_timetable_pageと同様のロジック)
+                # データの構築
                 rows = []
                 if st.session_state.get("tt_has_pre_goods"):
                     p = st.session_state.tt_pre_goods_settings
@@ -301,20 +302,15 @@ def ensure_generated_contents(db):
                     font_path = os.path.join(FONT_DIR, st.session_state.tt_font)
                     img = generate_timetable_image(gen_list, font_path=font_path)
                     st.session_state.last_generated_tt_image = img
-                    # print("TT Image Auto-Generated")
             
             except Exception as e:
                 print(f"Auto-generate TT failed: {e}")
 
-    # 2. グリッド画像の自動生成
-    if st.session_state.get("last_generated_grid_image") is None:
-        # グリッド生成関数があれば実行 (引数は実装に合わせて調整が必要)
-        # ここでは一般的な引数を想定
-        pass # 現状関数が不明確なためスキップするが、必要ならここに追加
+    # 2. グリッド画像の自動生成 (実装済みであればここに追加)
+    pass
 
 # --- メイン描画 ---
 def render_workspace_page():
-    # 画像表示診断 (変更なし)
     with st.sidebar.expander("🔧 画像表示診断", expanded=False):
         st.caption("タイムテーブルに画像が出ない場合、ここでチェックしてください。")
         debug_name = st.text_input("アーティスト名 (完全一致)", placeholder="例: アーティストA")
@@ -420,8 +416,7 @@ def render_workspace_page():
         # 1. フォント準備（ファイル生成）
         prepare_active_project_fonts(db)
         
-        # 2. ★追加: コンテンツ自動生成（画像がない場合作成）
-        # これによりフライヤー画面を開いてもTofuにならず、正しい画像が表示されます
+        # 2. コンテンツ自動生成
         ensure_generated_contents(db)
 
         proj_check = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
