@@ -79,6 +79,13 @@ def resize_image_contain(img, max_w, max_h):
     new_h = int(img.height * ratio)
     return img.resize((new_w, new_h), Image.LANCZOS)
 
+# ★エラーの原因だった関数をここに定義します
+def resize_image_to_width(img, target_width):
+    if not img: return None
+    w_percent = (target_width / float(img.size[0]))
+    h_size = int((float(img.size[1]) * float(w_percent)))
+    return img.resize((target_width, h_size), Image.LANCZOS)
+
 def format_event_date(dt_obj, mode="EN"):
     if not dt_obj: return ""
     target_date = dt_obj
@@ -214,22 +221,15 @@ def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width
                   shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
                   tri_visible=True, tri_scale=1.0, tri_color=None):
     
-    # フォント準備
     fallback_font = font
     if fallback_font_path and os.path.exists(fallback_font_path):
         try: fallback_font = ImageFont.truetype(fallback_font_path, int(font_size_px))
         except: pass
 
-    # コンポーネント計測
     dummy = ImageDraw.Draw(Image.new("RGBA", (1,1)))
-    
-    # 1. Label (OPEN/START)
     w_label, h_label = draw_text_mixed(dummy, (0,0), label, font, fallback_font, fill_color)
-    
-    # 2. Time
     w_time, h_time = draw_text_mixed(dummy, (0,0), time_str, font, fallback_font, fill_color)
     
-    # 3. Triangle
     tri_h = font_size_px * 0.6 * tri_scale
     tri_w = tri_h * 0.8
     tri_padding = font_size_px * 0.3
@@ -238,9 +238,8 @@ def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width
     if tri_visible:
         total_w_content += tri_w + (tri_padding * 2)
     else:
-        total_w_content += tri_padding # 三角形なしでも少し隙間
+        total_w_content += tri_padding
         
-    # キャンバス準備
     margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
     canvas_w = int(total_w_content + margin * 2)
     canvas_h = int(max(h_label, h_time, tri_h) + margin * 2 + font_size_px * 0.5)
@@ -248,38 +247,30 @@ def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width
     txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     draw = ImageDraw.Draw(txt_img)
     
-    # 描画開始位置
     cur_x = margin
     draw_y = margin
     
-    # Draw Label
+    # Label
     draw_text_mixed(draw, (cur_x, draw_y), label, font, fallback_font, fill_color)
     cur_x += w_label
     
-    # Draw Triangle
+    # Triangle
     if tri_visible:
         cur_x += tri_padding
-        # 三角形の座標 (右向き)
-        # 上下中央揃え
-        cy = draw_y + (font_size_px * 0.5) # フォントサイズの半分くらいを仮の中心に
-        # 実際には文字の高さの中心を取りたいが、簡易的に
+        cy = draw_y + (font_size_px * 0.5)
         ty = cy - (tri_h / 2)
         by = cy + (tri_h / 2)
         lx = cur_x
         rx = cur_x + tri_w
-        
-        # 三角形描画
         t_col = tri_color if tri_color else fill_color
         draw.polygon([(lx, ty), (lx, by), (rx, cy)], fill=t_col)
-        
         cur_x += tri_w + tri_padding
     else:
         cur_x += tri_padding
 
-    # Draw Time
+    # Time
     draw_text_mixed(draw, (cur_x, draw_y), time_str, font, fallback_font, fill_color)
     
-    # --- 影と統合 ---
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     if shadow_on:
         alpha = txt_img.getchannel("A")
@@ -291,7 +282,6 @@ def draw_time_row(base_img, label, time_str, x, y, font, font_size_px, max_width
         
     final_layer.paste(txt_img, (0, 0), txt_img)
     
-    # 配置計算 (右寄せ前提)
     paste_x = x - canvas_w + margin # Right Align
     paste_y = y - margin
     
@@ -376,8 +366,8 @@ def create_flyer_image_shadow(
             "shadow_blur": styles.get(f"{key}_shadow_blur", 0),
             "shadow_off_x": int(styles.get(f"{key}_shadow_off_x", 5) * scale_factor),
             "shadow_off_y": int(styles.get(f"{key}_shadow_off_y", 5) * scale_factor),
-            "pos_x": int(styles.get(f"{key}_pos_x", 0) * scale_factor), # 追加
-            "pos_y": int(styles.get(f"{key}_pos_y", 0) * scale_factor)  # 追加
+            "pos_x": int(styles.get(f"{key}_pos_x", 0) * scale_factor),
+            "pos_y": int(styles.get(f"{key}_pos_y", 0) * scale_factor)
         }
 
     s_date = get_style("date", 90)
@@ -396,7 +386,9 @@ def create_flyer_image_shadow(
         logo_pos_x = styles.get("logo_pos_x", 0)
         logo_pos_y = styles.get("logo_pos_y", 0)
         base_logo_w = int(W * 0.5 * logo_scale)
+        # ここで resize_image_to_width を使うため、定義が必要でした
         logo_img = resize_image_to_width(logo_img, base_logo_w)
+        
         base_x = (W - logo_img.width) // 2
         base_y = current_y
         offset_x = int(W * (logo_pos_x / 100.0))
@@ -434,9 +426,8 @@ def create_flyer_image_shadow(
     o_str = str(open_time) if open_time else "TBA"
     s_str = str(start_time) if start_time else "TBA"
     
-    # 時間設定取得
     line_h_time = s_time["size"] * 1.3 
-    time_line_gap = int(styles.get("time_line_gap", 0) * (W / 1200.0)) # 追加: 行間設定
+    time_line_gap = int(styles.get("time_line_gap", 0) * (W / 1200.0))
     
     tri_vis = styles.get("time_tri_visible", True)
     tri_scale = styles.get("time_tri_scale", 1.0)
@@ -603,7 +594,6 @@ def render_flyer_editor(project_id):
         if f"flyer_{key_prefix}_shadow_off_x" not in st.session_state: st.session_state[f"flyer_{key_prefix}_shadow_off_x"] = saved_config.get(f"{key_prefix}_shadow_off_x", 5)
         if f"flyer_{key_prefix}_shadow_off_y" not in st.session_state: st.session_state[f"flyer_{key_prefix}_shadow_off_y"] = saved_config.get(f"{key_prefix}_shadow_off_y", 5)
         
-        # Position adjustments
         if f"flyer_{key_prefix}_pos_x" not in st.session_state: st.session_state[f"flyer_{key_prefix}_pos_x"] = saved_config.get(f"{key_prefix}_pos_x", 0)
         if f"flyer_{key_prefix}_pos_y" not in st.session_state: st.session_state[f"flyer_{key_prefix}_pos_y"] = saved_config.get(f"{key_prefix}_pos_y", 0)
 
@@ -633,7 +623,6 @@ def render_flyer_editor(project_id):
                     with c1: st.number_input("影X", -50, 50, key=f"flyer_{key_prefix}_shadow_off_x")
                     with c2: st.number_input("影Y", -50, 50, key=f"flyer_{key_prefix}_shadow_off_y")
             
-            # 時間専用設定
             if key_prefix == "time":
                 st.markdown("---")
                 st.markdown("**時間表示オプション**")
