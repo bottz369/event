@@ -135,7 +135,6 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
             if isinstance(date_val, str):
                 try: date_val = datetime.strptime(date_val, "%Y-%m-%d").date()
                 except: pass
-            
             if isinstance(date_val, (date, datetime)):
                 date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
             else:
@@ -174,7 +173,6 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
                     a = d.get("ARTIST", "")
                     if a and a not in ["開演前物販", "終演後物販", "調整中", ""] and a not in artists:
                         artists.append(a)
-                
                 if artists:
                     text += f"\n\n■出演者（{len(artists)}組予定）"
                     for i, a_name in enumerate(artists, 1):
@@ -321,7 +319,7 @@ def draw_text_with_shadow(base_img, text, x, y, font, font_size_px, max_width, f
     base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
     return text_h
 
-# --- ★カスタム時間描画 (三角形対応) ---
+# --- ★カスタム時間描画 (三角形対応 / 配置オプション対応) ---
 def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
                           shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
                           tri_visible=True, tri_scale=1.0, tri_color=None,
@@ -418,6 +416,32 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     return max(h_label, h_time)
 
 # ==========================================
+# 2. UI コンポーネント (修正: 定義をここに配置)
+# ==========================================
+
+def render_visual_selector(label, assets, key_prefix, current_id, allow_none=False):
+    st.markdown(f"**{label}**")
+    if allow_none:
+        is_none = (not current_id or current_id == 0)
+        if st.button(f"🚫 {label}なし", key=f"btn_none_{key_prefix}", type="primary" if is_none else "secondary"):
+            st.session_state[key_prefix] = 0
+            st.rerun()
+
+    if not assets:
+        st.info("画像が見つかりません。")
+        return
+
+    cols = st.columns(4)
+    for i, asset in enumerate(assets):
+        with cols[i % 4]:
+            img_url = get_image_url(asset.image_filename)
+            st.image(img_url, use_container_width=True) 
+            is_sel = (asset.id == current_id)
+            if st.button("選択", key=f"btn_{key_prefix}_{asset.id}", type="primary" if is_sel else "secondary", use_container_width=True):
+                st.session_state[key_prefix] = asset.id
+                st.rerun()
+
+# ==========================================
 # 3. フライヤー生成ロジック
 # ==========================================
 
@@ -489,6 +513,7 @@ def create_flyer_image_shadow(
         logo_pos_y = styles.get("logo_pos_y", 0)
         base_logo_w = int(W * 0.5 * logo_scale)
         logo_img = resize_image_to_width(logo_img, base_logo_w)
+        
         base_x = (W - logo_img.width) // 2
         base_y = current_y
         offset_x = int(W * (logo_pos_x / 100.0))
@@ -504,6 +529,7 @@ def create_flyer_image_shadow(
     left_max_w = int(W * 0.55)
     right_max_w = int(W * 0.35)
 
+    # 左側 (日付・会場)
     h_date = draw_text_with_shadow(
         base_img, str(date_text), left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
         s_date["font"], s_date["size"], left_max_w, s_date["color"], "la",
@@ -628,7 +654,7 @@ def create_flyer_image_shadow(
     
     main_img = load_image_from_source(main_source)
     if main_img and available_h > 100:
-        # ★ここでサイズ設定をstylesから取得 (呼び出し元でGrid/TT用に切り替えられている)
+        # ★ここで Grid / TT 用の設定を反映
         scale_w = styles.get("content_scale_w", 95) / 100.0
         scale_h = styles.get("content_scale_h", 100) / 100.0
         
