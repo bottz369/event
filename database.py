@@ -57,6 +57,7 @@ class TimetableProject(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
+    subtitle = Column(String)  # ★追加: サブタイトル
     event_date = Column(String)
     venue_name = Column(String)
     venue_url = Column(String)
