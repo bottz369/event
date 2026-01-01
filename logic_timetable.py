@@ -4,14 +4,6 @@ import os
 import requests
 from io import BytesIO
 
-# --- DB関連のインポート (失敗してもアプリを落とさない) ---
-try:
-    from database import SessionLocal, Artist, get_image_url
-except ImportError:
-    SessionLocal = None
-    Artist = None
-    get_image_url = None
-
 # ================= 設定エリア =================
 SINGLE_COL_WIDTH = 1450     
 COLUMN_GAP = 80             
@@ -24,7 +16,8 @@ FONT_SIZE_ARTIST = 60
 FONT_SIZE_GOODS = 48        
 
 COLOR_BG_ALL = (0, 0, 0, 0)        # 全体の背景（透明）
-COLOR_ROW_BG = (0, 0, 0, 210)      # 行の背景（透過黒）
+# ★修正: 画像が見えやすいように、少し透明度を上げました (210 -> 160)
+COLOR_ROW_BG = (0, 0, 0, 160)      
 COLOR_TEXT = (255, 255, 255, 255)  # 白文字
 
 AREA_TIME_X = 20
@@ -49,7 +42,8 @@ def load_image_from_url(url):
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         return Image.open(BytesIO(response.content)).convert("RGBA")
-    except:
+    except Exception as e:
+        print(f"Image DL Error: {e}")
         return None
 
 def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_font_size, align="center"):
@@ -85,45 +79,56 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path):
     goods_place = row_data[3]
 
     # ---------------------------------------------------------
-    # [レイヤー1] アーティスト写真 (あれば表示、なければスキップ)
+    # [レイヤー1] アーティスト写真描画 (遅延インポートで安全に実行)
     # ---------------------------------------------------------
     # 特殊な行でなければ処理開始
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
-        # 必要な機能がインポートできているか確認
-        if SessionLocal and Artist and get_image_url:
-            db = None
+        try:
+            # ★重要: ここでインポートすることで、循環参照エラーを回避します
+            from database import SessionLocal, Artist, get_image_url
+            
+            db = SessionLocal()
             try:
-                db = SessionLocal()
                 # 1. DB検索
                 artist = db.query(Artist).filter(Artist.name == name_str).first()
                 
-                # 2. アーティストがいて、かつ画像ファイル名を持っている場合のみ進む
-                if artist and artist.image_filename:
-                    url = get_image_url(artist.image_filename)
-                    if url:
-                        # 3. 画像ダウンロード
-                        img = load_image_from_url(url)
-                        if img:
-                            # 4. 切り抜いて貼り付け
-                            img_fitted = ImageOps.fit(
-                                img, 
-                                (SINGLE_COL_WIDTH, ROW_HEIGHT), 
-                                method=Image.LANCZOS, 
-                                centering=(0.5, 0.5)
-                            )
-                            # 座標を整数にして貼り付け
-                            canvas.paste(img_fitted, (int(base_x), int(base_y)))
-            except Exception:
-                # ★ポイント: DBエラーや画像なしエラーが起きても、ここでは何もしない(pass)
-                # これにより、処理が止まらずに次の「黒背景描画」へ進みます
-                pass
+                if artist:
+                    if artist.image_filename:
+                        # 2. URL取得
+                        url = get_image_url(artist.image_filename)
+                        if url:
+                            # 3. 画像ダウンロード
+                            img = load_image_from_url(url)
+                            if img:
+                                # 4. 切り抜いて貼り付け
+                                img_fitted = ImageOps.fit(
+                                    img, 
+                                    (SINGLE_COL_WIDTH, ROW_HEIGHT), 
+                                    method=Image.LANCZOS, 
+                                    centering=(0.5, 0.5)
+                                )
+                                # 座標を整数にして貼り付け
+                                canvas.paste(img_fitted, (int(base_x), int(base_y)))
+                                print(f"✅ 画像貼り付け成功: {name_str}")
+                            else:
+                                print(f"⚠️ 画像DL失敗: {name_str}")
+                        else:
+                            print(f"⚠️ 画像URL生成失敗: {name_str}")
+                    else:
+                        # 画像登録なし -> スキップ (通常の黒背景のみになる)
+                        pass
+                else:
+                    print(f"⚠️ DB未登録: {name_str}")
             finally:
-                if db: db.close()
+                db.close()
+        except Exception as e:
+            # エラーが出ても止まらず、ログに出して黒背景処理へ進む
+            print(f"❌ 画像処理エラー ({name_str}): {e}")
+            pass
 
     # ---------------------------------------------------------
     # [レイヤー2] 行全体の背景（半透明の黒）- 常に描画
     # ---------------------------------------------------------
-    # アー写があってもなくても、ここを通るので必ず背景がつきます
     draw.rectangle(
         [(base_x, base_y), (base_x + SINGLE_COL_WIDTH, base_y + ROW_HEIGHT)], 
         fill=COLOR_ROW_BG
