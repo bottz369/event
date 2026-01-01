@@ -7,7 +7,7 @@ import pandas as pd
 
 from database import get_db, TimetableProject, SessionLocal, Artist, AssetFile, get_image_url
 
-# ★修正: get_default_row_settings は constants から、calculate_timetable_flow は utils から
+# constantsから FONT_DIR を読み込み
 from constants import FONT_DIR, get_default_row_settings
 from utils import safe_int, safe_str, calculate_timetable_flow
 
@@ -190,7 +190,7 @@ def load_project_to_session(proj):
     st.session_state.grid_last_generated_params = None
     st.session_state.overview_text_preview = None
 
-# --- フォント準備関数 ---
+# --- ★修正点: フォント準備関数 ---
 def prepare_active_project_fonts(db):
     needed_fonts = set()
     if st.session_state.get("tt_font"): needed_fonts.add(st.session_state.tt_font)
@@ -203,13 +203,18 @@ def prepare_active_project_fonts(db):
     try:
         assets = db.query(AssetFile).filter(AssetFile.filename.in_(list(needed_fonts))).all()
         css_styles = ""
-        font_dir = "." 
+        
+        # ★ここを修正: FONT_DIR に保存するように変更
+        font_dir = FONT_DIR 
+        os.makedirs(font_dir, exist_ok=True) # ディレクトリがない場合は作成
         
         for asset in assets:
             if not asset.file_data: continue
             
             # A. ファイル書き出し
             file_path = os.path.join(font_dir, asset.filename)
+            
+            # ファイルが存在しない、またはサイズが0の場合のみ書き出す
             if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
                 try:
                     with open(file_path, "wb") as f:
@@ -217,7 +222,7 @@ def prepare_active_project_fonts(db):
                 except Exception as e:
                     print(f"Failed to write font file {file_path}: {e}")
 
-            # B. CSS注入
+            # B. CSS注入 (プレビュー用)
             try:
                 b64_data = base64.b64encode(asset.file_data).decode()
                 mime_type = "font/ttf"
@@ -299,6 +304,7 @@ def ensure_generated_contents(db):
                 
                 # 画像生成実行
                 if gen_list:
+                    # ★修正: 生成時は保存したパス (FONT_DIR) を参照
                     font_path = os.path.join(FONT_DIR, st.session_state.tt_font)
                     img = generate_timetable_image(gen_list, font_path=font_path)
                     st.session_state.last_generated_tt_image = img
@@ -306,7 +312,7 @@ def ensure_generated_contents(db):
             except Exception as e:
                 print(f"Auto-generate TT failed: {e}")
 
-    # 2. グリッド画像の自動生成 (実装済みであればここに追加)
+    # 2. グリッド画像の自動生成
     pass
 
 # --- メイン描画 ---
