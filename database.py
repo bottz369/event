@@ -3,6 +3,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from supabase import create_client, Client
 import streamlit as st
 import os
+import urllib.parse  # ★追加: URLエンコード用
 
 # --- Supabase設定 (Secretsから読み込み) ---
 try:
@@ -33,8 +34,10 @@ except Exception as e:
 
 # --- Supabase Storageクライアント ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-# ★重要: バケット名は実際のSupabase設定に合わせてください (images, artists など)
-# 今回は "images" と仮定しています
+
+# ★重要: 以前の開発環境とバケット名が同じか確認してください。
+# もし以前は "fonts" や "assets" というバケットを使っていた場合、ここを合わせるか、
+# 移行する必要があります。今回は "images" のままで進めます。
 BUCKET_NAME = "images" 
 
 IMAGE_DIR = "images" 
@@ -94,8 +97,6 @@ class TimetableRow(Base):
     place = Column(String)
     
     add_goods_start_time = Column(String)
-    # ★修正: Integer または Float どちらでも対応できるように定義
-    # ここでは既存に合わせてIntegerにしていますが、Floatが必要なら変更してください
     add_goods_duration = Column(Integer, nullable=True)
     add_goods_place = Column(String)
     
@@ -145,6 +146,8 @@ def upload_image_to_supabase(file_obj, filename):
         elif lower_name.endswith(".webp"):
             content_type = "image/webp"
         
+        # ファイル名をURLエンコード等はせず、そのままアップロード
+        # (Supabase側で保存される名前とDBの名前を一致させるため)
         res = supabase.storage.from_(BUCKET_NAME).upload(
             path=filename,
             file=file_bytes,
@@ -155,10 +158,11 @@ def upload_image_to_supabase(file_obj, filename):
         st.error(f"画像アップロードエラー: {e}")
         return None
 
-# ★重要: 画像URL生成関数の強化
+# ★重要: 画像URL生成関数の修正（URLエンコード対応）
 def get_image_url(filename):
     """
     ファイル名からSupabaseの公開URLを取得する
+    日本語ファイル名に対応するためURLエンコードを行う
     """
     if not filename: return None
     
@@ -172,9 +176,12 @@ def get_image_url(filename):
         return local_path
         
     try:
+        # 日本語ファイル名などをURLで使用できる形式(%E3%81...など)に変換
+        # パス区切り文字 '/' はエンコードしないように safe='/' を指定
+        safe_filename = urllib.parse.quote(filename, safe='/')
+        
         # Supabase Storageから公開URLを取得
-        # 注意: バケットがPublic設定になっている必要があります
-        return supabase.storage.from_(BUCKET_NAME).get_public_url(filename)
+        return supabase.storage.from_(BUCKET_NAME).get_public_url(safe_filename)
     except Exception as e:
         print(f"URL生成エラー: {e}")
         return None
