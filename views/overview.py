@@ -36,6 +36,7 @@ def generate_event_text():
     """イベント概要テキストを生成"""
     try:
         title = st.session_state.get("proj_title", "")
+        subtitle = st.session_state.get("proj_subtitle", "") # ★追加: サブタイトル取得
         date_val = st.session_state.get("proj_date")
         venue = st.session_state.get("proj_venue", "")
         url = st.session_state.get("proj_url", "")
@@ -60,7 +61,13 @@ def generate_event_text():
             start_t = st.session_state.get("tt_start_time", "※調整中")
         
         # テキスト構築
-        text = f"【公演概要】\n{date_str}\n『{title}』\n\n■会場: {venue}"
+        text = f"【公演概要】\n{date_str}\n『{title}』"
+        
+        # ★追加: サブタイトルがある場合のみ表示
+        if subtitle:
+            text += f"\n～{subtitle}～"
+            
+        text += f"\n\n■会場: {venue}"
         if url:
             text += f"\n {url}"
         text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
@@ -132,11 +139,13 @@ def render_overview_page():
     
     project_id = st.session_state.get("ws_active_project_id")
 
-    # --- 時間データ復旧 ---
+    # --- 時間データ・サブタイトル復旧 ---
     if project_id:
         should_restore = False
         if "tt_open_time" not in st.session_state: should_restore = True
         if "tt_start_time" not in st.session_state: should_restore = True
+        # ★追加: サブタイトルが未ロードの場合も復旧対象にする
+        if "proj_subtitle" not in st.session_state: should_restore = True
         
         if should_restore:
             db = next(get_db())
@@ -146,6 +155,8 @@ def render_overview_page():
                     # DB値があれば使う、なければ "※調整中"
                     st.session_state.tt_open_time = proj.open_time or "※調整中"
                     st.session_state.tt_start_time = proj.start_time or "※調整中"
+                    # ★追加: サブタイトルのロード（DBモデルに subtitle カラムがある前提）
+                    st.session_state.proj_subtitle = getattr(proj, "subtitle", "")
             finally:
                 db.close()
     
@@ -155,11 +166,17 @@ def render_overview_page():
             db = next(get_db())
             try:
                 load_project_data(db, project_id)
+                # ★追加: load_project_dataでサブタイトルが読まれていない場合の保険
+                if "proj_subtitle" not in st.session_state:
+                    proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+                    st.session_state.proj_subtitle = getattr(proj, "subtitle", "")
+
                 st.session_state.overview_last_saved_params = {
                     "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                     "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
                     "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
                     "title": st.session_state.get("proj_title", ""),
+                    "subtitle": st.session_state.get("proj_subtitle", ""), # ★追加
                     "venue": st.session_state.get("proj_venue", ""),
                     "url": st.session_state.get("proj_url", ""),
                     "date": str(st.session_state.get("proj_date", "")),
@@ -175,6 +192,8 @@ def render_overview_page():
     with c_basic1:
         st.date_input("開催日", key="proj_date")
         st.text_input("イベント名", key="proj_title")
+        # ★追加: サブタイトル入力欄
+        st.text_input("サブタイトル", key="proj_subtitle", placeholder="例：〜夏の特大号〜")
     with c_basic2:
         st.text_input("会場名", key="proj_venue")
         st.text_input("会場URL", key="proj_url")
@@ -311,6 +330,7 @@ def render_overview_page():
         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
         "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
         "title": st.session_state.get("proj_title", ""),
+        "subtitle": st.session_state.get("proj_subtitle", ""), # ★追加: 検知対象に追加
         "venue": st.session_state.get("proj_venue", ""),
         "url": st.session_state.get("proj_url", ""),
         "date": str(st.session_state.get("proj_date", "")),
@@ -338,12 +358,14 @@ def render_overview_page():
         if project_id:
             db = next(get_db())
             try:
-                # 時間の保存
+                # 時間・サブタイトルの保存
                 proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
                 if proj:
-                    # DBには "※調整中" のまま保存するか、Noneにするかはお好みですが、ここでは文字列として保存します
                     proj.open_time = st.session_state.tt_open_time
                     proj.start_time = st.session_state.tt_start_time
+                    # ★追加: サブタイトルのDB保存（モデルにカラムがある前提）
+                    if hasattr(proj, "subtitle"):
+                        proj.subtitle = st.session_state.proj_subtitle
 
                 if save_current_project(db, project_id):
                     st.toast("イベント情報を保存しました！", icon="✅")
@@ -353,6 +375,7 @@ def render_overview_page():
                         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
                         "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
                         "title": st.session_state.get("proj_title", ""),
+                        "subtitle": st.session_state.get("proj_subtitle", ""), # ★追加
                         "venue": st.session_state.get("proj_venue", ""),
                         "url": st.session_state.get("proj_url", ""),
                         "date": str(st.session_state.get("proj_date", "")),
