@@ -1,10 +1,10 @@
 import streamlit as st
 from datetime import date, datetime
 import json
-import base64  # ★追加: フォントデータのBase64変換用
+import base64
+import os  # ★追加: ファイル書き込み用
 
 # ★修正: get_image_url や必要なモデルを追加インポート
-# AssetFile を追加しています（アセットテーブル名が異なる場合はここを修正してください）
 from database import get_db, TimetableProject, SessionLocal, Artist, AssetFile, get_image_url
 from utils import safe_int, safe_str
 
@@ -168,8 +168,6 @@ def load_project_to_session(proj):
         if json_key in flyer_settings:
             st.session_state[session_key] = flyer_settings[json_key]
         elif session_key in st.session_state:
-            # キーが存在しない場合は明示的に消さない（デフォルト値を維持するため）
-            # もしリセットが必要なら del st.session_state[session_key]
             pass
 
     # グリッド情報のロード
@@ -214,54 +212,51 @@ def load_project_to_session(proj):
     st.session_state.grid_last_generated_params = None
     st.session_state.overview_text_preview = None
 
-# --- ★新規追加: アクティブなフォントのみ注入する関数 ---
-def inject_active_project_fonts(db):
+# --- ★修正: フォントの準備関数（ファイル復元 ＆ CSS注入） ---
+def prepare_active_project_fonts(db):
     """
-    ワークスペースで現在選択されているフォント(TT, Grid, Flyer)のみを
-    DBから取得してCSSとして埋め込みます。これによりアセットページを開かずに済みます。
+    1. DBからフォントデータを取得
+    2. ローカルにファイルが存在しなければ書き出し (画像生成ライブラリ用)
+    3. ブラウザ用にCSS注入 (プレビュー表示用)
     """
-    # 必要なフォント名のセットを作成
     needed_fonts = set()
-    
-    # タイムテーブルフォント
-    if st.session_state.get("tt_font"):
-        needed_fonts.add(st.session_state.tt_font)
-        
-    # グリッドフォント
-    if st.session_state.get("grid_font"):
-        needed_fonts.add(st.session_state.grid_font)
-        
-    # フライヤーフォント
-    if st.session_state.get("flyer_font"):
-        needed_fonts.add(st.session_state.flyer_font)
-        
-    # フィルタリング（空文字などを除外）
+    if st.session_state.get("tt_font"): needed_fonts.add(st.session_state.tt_font)
+    if st.session_state.get("grid_font"): needed_fonts.add(st.session_state.grid_font)
+    if st.session_state.get("flyer_font"): needed_fonts.add(st.session_state.flyer_font)
     needed_fonts = {f for f in needed_fonts if f}
     
-    if not needed_fonts:
-        return
+    if not needed_fonts: return
 
-    # DBから対象のフォントファイルだけを取得
     try:
-        # AssetFileテーブルを検索
+        # DBからフォントデータ取得
         assets = db.query(AssetFile).filter(AssetFile.filename.in_(list(needed_fonts))).all()
         
         css_styles = ""
+        # フォント保存先ディレクトリ（必要なら変更してください）
+        font_dir = "." 
+        
         for asset in assets:
-            try:
-                # バイナリデータをBase64エンコード
-                b64_data = base64.b64encode(asset.file_data).decode()
-                
-                # MIMEタイプの簡易判定
-                mime_type = "font/ttf" # デフォルト
-                if asset.filename.lower().endswith(".otf"):
-                    mime_type = "font/otf"
-                elif asset.filename.lower().endswith(".woff"):
-                    mime_type = "font/woff"
-                elif asset.filename.lower().endswith(".woff2"):
-                    mime_type = "font/woff2"
+            if not asset.file_data:
+                continue
 
-                # CSS @font-face の生成
+            # --- A. ファイル生成 (画像生成用) ---
+            file_path = os.path.join(font_dir, asset.filename)
+            # ファイルが存在しない、またはサイズが0の場合のみ書き出す
+            if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+                try:
+                    with open(file_path, "wb") as f:
+                        f.write(asset.file_data)
+                except Exception as e:
+                    print(f"Failed to write font file {file_path}: {e}")
+
+            # --- B. CSS生成 (ブラウザ表示用) ---
+            try:
+                b64_data = base64.b64encode(asset.file_data).decode()
+                mime_type = "font/ttf"
+                if asset.filename.lower().endswith(".otf"): mime_type = "font/otf"
+                elif asset.filename.lower().endswith(".woff"): mime_type = "font/woff"
+                elif asset.filename.lower().endswith(".woff2"): mime_type = "font/woff2"
+
                 css_styles += f"""
                 @font-face {{
                     font-family: '{asset.filename}';
@@ -271,17 +266,15 @@ def inject_active_project_fonts(db):
             except Exception as e:
                 print(f"Font encode error ({asset.filename}): {e}")
         
-        # スタイルの注入
         if css_styles:
             st.markdown(f"<style>{css_styles}</style>", unsafe_allow_html=True)
             
     except Exception as e:
-        # AssetFileテーブルが無い、カラムが違うなどのエラーハンドリング
-        print(f"Font injection error: {e}")
+        print(f"Font preparation error: {e}")
 
 # --- メイン描画 ---
 def render_workspace_page():
-    # ★追加機能: アー写表示診断ツール (サイドバー)
+    # 画像表示診断 (変更なし)
     with st.sidebar.expander("🔧 画像表示診断", expanded=False):
         st.caption("タイムテーブルに画像が出ない場合、ここでチェックしてください。")
         debug_name = st.text_input("アーティスト名 (完全一致)", placeholder="例: アーティストA")
@@ -395,9 +388,9 @@ def render_workspace_page():
 
         # --- 編集画面 ---
         project_id = st.session_state.ws_active_project_id
-        # ★ここでフォント注入処理を実行！★
-        # アセットページを開かなくても、このプロジェクトで必要なフォントだけをここで読み込む
-        inject_active_project_fonts(db)
+        
+        # ★修正: ここでフォント準備処理を実行（ファイル復元+CSS注入）
+        prepare_active_project_fonts(db)
 
         proj_check = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
         
