@@ -98,7 +98,7 @@ def render_flyer_editor(project_id):
     init_s("flyer_bg_id", 0)
     init_s("flyer_logo_id", 0)
     init_s("flyer_date_format", "EN")
-    init_s("flyer_sub_title", "")  # ★追加: サブタイトル
+    # サブタイトルはDBから取るので入力用のState初期化は不要だが、スタイル用は必要
     init_s("flyer_logo_scale", 1.0)
     init_s("flyer_logo_pos_x", 0.0)
     init_s("flyer_logo_pos_y", 0.0)
@@ -212,8 +212,13 @@ def render_flyer_editor(project_id):
                 with c_l3: st.slider("Y位置", -100.0, 100.0, step=1.0, key="flyer_logo_pos_y")
             
             st.markdown("---")
-            # ★追加: サブタイトル入力欄
-            st.text_input("サブタイトル", key="flyer_sub_title", placeholder="例: 〇〇 Tour 2025 -Final-")
+            # ★修正: DBからサブタイトルを取得して表示 (入力欄は廃止)
+            current_subtitle = proj.subtitle if proj.subtitle else "(未設定)"
+            st.markdown(f"**サブタイトル** (イベント概要から自動取得)")
+            if not proj.subtitle:
+                st.caption("※イベント概要タブで設定してください")
+            else:
+                st.info(current_subtitle)
 
             st.markdown("---")
             date_opts = ["EN (例: 2025.2.15.SUN)", "JP (例: 2025年2月15日 (日))"]
@@ -290,7 +295,8 @@ def render_flyer_editor(project_id):
             save_data = {}
             # 基本設定
             base_keys = [
-                "bg_id", "logo_id", "date_format", "sub_title", # ★追加: sub_title
+                "bg_id", "logo_id", "date_format", 
+                # "sub_title",  <-- DBから自動取得するため保存対象から除外
                 "logo_scale", "logo_pos_x", "logo_pos_y",
                 "grid_scale_w", "grid_scale_h", "grid_pos_y", 
                 "tt_scale_w", "tt_scale_h", "tt_pos_y",       
@@ -345,8 +351,8 @@ def render_flyer_editor(project_id):
             d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
             fallback_filename = st.session_state.get("flyer_fallback_font")
             
-            # ★追加: サブタイトル取得
-            subtitle_text = st.session_state.get("flyer_sub_title", "")
+            # ★修正: DBからサブタイトルを取得
+            subtitle_text = proj.subtitle or ""
 
             with st.spinner("生成中..."):
                 # 1. Generate Grid Flyer
@@ -362,7 +368,7 @@ def render_flyer_editor(project_id):
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
                         styles=s_grid,
                         date_text=d_text, venue_text=v_text,
-                        subtitle_text=subtitle_text, # ★追加: 引数渡し
+                        subtitle_text=subtitle_text, # ★追加
                         open_time=format_time_str(proj.open_time),
                         start_time=format_time_str(proj.start_time),
                         ticket_info_list=tickets, common_notes_list=notes,
@@ -382,7 +388,7 @@ def render_flyer_editor(project_id):
                         db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
                         styles=s_tt,
                         date_text=d_text, venue_text=v_text,
-                        subtitle_text=subtitle_text, # ★追加: 引数渡し
+                        subtitle_text=subtitle_text, # ★追加
                         open_time=format_time_str(proj.open_time),
                         start_time=format_time_str(proj.start_time),
                         ticket_info_list=tickets, common_notes_list=notes,
