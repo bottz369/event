@@ -127,7 +127,10 @@ def create_flyer_image_shadow(
         main_resized = resize_image_contain(main_img, target_w, target_h)
         if main_resized:
             paste_x = (W - main_resized.width) // 2
-            paste_y = available_top + (available_h - main_resized.height) // 2
+            # ★修正: Y位置調整 (content_pos_y) を適用
+            offset_y = int(styles.get("content_pos_y", 0) * scale_f)
+            paste_y = available_top + (available_h - main_resized.height) // 2 + offset_y
+            
             base_img.paste(main_resized, (paste_x, int(paste_y)), main_resized)
 
     # --------------------------------------------------------------------------------
