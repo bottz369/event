@@ -1,9 +1,9 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, Float, ForeignKey, LargeBinary # ★追加: LargeBinary
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, Float, ForeignKey, LargeBinary
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from supabase import create_client, Client
 import streamlit as st
 import os
-import urllib.parse  # ★追加: URLエンコード用
+import urllib.parse  # URLエンコード用
 
 # --- Supabase設定 (Secretsから読み込み) ---
 try:
@@ -110,13 +110,21 @@ class Asset(Base):
     image_filename = Column(String)
     is_deleted = Column(Boolean, default=False)
 
-# ★追加: フォントファイル保存用の新しいテーブルモデル
-# 既存のAssetテーブルとは別に管理します
+# フォントファイル保存用テーブル (バイナリ)
 class AssetFile(Base):
     __tablename__ = "asset_files"
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, unique=True, index=True)
-    file_data = Column(LargeBinary) # バイナリデータそのもの
+    file_data = Column(LargeBinary) # バイナリデータ
+
+# ★新規追加: フライヤー設定テンプレート保存用
+class FlyerTemplate(Base):
+    __tablename__ = "flyer_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True) # テンプレート名
+    data_json = Column(Text) # 設定データ(JSON)
+    created_at = Column(String) # 作成日時 (文字列)
 
 class FavoriteFont(Base):
     __tablename__ = "favorite_fonts"
@@ -165,7 +173,6 @@ def upload_image_to_supabase(file_obj, filename):
         st.error(f"画像アップロードエラー: {e}")
         return None
 
-# ★重要: 画像URL生成関数の修正（URLエンコード対応）
 def get_image_url(filename):
     """
     ファイル名からSupabaseの公開URLを取得する
@@ -183,7 +190,7 @@ def get_image_url(filename):
         return local_path
         
     try:
-        # 日本語ファイル名などをURLで使用できる形式(%E3%81...など)に変換
+        # 日本語ファイル名などをURLで使用できる形式に変換
         # パス区切り文字 '/' はエンコードしないように safe='/' を指定
         safe_filename = urllib.parse.quote(filename, safe='/')
         
