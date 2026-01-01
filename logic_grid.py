@@ -9,6 +9,9 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from database import get_image_url
 
+# ★追加: フォントフォルダのパスを知るために必要
+from constants import FONT_DIR
+
 # ================= 設定エリア =================
 TILE_WIDTH = 800       
 TILE_HEIGHT = 450      
@@ -81,7 +84,7 @@ def load_image_from_url(url):
 # =========================================================
 # ★修正済み: フォント適用ロジックを強化
 # =========================================================
-def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf", row_counts=None, is_brick_mode=True, alignment="center"):
+def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_counts=None, is_brick_mode=True, alignment="center"):
     """
     grid画像を生成する
     :param row_counts: 各行の枚数リスト [3, 4, 6] など
@@ -177,12 +180,24 @@ def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf"
     current_y = MARGIN 
     default_font = ImageFont.load_default()
 
-    # ★デバッグ用: フォントパスが正しいか一度確認してコンソールに出す
-    font_exists = False
-    if font_path and os.path.exists(font_path):
-        font_exists = True
+    # === ★重要修正: フォントパスの自動解決 ===
+    # 渡されたパスが単なるファイル名（例: "font.ttf"）の場合、正しいディレクトリと結合する
+    full_font_path = font_path
+    
+    # 1. そのままのパスで存在チェック
+    if not os.path.exists(full_font_path):
+        # 2. 存在しない場合、FONT_DIR (assets/fonts) の中にあるかチェック
+        try_path = os.path.join(FONT_DIR, os.path.basename(font_path))
+        if os.path.exists(try_path):
+            full_font_path = try_path
+
+    font_exists = os.path.exists(full_font_path)
+
+    if not font_exists:
+        print(f"⚠️ Warning: Font file not found at '{full_font_path}' (Original: {font_path}). Using default font.")
     else:
-        print(f"⚠️ Warning: Font file not found at '{font_path}'. Using default font.")
+        print(f"✅ Font loaded: {full_font_path}")
+    # ========================================
 
     for config in row_configs:
         chunk = config["artists"]
@@ -215,7 +230,7 @@ def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf"
                 text_bg_y = current_y + h
                 draw.rectangle([(x, text_bg_y), (x + w, text_bg_y + th)], fill="white")
 
-                # === ★ここを修正: フォントサイズ自動調整ロジック ===
+                # === フォントサイズ自動調整ロジック ===
                 current_font_size = font_max
                 target_font = default_font # 初期値
 
@@ -223,9 +238,9 @@ def generate_grid_image(artists, image_dir_unused, font_path="fonts/keifont.ttf"
                     try:
                         # フォントファイルが存在する場合のみ読み込みを試行
                         if font_exists:
-                            target_font = ImageFont.truetype(font_path, int(current_font_size))
+                            # ★修正: 補正済みの full_font_path を使う
+                            target_font = ImageFont.truetype(full_font_path, int(current_font_size))
                         else:
-                            # 存在しない場合はループを抜けてデフォルトフォントを使用
                             target_font = default_font
                             break
                     except Exception as e:
