@@ -16,12 +16,12 @@ FONT_SIZE_TIME = 60
 FONT_SIZE_ARTIST = 60       
 FONT_SIZE_GOODS = 48        
 
-# 全体の背景色（ダークグレー）
-COLOR_BG_ALL = (30, 30, 30, 255)        
+# ★変更1: 全体の背景を「完全透明」に設定
+COLOR_BG_ALL = (0, 0, 0, 0)        
 
-# ★変更点: ここで「黒フィルターの濃さ」を調整します (0=透明 〜 255=真っ黒)
-# 100〜150くらいが文字が見やすくておすすめです
-OVERLAY_OPACITY = 130 
+# ★変更2: 黒フィルターの濃さをアップ (130 -> 170)
+# 数値を大きくするとさらに暗くなります (最大255)
+OVERLAY_OPACITY = 170
 
 COLOR_TEXT = (255, 255, 255, 255)   
 
@@ -79,21 +79,23 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     elif align == "right": final_x = box_x + box_w - text_w
     else: final_x = box_x
     
-    # 文字に少し影をつけて読みやすくする
-    draw.multiline_text((final_x+2, final_y+2), text, fill=(0,0,0,180), font=font, spacing=4, align=align)
+    # 視認性を高めるためのテキストの影（ドロップシャドウ）
+    draw.multiline_text((final_x+2, final_y+2), text, fill=(0,0,0,200), font=font, spacing=4, align=align)
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
 def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
-    # ★ここが最大の変更点: 画像処理と背景合成ロジック
+    # ---------------------------------------------------------
+    # 1. 画像処理 & 透過黒フィルター合成
+    # ---------------------------------------------------------
     
-    # 1. まずベースとなる行の画像を作る（透明）
+    # ベースとなる透明な行画像を作成
     row_img = Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), (0, 0, 0, 0))
-    
-    # 2. アーティスト画像があれば貼り付ける
     has_image = False
+
+    # 特殊行以外は画像を検索して貼り付け
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
         try:
             from database import Artist, get_image_url
@@ -112,18 +114,26 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
                         has_image = True
         except Exception: pass
 
-    # 3. 半透明の黒フィルター（オーバーレイ）を作成して重ねる
-    # 画像がある場合は薄く、ない場合は濃くするなどの調整も可能ですが、今回は統一
-    overlay = Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), (0, 0, 0, OVERLAY_OPACITY))
+    # 黒フィルターの適用ロジック
+    if has_image:
+        # 画像がある場合: 指定した濃さの黒を重ねる
+        overlay_color = (0, 0, 0, OVERLAY_OPACITY)
+    else:
+        # 画像がない場合: 背景を少し濃いグレーにする（デフォルト背景）
+        # ※ここはお好みですが、画像なしの行も統一感を出すために設定
+        overlay_color = (40, 40, 40, 230)
+
+    overlay = Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), overlay_color)
     
-    # 4. 合成 (Alpha Composite)
-    # これにより、画像の上に確実に半透明の黒が乗ります
+    # 画像とフィルターを合成
     row_composite = Image.alpha_composite(row_img, overlay)
     
-    # 5. 完成した行画像をキャンバスに貼り付け
+    # キャンバスに貼り付け
     canvas.paste(row_composite, (int(base_x), int(base_y)), row_composite)
 
-    # 6. 最後に文字を書く (drawオブジェクトはキャンバス本体のものを使う)
+    # ---------------------------------------------------------
+    # 2. テキスト描画
+    # ---------------------------------------------------------
     draw_centered_text(draw, time_str, base_x + AREA_TIME_X, base_y, AREA_TIME_W, ROW_HEIGHT, font_path, FONT_SIZE_TIME, align="left")
     draw_centered_text(draw, name_str, base_x + AREA_ARTIST_X, base_y, AREA_ARTIST_W, ROW_HEIGHT, font_path, FONT_SIZE_ARTIST, align="center")
     
@@ -144,7 +154,8 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
 def generate_timetable_image(timetable_data, font_path=None):
     if not timetable_data: return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (0,0,0,255))
     
-    st.write("🔄 画像生成中...")
+    # 完了メッセージだけシンプルに表示
+    st.toast("画像生成完了！", icon="✅")
     
     from database import SessionLocal
     db = SessionLocal()
@@ -158,7 +169,7 @@ def generate_timetable_image(timetable_data, font_path=None):
         if rows_in_column == 0: rows_in_column = 1
         total_height = rows_in_column * (ROW_HEIGHT + ROW_MARGIN)
         
-        # キャンバス作成
+        # 全体背景を透明で初期化
         canvas = Image.new('RGBA', (WIDTH, total_height), COLOR_BG_ALL)
         draw = ImageDraw.Draw(canvas)
 
@@ -173,7 +184,6 @@ def generate_timetable_image(timetable_data, font_path=None):
             draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db)
             y += (ROW_HEIGHT + ROW_MARGIN)
             
-        st.success("✅ 完成しました！")
         return canvas
 
     except Exception as e:
