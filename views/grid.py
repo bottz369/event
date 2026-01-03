@@ -134,20 +134,29 @@ def render_grid_page():
             st.divider()
             
             # --- 設定エリア ---
+            # ★修正箇所: コールバック関数の定義
+            # ボタンが押されたときに呼び出され、再描画の前に変数を更新します
+            def reset_grid_settings():
+                if proj and proj.data_json:
+                    try:
+                        d = json.loads(proj.data_json)
+                        tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                    except:
+                        pass
+                
+                # 設定もリセット
+                st.session_state.grid_rows = 5
+                st.session_state.grid_row_counts_str = "5,5,5,5,5"
+                st.session_state.grid_font = "keifont.ttf"
+                # on_clickで呼ばれる場合、自動でrerunがかかるため st.rerun() は記述しなくてOKです
+
             c_set1, c_set2 = st.columns([1, 2])
             with c_set1: 
                 new_rows = st.number_input("行数", min_value=1, key="grid_rows")
             with c_set2:
-                if st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset"):
-                    if proj.data_json:
-                        d = json.loads(proj.data_json)
-                        tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
-                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                        # 設定もリセット
-                        st.session_state.grid_rows = 5
-                        st.session_state.grid_row_counts_str = "5,5,5,5,5"
-                        st.session_state.grid_font = "keifont.ttf"
-                        st.rerun()
+                # ★修正箇所: on_click で関数を指定
+                st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset", on_click=reset_grid_settings)
 
             # --- 行ごとの枚数設定 ---
             current_counts = []
