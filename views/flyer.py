@@ -9,6 +9,8 @@ from datetime import datetime
 from database import get_db, TimetableProject, Asset, get_image_url, SystemFontConfig, FlyerTemplate
 from utils import get_sorted_font_list, create_font_specimen_img
 
+# ここでインポートしている generate_event_summary_text_from_proj が
+# 先ほど更新した共通ロジックを利用するため、自動的に最新のテキスト生成ルールが適用されます。
 from utils.flyer_helpers import (
     format_event_date, format_time_str,
     generate_event_summary_text_from_proj, generate_timetable_csv_string
@@ -124,10 +126,10 @@ def render_flyer_editor(project_id):
 
     init_s("flyer_grid_scale_w", 95)
     init_s("flyer_grid_scale_h", 100)
-    init_s("flyer_grid_pos_y", 0)   
+    init_s("flyer_grid_pos_y", 0)    
     init_s("flyer_tt_scale_w", 95)
     init_s("flyer_tt_scale_h", 100)
-    init_s("flyer_tt_pos_y", 0)     
+    init_s("flyer_tt_pos_y", 0)      
     init_s("flyer_grid_link", True) 
     init_s("flyer_tt_link", True)
 
@@ -451,6 +453,7 @@ def render_flyer_editor(project_id):
             
         with t3:
             st.markdown("### 告知用テキストプレビュー")
+            # ★ここで共通ロジック経由の関数を呼び出しています
             summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
             st.text_area("内容", value=summary_text, height=300, disabled=True)
             st.download_button(
@@ -480,6 +483,7 @@ def render_flyer_editor(project_id):
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
+                            # ★ここでも共通ロジック経由の関数を呼び出しています
                             summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
                             zip_file.writestr("Event_Outline.txt", summary_text)
 
