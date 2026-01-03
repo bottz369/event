@@ -8,108 +8,15 @@ from database import get_db, TimetableProject
 from logic_project import save_current_project, load_project_data
 from constants import TIME_OPTIONS
 
+# ★追加: 共通のテキスト生成ロジックをインポート
+# （これにより、このファイル内で generate_event_text を定義する必要がなくなりました）
+from utils.text_generator import build_event_summary_text
+
 # ==========================================
-# ★修正: 選択肢に「※調整中」を追加
+# 定数定義
 # ==========================================
 # 既存の時間リストの先頭に選択肢を追加します
 EXTENDED_TIME_OPTIONS = ["※調整中"] + TIME_OPTIONS
-
-# ==========================================
-# ヘルパー関数
-# ==========================================
-def get_day_of_week_jp(dt):
-    if not dt: return ""
-    w_list = ['(月)', '(火)', '(水)', '(木)', '(金)', '(土)', '(日)']
-    return w_list[dt.weekday()]
-
-def get_circled_number(n):
-    if 1 <= n <= 20:
-        return chr(0x2460 + (n - 1))
-    elif 21 <= n <= 35:
-        return chr(0x3251 + (n - 21))
-    elif 36 <= n <= 50:
-        return chr(0x32B1 + (n - 36))
-    else:
-        return f"({n})"
-
-def generate_event_text():
-    """イベント概要テキストを生成"""
-    try:
-        title = st.session_state.get("proj_title", "")
-        subtitle = st.session_state.get("proj_subtitle", "") # ★追加: サブタイトル取得
-        date_val = st.session_state.get("proj_date")
-        venue = st.session_state.get("proj_venue", "")
-        url = st.session_state.get("proj_url", "")
-        
-        date_str = ""
-        if date_val:
-            date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
-        
-        # ==========================================
-        # ★修正: デフォルト値を「※調整中」に変更
-        # ==========================================
-        if "ov_tt_open_time" in st.session_state:
-            open_t = st.session_state.ov_tt_open_time
-        else:
-            # データがない場合は "※調整中" にする
-            open_t = st.session_state.get("tt_open_time", "※調整中")
-            
-        if "ov_tt_start_time" in st.session_state:
-            start_t = st.session_state.ov_tt_start_time
-        else:
-            # データがない場合は "※調整中" にする
-            start_t = st.session_state.get("tt_start_time", "※調整中")
-        
-        # テキスト構築
-        text = f"【公演概要】\n{date_str}\n『{title}』"
-        
-        # ★追加: サブタイトルがある場合のみ表示
-        if subtitle:
-            text += f"\n～{subtitle}～"
-            
-        text += f"\n\n■会場: {venue}"
-        if url:
-            text += f"\n {url}"
-        text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
-
-        # チケット情報
-        text += "\n\n■チケット"
-        if "proj_tickets" in st.session_state and st.session_state.proj_tickets:
-            for t in st.session_state.proj_tickets:
-                name = t.get("name", "")
-                price = t.get("price", "")
-                note = t.get("note", "")
-                line = f"- {name}: {price}"
-                if note: line += f" ({note})"
-                if name or price: text += "\n" + line
-        else:
-            text += "\n(情報なし)"
-
-        # 共通備考
-        if "proj_ticket_notes" in st.session_state and st.session_state.proj_ticket_notes:
-            for note in st.session_state.proj_ticket_notes:
-                if note and str(note).strip():
-                    text += f"\n※{str(note).strip()}"
-
-        # 出演者
-        artists = st.session_state.get("grid_order") or st.session_state.get("tt_artists_order", [])
-        valid_artists = list(dict.fromkeys(artists))
-        if valid_artists:
-            text += f"\n\n■出演者（{len(valid_artists)}組予定）"
-            for i, artist_name in enumerate(valid_artists, 1):
-                c_num = get_circled_number(i)
-                text += f"\n{c_num}{artist_name}"
-
-        # 自由記述
-        if "proj_free_text" in st.session_state and st.session_state.proj_free_text:
-            for f in st.session_state.proj_free_text:
-                ft = f.get("title", "")
-                fc = f.get("content", "")
-                if ft or fc:
-                    text += f"\n\n■{ft}\n{fc}"
-        return text
-    except Exception as e:
-        return f"エラー: {e}"
 
 # ==========================================
 # コールバック関数
@@ -155,7 +62,7 @@ def render_overview_page():
                     # DB値があれば使う、なければ "※調整中"
                     st.session_state.tt_open_time = proj.open_time or "※調整中"
                     st.session_state.tt_start_time = proj.start_time or "※調整中"
-                    # ★追加: サブタイトルのロード（DBモデルに subtitle カラムがある前提）
+                    # ★追加: サブタイトルのロード
                     st.session_state.proj_subtitle = getattr(proj, "subtitle", "")
             finally:
                 db.close()
@@ -198,7 +105,7 @@ def render_overview_page():
         st.text_input("会場名", key="proj_venue")
         st.text_input("会場URL", key="proj_url")
     
-    # --- UI描画: 時間設定 (修正版選択肢を使用) ---
+    # --- UI描画: 時間設定 ---
     c_time1, c_time2 = st.columns(2)
     
     # 現在の値取得 (なければ ※調整中)
@@ -394,8 +301,28 @@ def render_overview_page():
         else:
             st.error("プロジェクトIDが不明です")
 
-    # プレビュー生成
-    st.session_state.txt_overview_preview_area = generate_event_text()
+    # ==========================================
+    # ★修正: 共通関数を使用してプレビュー生成
+    # ==========================================
+    
+    # Session Stateから必要なデータを収集して共通ロジックに渡す
+    artists_list = st.session_state.get("grid_order") or st.session_state.get("tt_artists_order", [])
+    
+    generated_text = build_event_summary_text(
+        title=st.session_state.get("proj_title", ""),
+        subtitle=st.session_state.get("proj_subtitle", ""),
+        date_val=st.session_state.get("proj_date"),
+        venue=st.session_state.get("proj_venue", ""),
+        url=st.session_state.get("proj_url", ""),
+        open_time=st.session_state.get("tt_open_time", "※調整中"),
+        start_time=st.session_state.get("tt_start_time", "※調整中"),
+        tickets=st.session_state.get("proj_tickets", []),
+        ticket_notes=st.session_state.get("proj_ticket_notes", []),
+        artists=artists_list,
+        free_texts=st.session_state.get("proj_free_text", [])
+    )
+
+    st.session_state.txt_overview_preview_area = generated_text
 
     st.subheader("📝 告知用テキストプレビュー")
     st.text_area("コピーしてSNSなどで使用できます", height=400, key="txt_overview_preview_area")
