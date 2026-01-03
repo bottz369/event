@@ -8,6 +8,10 @@ from PIL import Image
 from constants import FONT_DIR
 from database import Asset, get_image_url
 
+# ★追加: 共通のテキスト生成ロジックとヘルパーをインポート
+# (get_day_of_week_jp, get_circled_number はここで定義せず共通のものを使います)
+from utils.text_generator import build_event_summary_text, get_day_of_week_jp, get_circled_number
+
 # ==========================================
 # 1. 画像・ファイルロード系ヘルパー
 # ==========================================
@@ -132,88 +136,52 @@ def format_time_str(t_val):
     try: return t_val.strftime("%H:%M")
     except: return str(t_val)
 
-def get_day_of_week_jp(dt):
-    if not dt: return ""
-    w_list = ['(月)', '(火)', '(水)', '(木)', '(金)', '(土)', '(日)']
-    try: return w_list[dt.weekday()]
-    except: return ""
-
-def get_circled_number(n):
-    if 1 <= n <= 20: return chr(0x2460 + (n - 1))
-    elif 21 <= n <= 35: return chr(0x3251 + (n - 21))
-    elif 36 <= n <= 50: return chr(0x32B1 + (n - 36))
-    else: return f"({n})"
+# (削除済み: get_day_of_week_jp, get_circled_number は utils.text_generator からインポートして使用)
 
 def generate_event_summary_text_from_proj(proj, tickets, notes):
-    """告知用の概要テキストを生成"""
+    """
+    告知用の概要テキストを生成
+    DBデータ(proj)を整理して、共通ロジック(build_event_summary_text)に渡します。
+    """
     try:
-        title = proj.title or ""
-        date_val = proj.event_date
-        venue = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
-        url = getattr(proj, "url", "") or "" 
-        
-        date_str = ""
-        if date_val:
-            if isinstance(date_val, str):
-                try: date_val = datetime.strptime(date_val, "%Y-%m-%d").date()
-                except: pass
-            if isinstance(date_val, (date, datetime)):
-                date_str = date_val.strftime("%Y年%m月%d日") + get_day_of_week_jp(date_val)
-            else:
-                date_str = str(date_val)
-
-        open_t = format_time_str(proj.open_time) or "※調整中"
-        start_t = format_time_str(proj.start_time) or "※調整中"
-
-        text = f"【公演概要】\n{date_str}\n『{title}』\n\n■会場: {venue}"
-        if url: text += f"\n {url}"
-        text += f"\n\nOPEN▶{open_t}\nSTART▶{start_t}"
-
-        text += "\n\n■チケット"
-        if tickets:
-            for t in tickets:
-                name = t.get("name", "")
-                price = t.get("price", "")
-                note = t.get("note", "")
-                line = f"- {name}: {price}"
-                if note: line += f" ({note})"
-                if name or price: text += "\n" + line
-        else:
-            text += "\n(情報なし)"
-
-        if notes:
-            text += "\n\n<備考>"
-            for n in notes:
-                if n and str(n).strip():
-                    text += f"\n※{str(n).strip()}"
-
-        # タイムテーブルデータ
+        # 1. タイムテーブルJSONからアーティストリストを抽出
+        artists = []
         if proj.data_json:
             try:
                 data = json.loads(proj.data_json)
-                artists = []
+                # JSONからアーティスト名を抽出し、除外キーワードを弾く
+                temp_artists = []
                 for d in data:
                     a = d.get("ARTIST", "")
-                    if a and a not in ["開演前物販", "終演後物販", "調整中", ""] and a not in artists:
-                        artists.append(a)
-                if artists:
-                    text += f"\n\n■出演者（{len(artists)}組予定）"
-                    for i, a_name in enumerate(artists, 1):
-                        c_num = get_circled_number(i)
-                        text += f"\n{c_num}{a_name}"
+                    if a and a not in ["開演前物販", "終演後物販", "調整中", ""]:
+                        temp_artists.append(a)
+                # リスト化（重複排除は共通ロジックでも行われるが、念のためここでも整理して渡す）
+                artists = list(dict.fromkeys(temp_artists))
             except: pass
 
+        # 2. 自由記述JSONの抽出
+        free_texts = []
         if getattr(proj, "free_text_json", None):
             try:
-                free_list = json.loads(proj.free_text_json)
-                for f in free_list:
-                    ft = f.get("title", "")
-                    fc = f.get("content", "")
-                    if ft or fc:
-                        text += f"\n\n■{ft}\n{fc}"
+                free_texts = json.loads(proj.free_text_json)
             except: pass
 
-        return text
+        # 3. 共通ロジックを呼び出してテキストを生成
+        # ここで引数を渡すだけで、テキストの結合処理などは build_event_summary_text が行います
+        return build_event_summary_text(
+            title=proj.title or "",
+            subtitle=getattr(proj, "subtitle", ""),
+            date_val=proj.event_date,
+            venue=getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or "",
+            url=getattr(proj, "venue_url", "") or getattr(proj, "url", "") or "",
+            open_time=format_time_str(proj.open_time),
+            start_time=format_time_str(proj.start_time),
+            tickets=tickets,
+            ticket_notes=notes,
+            artists=artists,
+            free_texts=free_texts
+        )
+
     except Exception as e:
         return f"テキスト生成エラー: {e}"
 
