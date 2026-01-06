@@ -50,6 +50,11 @@ class Artist(Base):
     image_filename = Column(String)
     is_deleted = Column(Boolean, default=False)
 
+    # ★追加: 画像位置調整用カラム
+    crop_scale = Column(Float, default=1.0) # ズーム倍率
+    crop_x = Column(Integer, default=0)     # 横方向オフセット
+    crop_y = Column(Integer, default=0)     # 縦方向オフセット
+
 class TimetableProject(Base):
     __tablename__ = "projects_v4"
     
