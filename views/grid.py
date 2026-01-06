@@ -98,6 +98,8 @@ def render_grid_page():
         if "grid_font" not in st.session_state: st.session_state.grid_font = "keifont.ttf"
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
+        proj = None # 初期化
+
         if selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             
@@ -134,22 +136,34 @@ def render_grid_page():
             st.divider()
             
             # --- 設定エリア ---
-            # ★修正箇所: コールバック関数の定義
-            # ボタンが押されたときに呼び出され、再描画の前に変数を更新します
+            # ★修正: DetachedInstanceError を防ぐため、コールバック内でDBを開き直す
             def reset_grid_settings():
-                if proj and proj.data_json:
-                    try:
-                        d = json.loads(proj.data_json)
-                        tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
-                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                    except:
-                        pass
-                
-                # 設定もリセット
-                st.session_state.grid_rows = 5
-                st.session_state.grid_row_counts_str = "5,5,5,5,5"
-                st.session_state.grid_font = "keifont.ttf"
-                # on_clickで呼ばれる場合、自動でrerunがかかるため st.rerun() は記述しなくてOKです
+                current_id_in_cb = st.session_state.get("ws_active_project_id")
+                if not current_id_in_cb:
+                    return
+
+                # 一時的なDBセッションを作成
+                temp_db = next(get_db())
+                try:
+                    fresh_proj = temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first()
+                    
+                    if fresh_proj and fresh_proj.data_json:
+                        try:
+                            d = json.loads(fresh_proj.data_json)
+                            tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+                            st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                        except:
+                            pass
+                    
+                    # 設定もリセット
+                    st.session_state.grid_rows = 5
+                    st.session_state.grid_row_counts_str = "5,5,5,5,5"
+                    st.session_state.grid_font = "keifont.ttf"
+                    
+                except Exception as e:
+                    print(f"Reset Error: {e}")
+                finally:
+                    temp_db.close()
 
             c_set1, c_set2 = st.columns([1, 2])
             with c_set1: 
