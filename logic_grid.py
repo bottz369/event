@@ -78,6 +78,43 @@ def crop_smart(pil_img):
     
     return resized_img.crop((left, int(top), left + int(crop_width), int(top) + int(crop_height)))
 
+# --- ★追加: 手動トリミングロジック ---
+def apply_manual_crop(img, scale=1.0, x_off=0, y_off=0, target_w=TILE_WIDTH, target_h=TILE_HEIGHT):
+    """
+    手動調整値を適用して画像を切り抜く
+    """
+    if not img: return create_no_image_placeholder(target_w, target_h)
+
+    # 1. ターゲットのアスペクト比に合わせて「隙間なく埋まるサイズ」にリサイズ（Cover）
+    img_ratio = img.width / img.height
+    target_ratio = target_w / target_h
+
+    if img_ratio > target_ratio:
+        new_h = target_h
+        new_w = int(new_h * img_ratio)
+    else:
+        new_w = target_w
+        new_h = int(new_w / img_ratio)
+
+    resized_img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    # 2. ズーム適用
+    if scale > 1.0:
+        z_w = int(new_w * scale)
+        z_h = int(new_h * scale)
+        resized_img = resized_img.resize((z_w, z_h), Image.LANCZOS)
+    
+    # 3. 切り抜き位置の計算 (中心基準 + オフセット)
+    center_x = resized_img.width // 2
+    center_y = resized_img.height // 2
+
+    # UIのスライダー操作に合わせて計算 (スライダー右=画像右移動 なら cropは左へ)
+    crop_x = center_x - (target_w // 2) - x_off
+    crop_y = center_y - (target_h // 2) - y_off
+
+    return resized_img.crop((crop_x, crop_y, crop_x + target_w, crop_y + target_h))
+
+
 def create_no_image_placeholder(width, height):
     """No Image画像を生成する"""
     img = Image.new("RGBA", (width, height), (30, 30, 30, 255))
@@ -114,7 +151,7 @@ def resolve_font_path(font_path_input):
 
     # 検索候補リスト
     candidates = [
-        font_path_input,                                      # そのまま
+        font_path_input,                                              # そのまま
         os.path.join(FONT_DIR, os.path.basename(font_path_input)), # constantsのFONT_DIR + ファイル名
         os.path.join("assets", "fonts", os.path.basename(font_path_input)), # assets/fonts/ + ファイル名 (相対)
         os.path.join(BASE_DIR, "assets", "fonts", os.path.basename(font_path_input)), # 絶対パス
@@ -247,7 +284,20 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                         img = load_image_from_url(img_url)
                 
                 if img:
-                    cropped = crop_smart(img)
+                    # ★修正箇所: ここでDBの値をチェックして手動/自動を切り替え
+                    # DBカラムが存在しない場合の安全策として getattr を使用
+                    crop_scale = getattr(target_artist, 'crop_scale', 1.0) or 1.0
+                    crop_x = getattr(target_artist, 'crop_x', 0) or 0
+                    crop_y = getattr(target_artist, 'crop_y', 0) or 0
+
+                    is_manual = (crop_scale != 1.0) or (crop_x != 0) or (crop_y != 0)
+
+                    if is_manual:
+                        # 手動調整 (TILE_WIDTH, TILE_HEIGHT はこのファイルの定数を使用)
+                        cropped = apply_manual_crop(img, crop_scale, crop_x, crop_y, TILE_WIDTH, TILE_HEIGHT)
+                    else:
+                        # 自動調整
+                        cropped = crop_smart(img)
                 else:
                     cropped = create_no_image_placeholder(TILE_WIDTH, TILE_HEIGHT)
                 
@@ -255,6 +305,7 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                 canvas.paste(resized_final, (int(x), int(current_y)))
             except Exception as e:
                 # 画像処理エラー時はプレースホルダー
+                print(f"Image Error ({artist_name}): {e}")
                 ph = create_no_image_placeholder(w, h)
                 canvas.paste(ph, (int(x), int(current_y)))
 
@@ -303,4 +354,3 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
         current_y += (h + th + MARGIN)
 
     return canvas
-    
