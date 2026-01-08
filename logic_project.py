@@ -37,6 +37,7 @@ def save_timetable_rows(db, project_id, rows_data):
     """
     タイムテーブルの行データをDBテーブル(timetable_rows)に保存する。
     ★修正: 数値データに safe_int を適用して nan エラーを防止
+    ★修正: is_hidden (非表示フラグ) の保存を追加
     """
     try:
         # 1. 既存行の削除
@@ -66,7 +67,10 @@ def save_timetable_rows(db, project_id, rows_data):
                 
                 add_goods_start_time=safe_str(item.get("ADD_GOODS_START")),
                 add_goods_duration=add_goods_duration_val,
-                add_goods_place=safe_str(item.get("ADD_GOODS_PLACE"))
+                add_goods_place=safe_str(item.get("ADD_GOODS_PLACE")),
+
+                # ★追加: 非表示フラグを保存
+                is_hidden=bool(item.get("IS_HIDDEN", False))
             )
             new_rows.append(row)
         
@@ -101,7 +105,10 @@ def load_timetable_rows(db, project_id):
                 "PLACE": r.place,
                 "ADD_GOODS_START": r.add_goods_start_time,
                 "ADD_GOODS_DURATION": r.add_goods_duration,
-                "ADD_GOODS_PLACE": r.add_goods_place
+                "ADD_GOODS_PLACE": r.add_goods_place,
+                
+                # ★追加: 非表示フラグを読み込み
+                "IS_HIDDEN": getattr(r, "is_hidden", False)
             }
             data_export.append(item)
         return data_export
@@ -216,7 +223,8 @@ def save_current_project(db, project_id):
             save_data.append({
                 "ARTIST": "開演前物販", "DURATION": 0, "ADJUSTMENT": 0, "IS_POST_GOODS": False,
                 "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
-                "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": ""
+                "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": "",
+                "IS_HIDDEN": bool(p.get("IS_HIDDEN", False)) # ★追加
             })
         
         for i, name in enumerate(st.session_state.tt_artists_order):
@@ -230,7 +238,8 @@ def save_current_project(db, project_id):
                 "ARTIST": name, "DURATION": safe_int(ad.get("DURATION"), 20),
                 "IS_POST_GOODS": bool(rd.get("IS_POST_GOODS", False)), "ADJUSTMENT": safe_int(rd.get("ADJUSTMENT"), 0),
                 "GOODS_START_MANUAL": safe_str(rd.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(rd.get("GOODS_DURATION"), 60), "PLACE": safe_str(rd.get("PLACE")),
-                "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE"))
+                "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE")),
+                "IS_HIDDEN": bool(rd.get("IS_HIDDEN", False)) # ★追加
             })
             
         has_post = any(x.get("IS_POST_GOODS") for x in save_data)
@@ -239,7 +248,8 @@ def save_current_project(db, project_id):
             save_data.append({
                 "ARTIST": "終演後物販", "DURATION": 0, "ADJUSTMENT": 0, "IS_POST_GOODS": False,
                 "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
-                "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": ""
+                "ADD_GOODS_START": "", "ADD_GOODS_DURATION": None, "ADD_GOODS_PLACE": "",
+                "IS_HIDDEN": bool(p.get("IS_HIDDEN", False)) # ★追加
             })
 
     if save_data:
