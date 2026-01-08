@@ -109,7 +109,12 @@ def render_grid_page():
                 if not st.session_state.grid_order and proj.data_json:
                     try:
                         d = json.loads(proj.data_json)
-                        tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+                        # ★修正: IS_HIDDEN が True のものは除外する
+                        tt_artists = [
+                            i["ARTIST"] for i in d 
+                            if i["ARTIST"] not in ["開演前物販", "終演後物販"]
+                            and not i.get("IS_HIDDEN", False) # ←ここを追加
+                        ]
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                     except: pass
                 
@@ -150,7 +155,12 @@ def render_grid_page():
                     if fresh_proj and fresh_proj.data_json:
                         try:
                             d = json.loads(fresh_proj.data_json)
-                            tt_artists = [i["ARTIST"] for i in d if i["ARTIST"] not in ["開演前物販", "終演後物販"]]
+                            # ★修正: リセット時も IS_HIDDEN を考慮して除外
+                            tt_artists = [
+                                i["ARTIST"] for i in d 
+                                if i["ARTIST"] not in ["開演前物販", "終演後物販"]
+                                and not i.get("IS_HIDDEN", False) # ←ここを追加
+                            ]
                             st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         except:
                             pass
