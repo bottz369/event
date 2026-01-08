@@ -27,10 +27,8 @@ def gather_flyer_settings_from_session():
     base_keys = [
         "bg_id", "logo_id", "date_format", 
         "logo_scale", "logo_pos_x", "logo_pos_y",
-        # ★追加: ロゴ影設定
         "logo_shadow_on", "logo_shadow_color", "logo_shadow_opacity", 
         "logo_shadow_spread", "logo_shadow_blur", "logo_shadow_off_x", "logo_shadow_off_y",
-        
         "grid_scale_w", "grid_scale_h", "grid_pos_y", 
         "tt_scale_w", "tt_scale_h", "tt_pos_y",       
         "subtitle_date_gap", 
@@ -41,7 +39,6 @@ def gather_flyer_settings_from_session():
         save_data[k] = st.session_state.get(f"flyer_{k}")
     
     target_keys = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
-    # ★追加: shadow_opacity, shadow_spread
     style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "shadow_opacity", "shadow_spread", "pos_x", "pos_y"]
     for k in target_keys:
         for p in style_params:
@@ -132,7 +129,6 @@ def render_flyer_editor(project_id):
     init_s("flyer_logo_pos_x", 0.0)
     init_s("flyer_logo_pos_y", 0.0)
     
-    # ★追加: ロゴ影設定の初期化
     init_s("flyer_logo_shadow_on", False)
     init_s("flyer_logo_shadow_color", "#000000")
     init_s("flyer_logo_shadow_opacity", 128)
@@ -212,6 +208,11 @@ def render_flyer_editor(project_id):
                 st.session_state[f"flyer_{target}_pos_y"] = new_pos_y
                 
                 st.toast(f"{move_targets.get(target, target)} を移動しました (X={new_pos_x}, Y={new_pos_y})")
+                
+                # 自動保存してプレビュー更新
+                save_data = gather_flyer_settings_from_session()
+                proj.flyer_json = json.dumps(save_data)
+                db.commit()
                 _generate_preview(db, proj)
 
     if HAS_CLICK_COORD:
@@ -231,7 +232,6 @@ def render_flyer_editor(project_id):
         init_s(f"flyer_{prefix}_shadow_off_x", 5)
         init_s(f"flyer_{prefix}_shadow_off_y", 5)
         
-        # ★追加: 新パラメータ
         init_s(f"flyer_{prefix}_shadow_opacity", 255)
         init_s(f"flyer_{prefix}_shadow_spread", 0)
         
@@ -259,7 +259,6 @@ def render_flyer_editor(project_id):
                     st.color_picker("影の色", key=f"flyer_{prefix}_shadow_color")
             with sc2:
                 if st.session_state[f"flyer_{prefix}_shadow_on"]:
-                    # ★UI拡張: 不透明度と太さを追加
                     st.slider("不透明度 (濃さ)", 0, 255, step=5, key=f"flyer_{prefix}_shadow_opacity")
                     st.slider("太さ (拡張)", 0, 10, step=1, key=f"flyer_{prefix}_shadow_spread")
                     st.slider("ぼかし", 0, 20, step=1, key=f"flyer_{prefix}_shadow_blur")
@@ -293,12 +292,14 @@ def render_flyer_editor(project_id):
             templates = db.query(FlyerTemplate).all()
             templates.sort(key=lambda x: x.created_at or "", reverse=True) 
             t_options = ["(選択してください)"] + [t.name for t in templates]
-            c_load1, c_load2 = st.columns([3, 1])
-            with c_load1:
-                sel_template = st.selectbox("保存済みテンプレート", t_options, label_visibility="collapsed")
-            with c_load2:
-                if st.button("読込", use_container_width=True):
-                    if sel_template != "(選択してください)":
+            
+            sel_template = st.selectbox("保存済みテンプレート", t_options)
+            
+            # ★追加: テンプレート更新ボタン
+            if sel_template != "(選択してください)":
+                c_t1, c_t2 = st.columns(2)
+                with c_t1:
+                    if st.button("読込", use_container_width=True):
                         target_t = next((t for t in templates if t.name == sel_template), None)
                         if target_t and target_t.data_json:
                             try:
@@ -309,11 +310,21 @@ def render_flyer_editor(project_id):
                                 st.toast(f"テンプレート「{sel_template}」を適用しました！", icon="✨")
                                 st.rerun()
                             except Exception as e: st.error(f"読込エラー: {e}")
+                with c_t2:
+                    if st.button("変更を保存 (上書き)", use_container_width=True):
+                        target_t = next((t for t in templates if t.name == sel_template), None)
+                        if target_t:
+                            save_data = gather_flyer_settings_from_session()
+                            target_t.data_json = json.dumps(save_data)
+                            target_t.created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            db.commit()
+                            st.toast(f"テンプレート「{sel_template}」を更新しました！", icon="💾")
+
             st.divider()
             c_save1, c_save2 = st.columns([3, 1])
             with c_save1: new_t_name = st.text_input("新規テンプレート名", placeholder="例: 赤系ロック風")
             with c_save2:
-                if st.button("保存", use_container_width=True):
+                if st.button("新規保存", use_container_width=True):
                     if not new_t_name: st.error("名前を入力してください")
                     else:
                         existing = db.query(FlyerTemplate).filter(FlyerTemplate.name == new_t_name).first()
@@ -337,17 +348,14 @@ def render_flyer_editor(project_id):
                 with c_l2: st.number_input("X (右+/左-)", step=1.0, key="flyer_logo_pos_x")
                 with c_l3: st.number_input("Y (上+/下-)", step=1.0, key="flyer_logo_pos_y")
                 
-                # ★追加: ロゴの影設定
                 st.checkbox("ロゴに影をつける", key="flyer_logo_shadow_on")
                 if st.session_state.get("flyer_logo_shadow_on"):
                     lc1, lc2 = st.columns(2)
                     with lc1: st.color_picker("影色", key="flyer_logo_shadow_color")
                     with lc2: st.slider("濃さ", 0, 255, step=5, key="flyer_logo_shadow_opacity")
-                    
                     lc3, lc4 = st.columns(2)
                     with lc3: st.slider("太さ", 0, 20, step=1, key="flyer_logo_shadow_spread")
                     with lc4: st.slider("ぼかし", 0, 20, step=1, key="flyer_logo_shadow_blur")
-                    
                     lc5, lc6 = st.columns(2)
                     with lc5: st.number_input("影X", step=1, key="flyer_logo_shadow_off_x")
                     with lc6: st.number_input("影Y", step=1, key="flyer_logo_shadow_off_y")
@@ -391,12 +399,11 @@ def render_flyer_editor(project_id):
             
             st.markdown("---")
             st.markdown("**間隔設定**")
-            st.number_input("サブタイトルと日付の間隔", step=1, key="flyer_subtitle_date_gap")
-            st.number_input("日付と会場の間隔", step=1, key="flyer_date_venue_gap")
+            # ★修正: 削除した項目のUIコードを削除
+            # チケット行間などは残す
             st.number_input("チケット行間", step=1, key="flyer_ticket_gap", help="マイナス値で間隔を詰められます")
             st.number_input("チケットエリアと備考エリアの行間", step=5, key="flyer_area_gap")
             st.number_input("備考行間", step=1, key="flyer_note_gap")
-            st.number_input("フッター位置 (上+/下-)", step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
         render_style_editor("サブタイトル (Subtitle)", "subtitle")
@@ -405,13 +412,8 @@ def render_flyer_editor(project_id):
         render_style_editor("時間 (OPEN/START)", "time")
         render_style_editor("チケット情報 (List)", "ticket_name")
         render_style_editor("チケット共通備考 (Notes)", "ticket_note")
-
-        if st.button("💾 設定を保存 (このプロジェクト)", use_container_width=True):
-            save_data = gather_flyer_settings_from_session()
-            if hasattr(proj, "flyer_json"):
-                proj.flyer_json = json.dumps(save_data)
-                db.commit()
-                st.success("設定を保存しました")
+        
+        # 保存ボタンは削除済み
 
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
@@ -424,19 +426,72 @@ def render_flyer_editor(project_id):
             target_key = st.radio("移動させる要素を選択:", list(move_targets.keys()), 
                                   format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
-        if st.button("プレビューを生成する", type="primary", use_container_width=True):
+        # ★修正: 保存して生成ボタン
+        if st.button("💾 設定を保存してプレビューを生成する", type="primary", use_container_width=True):
+            # 設定保存
+            save_data = gather_flyer_settings_from_session()
+            proj.flyer_json = json.dumps(save_data)
+            db.commit()
+            st.toast("設定を保存しました", icon="✅")
+            # 生成
             _generate_preview(db, proj)
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
+        # --- クリックイベント処理 ---
+        def handle_click(coords, mode="grid"):
+            if not coords: return
+            target = st.session_state.get("flyer_click_target")
+            if not target: return
+            meta = st.session_state.get("flyer_layout_meta", {})
+            if not meta:
+                st.warning("レイアウト情報がありません。")
+                return
+
+            display_width = st.session_state.flyer_preview_width
+            original_width = 1080
+            scale_ratio = original_width / display_width
+            
+            click_x = coords['x'] * scale_ratio
+            click_y = coords['y'] * scale_ratio
+            
+            lookup_key = target
+            if target == "ticket_name" or target == "ticket_note": lookup_key = "footer_area"
+
+            base_info = meta.get(lookup_key)
+            if base_info:
+                base_x = base_info.get("base_x", 540)
+                base_y = base_info.get("base_y", 675)
+                
+                new_pos_x = int(click_x - base_x)
+                new_pos_y = int(base_y - click_y)
+                
+                st.session_state[f"flyer_{target}_pos_x"] = new_pos_x
+                st.session_state[f"flyer_{target}_pos_y"] = new_pos_y
+                
+                st.toast(f"{move_targets.get(target, target)} を移動しました (X={new_pos_x}, Y={new_pos_y})")
+                
+                # 自動保存してプレビュー更新
+                save_data = gather_flyer_settings_from_session()
+                proj.flyer_json = json.dumps(save_data)
+                db.commit()
+                _generate_preview(db, proj)
+
+        if HAS_CLICK_COORD:
+            # 前回のクリック情報を保持するロジック（ループ防止）は render_flyer_editor 冒頭で処理する形にした方が良いが、
+            # Streamlitの仕様上、widgetのcallbackで処理するのが一番安全。
+            # ここではシンプルに、値が変わっていたら処理するように実装済み
+            pass
+
         with t1:
             if st.session_state.get("flyer_result_grid"):
                 if HAS_CLICK_COORD:
-                    streamlit_image_coordinates(
+                    coords = streamlit_image_coordinates(
                         st.session_state.flyer_result_grid, 
                         key="coord_grid",
                         width=st.session_state.flyer_preview_width
                     )
+                    if coords: handle_click(coords, "grid")
                 else:
                     st.image(st.session_state.flyer_result_grid, width=st.session_state.flyer_preview_width)
                 
@@ -448,11 +503,12 @@ def render_flyer_editor(project_id):
         with t2:
             if st.session_state.get("flyer_result_tt"):
                 if HAS_CLICK_COORD:
-                    streamlit_image_coordinates(
+                    coords = streamlit_image_coordinates(
                         st.session_state.flyer_result_tt, 
                         key="coord_tt",
                         width=st.session_state.flyer_preview_width
                     )
+                    if coords: handle_click(coords, "tt")
                 else:
                     st.image(st.session_state.flyer_result_tt, width=st.session_state.flyer_preview_width)
 
