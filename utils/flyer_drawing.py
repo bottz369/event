@@ -4,6 +4,8 @@ import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
+from constants import FONT_DIR
+
 # ==========================================
 # 1. ヘルパー関数 (画像読み込みなど)
 # ==========================================
@@ -11,6 +13,10 @@ def load_image(source):
     """パスまたはURLから画像を読み込む"""
     if not source: return None
     try:
+        # すでにPIL画像の場合はそのまま返す (手動トリミング対応)
+        if isinstance(source, Image.Image):
+            return source.convert("RGBA")
+            
         if isinstance(source, str):
             if source.startswith("http://") or source.startswith("https://"):
                 response = requests.get(source, timeout=10)
@@ -34,6 +40,11 @@ def contains_japanese(text):
 def is_glyph_available(font, char):
     """フォントに特定の文字(グリフ)が含まれているか判定"""
     if char.isspace() or ord(char) < 32: return True
+    
+    # ★修正: getmaskメソッドがない場合（デフォルトフォントなど）はTrue扱いにする
+    if not hasattr(font, "getmask"):
+        return True
+
     try:
         mask = font.getmask(char)
         return not (mask.size[0] == 0 or mask.size[1] == 0)
@@ -70,7 +81,7 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
     return total_w, max_h
 
 def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_width, fill_color, 
-                          anchor="la", 
+                          anchor="ma", # ★変更: デフォルトを中央揃え(ma)に統一
                           shadow_on=False, shadow_color="#000000", shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
                           fallback_font_path=None, measure_only=False):
     if not text: return 0
@@ -152,13 +163,18 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
         final_layer = final_layer.resize((new_w, new_h), Image.LANCZOS)
         content_w, content_h = new_w, new_h
 
+    # 配置計算
+    # x, y はテキストの「中心位置」として指定される想定
+    
     paste_x = x - int(margin * (content_w / canvas_w))
     paste_y = y - margin
     
     if anchor == "ra":
         paste_x = x - content_w + int(margin * (content_w / canvas_w))
-    elif anchor == "ma":
+    elif anchor == "ma": # Middle Align (Center)
         paste_x = x - (content_w // 2)
+    elif anchor == "la":
+        paste_x = x - int(margin * (content_w / canvas_w))
 
     if base_img:
         base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
@@ -168,7 +184,7 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
 def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
                           shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
                           tri_visible=True, tri_scale=1.0, tri_color=None,
-                          alignment="right", fixed_label_w=0, measure_only=False):
+                          alignment="center", fixed_label_w=0, measure_only=False): # ★変更: デフォルト center
     
     # フォント準備
     try: primary_font = font
@@ -235,15 +251,9 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     final_layer.paste(txt_img, (0, 0), txt_img)
     
     # 配置
-    paste_x = x
+    # x は常に中心座標として扱われるように修正 (Center Align Logic)
+    paste_x = x - (canvas_w // 2) + margin
     paste_y = y - margin
-    
-    if alignment == "right" or alignment == "triangle":
-        paste_x = x - canvas_w + margin
-    elif alignment == "center":
-        paste_x = x - (canvas_w // 2) + margin
-    else:
-        paste_x = x - margin
     
     if base_img:
         base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
@@ -260,7 +270,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
                               system_fallback_filename="keifont.ttf"):
     """
     指定されたパラメータでフライヤー画像を生成する。
-    ★修正: main_source が PIL.Image オブジェクトの場合に直接使用するように変更
+    ★修正: 全要素を中央基準配置に変更し、Y軸のプラスマイナスを直感的に(上が+)変更
     """
     
     # --- 1. 背景の準備 ---
@@ -290,12 +300,11 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
     canvas = bg_final.convert("RGBA")
     
     # --- 2. 共通フォントパスの解決 ---
-    # constantsからではなく、引数やカレントディレクトリから解決を試みる
     def get_font_path(fname):
         candidates = [
             fname,
+            os.path.join(FONT_DIR, fname),
             os.path.join("assets", "fonts", fname),
-            os.path.join("fonts", fname),
             "keifont.ttf"
         ]
         for c in candidates:
@@ -306,11 +315,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
 
     # --- 3. メイン画像 (Grid/TT) の配置 ---
     # ★ここが重要: PIL画像ならそのまま使う
-    main_img = None
-    if isinstance(main_source, Image.Image):
-        main_img = main_source.convert("RGBA")
-    elif main_source:
-        main_img = load_image(main_source)
+    main_img = load_image(main_source)
 
     if main_img:
         scale_w_pct = styles.get("content_scale_w", 100)
@@ -319,15 +324,14 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         
         target_w = int(CANVAS_W * (scale_w_pct / 100))
         # アスペクト比維持しつつ高さも調整
-        # 高さを指定%にするか、元画像の比率で幅に合わせるか。
-        # ここでは単純にリサイズ (stretch) させているが、リンクされている場合は呼び出し元で同じ値が入る前提
         target_h = int(main_img.height * (target_w / main_img.width) * (scale_h_pct/scale_w_pct))
         
         main_resized = main_img.resize((target_w, target_h), Image.LANCZOS)
         
+        # 中央基準
         main_x = (CANVAS_W - target_w) // 2
-        # デフォルトは中央より少し上、そこからオフセット
-        main_y = (CANVAS_H - target_h) // 2 + pos_y_off
+        # ★修正: Y軸反転 (+で上へ -> 基準Y - オフセット)
+        main_y = (CANVAS_H - target_h) // 2 - pos_y_off
         
         canvas.paste(main_resized, (main_x, main_y), main_resized)
 
@@ -350,17 +354,18 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         base_x = (CANVAS_W - l_w) // 2
         base_y = 50
         
-        # オフセット適用 (キャンバスサイズに対する%)
+        # オフセット適用
         final_x = base_x + int(CANVAS_W * (l_off_x / 100))
-        final_y = base_y + int(CANVAS_H * (l_off_y / 100))
+        # ★修正: Y軸反転 (+で上へ)
+        final_y = base_y - int(CANVAS_H * (l_off_y / 100))
         
         canvas.paste(logo_resized, (final_x, final_y), logo_resized)
 
     # --- 5. テキスト描画 (日付・会場・時間・チケット) ---
     
-    # 基準Y座標の計算 (メイン画像の下あたりから開始)
-    # フッターエリアの開始位置
-    footer_base_y = CANVAS_H - 450 + styles.get("footer_pos_y", 0)
+    # 基準Y座標 (メイン画像の下あたりから開始)
+    # ★修正: Y軸反転 (footer_pos_y が + なら上へ)
+    footer_base_y = CANVAS_H - 450 - styles.get("footer_pos_y", 0)
     current_y = footer_base_y
 
     # Helper: スタイル取得
@@ -383,9 +388,10 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         s = get_s("subtitle")
         h = draw_text_with_shadow(
             canvas, subtitle_text,
-            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            # ★修正: Xは中央基準、Yは「現在位置 - オフセット」
+            CANVAS_W // 2 + s["pos_x"], current_y - s["pos_y"],
             s["font_path"], s["font_size_px"], CANVAS_W - 40, s["fill_color"],
-            anchor="ma",
+            anchor="ma", # 中央揃え
             shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
             shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
             fallback_font_path=fallback_path
@@ -397,9 +403,10 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         s = get_s("date")
         h = draw_text_with_shadow(
             canvas, date_text, 
-            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            # ★修正: Xは中央基準、Yは「現在位置 - オフセット」
+            CANVAS_W // 2 + s["pos_x"], current_y - s["pos_y"],
             s["font_path"], s["font_size_px"], CANVAS_W - 40, s["fill_color"],
-            anchor="ma",
+            anchor="ma", # 中央揃え
             shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
             shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
             fallback_font_path=fallback_path
@@ -411,37 +418,37 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         s = get_s("venue")
         h = draw_text_with_shadow(
             canvas, venue_text, 
-            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            # ★修正: Xは中央基準、Yは「現在位置 - オフセット」
+            CANVAS_W // 2 + s["pos_x"], current_y - s["pos_y"],
             s["font_path"], s["font_size_px"], CANVAS_W - 40, s["fill_color"],
-            anchor="ma",
+            anchor="ma", # 中央揃え
             shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
             shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
             fallback_font_path=fallback_path
         )
-        current_y += h + 30 # 少し余白
+        current_y += h + 30 
 
     # (3) 時間 (OPEN/START)
     s = get_s("time")
-    # フォントロード
     try: time_font = ImageFont.truetype(s["font_path"], int(s["font_size_px"]))
     except: time_font = ImageFont.load_default()
     
     tri_visible = styles.get("time_tri_visible", True)
     tri_scale = styles.get("time_tri_scale", 1.0)
     line_gap = styles.get("time_line_gap", 0)
-    alignment = styles.get("time_alignment", "right")
+    alignment = styles.get("time_alignment", "center") # デフォルトをcenterに
 
-    # 配置計算
+    # ★修正: 基準座標を画面中央に
     center_x = CANVAS_W // 2 + s["pos_x"]
-    start_y = current_y + s["pos_y"]
+    # ★修正: Y軸反転
+    start_y = current_y - s["pos_y"]
     
-    # ラベル幅計測 ("OPEN" と "START" の幅を測り、大きい方に合わせる)
+    # ラベル幅計測
     dummy_draw = ImageDraw.Draw(Image.new("RGBA",(1,1)))
     w_open, _ = draw_text_mixed(dummy_draw, (0,0), "OPEN", time_font, None, None)
     w_start, _ = draw_text_mixed(dummy_draw, (0,0), "START", time_font, None, None)
     fixed_label_w = max(w_open, w_start)
 
-    # OPEN行
     h1 = draw_time_row_aligned(
         canvas, "OPEN", open_time, center_x, start_y,
         time_font, s["font_size_px"], CANVAS_W, s["fill_color"],
@@ -449,7 +456,6 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         tri_visible, tri_scale, s["fill_color"], alignment, fixed_label_w
     )
     
-    # START行
     h2 = draw_time_row_aligned(
         canvas, "START", start_time, center_x, start_y + h1 + line_gap,
         time_font, s["font_size_px"], CANVAS_W, s["fill_color"],
@@ -470,16 +476,17 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         
         h = draw_text_with_shadow(
             canvas, line_text, 
-            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            # ★修正: X中央、Y反転
+            CANVAS_W // 2 + s["pos_x"], current_y - s["pos_y"],
             s["font_path"], s["font_size_px"], CANVAS_W - 60, s["fill_color"],
-            anchor="ma",
+            anchor="ma", # 中央揃え
             shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
             shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
             fallback_font_path=fallback_path
         )
         current_y += h + t_gap
 
-    # (5) 共通備考 (少し小さめ、または別スタイル)
+    # (5) 共通備考
     s = get_s("ticket_note")
     n_gap = styles.get("note_gap", 15)
     current_y += 10 
@@ -488,9 +495,10 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         if not note: continue
         h = draw_text_with_shadow(
             canvas, note, 
-            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            # ★修正: X中央、Y反転
+            CANVAS_W // 2 + s["pos_x"], current_y - s["pos_y"],
             s["font_path"], s["font_size_px"], CANVAS_W - 60, s["fill_color"],
-            anchor="ma",
+            anchor="ma", # 中央揃え
             shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
             shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
             fallback_font_path=fallback_path
