@@ -2,7 +2,7 @@ import os
 import re
 import requests
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
 from constants import FONT_DIR
 
@@ -13,10 +13,8 @@ def load_image(source):
     """パスまたはURLから画像を読み込む"""
     if not source: return None
     try:
-        # すでにPIL画像の場合はそのまま返す
         if isinstance(source, Image.Image):
             return source.convert("RGBA")
-            
         if isinstance(source, str):
             if source.startswith("http://") or source.startswith("https://"):
                 response = requests.get(source, timeout=10)
@@ -33,12 +31,10 @@ def load_image(source):
 # ==========================================
 
 def contains_japanese(text):
-    """テキストに日本語（ひらがな、カタカナ、漢字）が含まれているか判定"""
     if not text: return False
     return bool(re.search(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]', str(text)))
 
 def is_glyph_available(font, char):
-    """フォントに特定の文字(グリフ)が含まれているか判定"""
     if char.isspace() or ord(char) < 32: return True
     if not hasattr(font, "getmask"): return True
     try:
@@ -47,7 +43,6 @@ def is_glyph_available(font, char):
     except: return True 
 
 def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
-    """メインフォントとフォールバックフォント(日本語用)を文字ごとに切り替えて描画・計測"""
     x, y = xy
     total_w = 0
     max_h = 0
@@ -77,7 +72,9 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
 
 def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_width, fill_color, 
                           anchor="ma", 
-                          shadow_on=False, shadow_color="#000000", shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
+                          shadow_on=False, shadow_color="#000000", 
+                          shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
+                          shadow_opacity=255, shadow_spread=0, # ★追加パラメータ
                           fallback_font_path=None, measure_only=False):
     if not text: return 0
     text_str = str(text)
@@ -101,13 +98,13 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     can_resize = True
     while can_resize and current_size > min_size:
         w, h = draw_text_mixed(dummy_draw, (0, 0), text_str, primary_font, fallback_font, fill_color)
-        margin_est = max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 10
+        margin_est = max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 10 + shadow_spread
         if w + (margin_est * 2) <= max_width: break
         current_size -= 2
         primary_font, fallback_font = load_fonts(current_size)
 
     text_w, text_h = draw_text_mixed(dummy_draw, (0, 0), text_str, primary_font, fallback_font, fill_color)
-    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
+    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20 + shadow_spread)
     
     if measure_only:
         return int(text_h + margin + current_size * 0.2) 
@@ -121,17 +118,50 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     draw_text_mixed(txt_draw, (draw_x, draw_y), text_str, primary_font, fallback_font, fill_color)
     
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+    
     if shadow_on:
-        alpha = txt_img.getchannel("A")
-        shadow_solid = Image.new("RGBA", (canvas_w, canvas_h), shadow_color)
-        shadow_solid.putalpha(alpha)
+        # 1. 影のベースを作成 (テキストの形)
+        shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+        shadow_draw = ImageDraw.Draw(shadow_layer)
+        
+        # 影の色パース
+        from PIL import ImageColor
+        try:
+            s_rgb = ImageColor.getrgb(shadow_color)
+        except:
+            s_rgb = (0, 0, 0)
+        
+        # 不透明度を適用
+        s_color_with_alpha = s_rgb + (int(shadow_opacity),)
+        
+        # 2. テキスト形状を描画 (太さ調整含む)
+        if shadow_spread > 0:
+            # 太らせる処理: 複数回ずらして描画 (簡易的なStroke効果)
+            # 正確なStrokeは重いので、上下左右斜めにずらして重ねる
+            spread_steps = 1 # 簡易
+            if shadow_spread > 2: spread_steps = 2
+            
+            for sx in range(-shadow_spread, shadow_spread + 1, spread_steps):
+                for sy in range(-shadow_spread, shadow_spread + 1, spread_steps):
+                    # 円形に近い範囲だけ描画
+                    if sx*sx + sy*sy <= shadow_spread*shadow_spread + spread_steps:
+                        draw_text_mixed(shadow_draw, (draw_x + sx + shadow_off_x, draw_y + sy + shadow_off_y), 
+                                        text_str, primary_font, fallback_font, s_color_with_alpha)
+        else:
+            # 通常描画
+            draw_text_mixed(shadow_draw, (draw_x + shadow_off_x, draw_y + shadow_off_y), 
+                            text_str, primary_font, fallback_font, s_color_with_alpha)
+        
+        # 3. ぼかし適用
         if shadow_blur > 0:
-            shadow_solid = shadow_solid.filter(ImageFilter.GaussianBlur(shadow_blur))
-        final_layer.paste(shadow_solid, (shadow_off_x, shadow_off_y), shadow_solid)
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow_blur))
+            
+        final_layer.paste(shadow_layer, (0, 0), shadow_layer)
+        
     final_layer.paste(txt_img, (0, 0), txt_img)
     
     content_w, content_h = canvas_w, canvas_h
-    effective_text_w = text_w + (max(abs(shadow_off_x), shadow_blur*2)) 
+    effective_text_w = text_w + (max(abs(shadow_off_x), shadow_blur*2)) + shadow_spread*2
     if effective_text_w > max_width:
         ratio = max_width / effective_text_w
         new_w = int(content_w * ratio)
@@ -156,6 +186,7 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
 
 def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
                           shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
+                          shadow_opacity=255, shadow_spread=0, # ★追加
                           tri_visible=True, tri_scale=1.0, tri_color=None,
                           alignment="center", fixed_label_w=0, measure_only=False):
     
@@ -179,7 +210,7 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     else:
         total_w_content = w_label + (tri_w + tri_padding * 2 if tri_visible else tri_padding) + w_time
         
-    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
+    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20 + shadow_spread)
     canvas_h = int(max(h_label, h_time, tri_h) + margin * 2 + font_size_px * 0.5)
     
     if measure_only: return canvas_h - (margin * 2)
@@ -209,16 +240,64 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     draw_text_mixed(draw, (cur_x, draw_y), time_str, primary_font, fallback_font, fill_color)
     
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+    
     if shadow_on:
-        alpha = txt_img.getchannel("A")
-        shadow_solid = Image.new("RGBA", (canvas_w, canvas_h), shadow_color)
-        shadow_solid.putalpha(alpha)
+        shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+        shadow_draw = ImageDraw.Draw(shadow_layer)
+        from PIL import ImageColor
+        try: s_rgb = ImageColor.getrgb(shadow_color)
+        except: s_rgb = (0,0,0)
+        s_color_with_alpha = s_rgb + (int(shadow_opacity),)
+        
+        # 影の描画 (本体のアルファチャンネルを使うのではなく、形状を描画する)
+        # テキスト部分のみマスクとして抽出して描画する方法もあるが、
+        # ここでは draw_text_mixed と同じロジックで影位置に描画する
+        
+        # ※簡易実装: 影用のテキストレイヤーを作ってぼかす
+        # 位置ずれとSpreadを考慮
+        
+        # 1. 影用のテキスト画像作成
+        s_temp = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+        s_draw = ImageDraw.Draw(s_temp)
+        
+        # 再度描画位置計算 (同じロジック)
+        s_cur_x = margin # 初期位置
+        
+        if alignment == "triangle":
+            s_cur_x += (fixed_label_w - w_label)
+            draw_text_mixed(s_draw, (s_cur_x, draw_y), label, primary_font, fallback_font, s_color_with_alpha)
+            s_cur_x = margin + fixed_label_w
+        else:
+            draw_text_mixed(s_draw, (s_cur_x, draw_y), label, primary_font, fallback_font, s_color_with_alpha)
+            s_cur_x += w_label
+            
+        s_cur_x += tri_padding
+        if tri_visible:
+            cy = draw_y + (font_size_px * 0.5)
+            s_draw.polygon([(s_cur_x, cy - tri_h/2), (s_cur_x, cy + tri_h/2), (s_cur_x + tri_w, cy)], fill=s_color_with_alpha)
+            s_cur_x += tri_w + tri_padding
+        
+        draw_text_mixed(s_draw, (s_cur_x, draw_y), time_str, primary_font, fallback_font, s_color_with_alpha)
+        
+        # 2. Spread適用 (膨張)
+        if shadow_spread > 0:
+            # 膨張フィルター (MaxFilter)
+            # アルファチャンネルに対して適用
+            r, g, b, a = s_temp.split()
+            a = a.filter(ImageFilter.MaxFilter(1 + shadow_spread*2))
+            s_temp = Image.merge("RGBA", (r, g, b, a))
+            # 色を再適用 (MaxFilterでエッジが汚くなるのを防ぐためベタ塗り合成)
+            solid_color = Image.new("RGBA", s_temp.size, s_color_with_alpha)
+            s_temp = ImageChops.multiply(solid_color, s_temp)
+
+        # 3. Blur適用
         if shadow_blur > 0:
-            shadow_solid = shadow_solid.filter(ImageFilter.GaussianBlur(shadow_blur))
-        final_layer.paste(shadow_solid, (shadow_off_x, shadow_off_y), shadow_solid)
+            s_temp = s_temp.filter(ImageFilter.GaussianBlur(shadow_blur))
+            
+        final_layer.paste(s_temp, (shadow_off_x, shadow_off_y), s_temp)
+
     final_layer.paste(txt_img, (0, 0), txt_img)
     
-    # 配置 (中央基準)
     paste_x = x - (canvas_w // 2) + margin
     paste_y = y - margin
     
@@ -236,11 +315,10 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
                               ticket_info_list, common_notes_list,
                               system_fallback_filename="keifont.ttf"):
     
-    # ★追加: 座標情報を記録する辞書
     layout_meta = {}
-
-    # --- 1. 背景 ---
     CANVAS_W, CANVAS_H = 1080, 1350
+    
+    # 背景
     bg_img = load_image(bg_source)
     if bg_img:
         bg_ratio = bg_img.width / bg_img.height
@@ -257,10 +335,9 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         bg_final = bg_resized.crop((left, top, left + CANVAS_W, top + CANVAS_H))
     else:
         bg_final = Image.new("RGBA", (CANVAS_W, CANVAS_H), (30, 30, 30, 255))
-
     canvas = bg_final.convert("RGBA")
     
-    # --- 2. フォント ---
+    # フォント
     def get_font_path(fname):
         candidates = [fname, os.path.join(FONT_DIR, fname), os.path.join("assets", "fonts", fname), "keifont.ttf"]
         for c in candidates:
@@ -268,53 +345,41 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         return None
     fallback_path = get_font_path(system_fallback_filename)
 
-    # --- 3. メイン画像 ---
+    # メイン画像
     main_img = load_image(main_source)
     if main_img:
         scale_w_pct = styles.get("content_scale_w", 100)
         scale_h_pct = styles.get("content_scale_h", 100)
         pos_y_off = styles.get("content_pos_y", 0)
-        
         target_w = int(CANVAS_W * (scale_w_pct / 100))
         target_h = int(main_img.height * (target_w / main_img.width) * (scale_h_pct/scale_w_pct))
-        
         main_resized = main_img.resize((target_w, target_h), Image.LANCZOS)
-        
         main_base_x = CANVAS_W // 2
         main_base_y = CANVAS_H // 2
-        
         main_x = main_base_x - (target_w // 2)
         main_y = (main_base_y - (target_h // 2)) - pos_y_off
-        
         canvas.paste(main_resized, (main_x, main_y), main_resized)
-        
-        # ★追加: 基準座標を記録 (Y軸反転ロジック用)
         layout_meta["main"] = {"base_x": main_base_x, "base_y": main_base_y}
 
-    # --- 4. ロゴ ---
+    # ロゴ
     logo_img = load_image(logo_source)
     if logo_img:
         l_scale = styles.get("logo_scale", 1.0)
         l_off_x = styles.get("logo_pos_x", 0.0)
         l_off_y = styles.get("logo_pos_y", 0.0)
-        
         base_w = CANVAS_W * 0.4 * l_scale
         l_ratio = logo_img.height / logo_img.width
         l_w = int(base_w)
         l_h = int(l_w * l_ratio)
         logo_resized = logo_img.resize((l_w, l_h), Image.LANCZOS)
-        
         base_x = (CANVAS_W - l_w) // 2
         base_y = 50
-        
         final_x = base_x + int(CANVAS_W * (l_off_x / 100))
         final_y = base_y - int(CANVAS_H * (l_off_y / 100))
-        
         canvas.paste(logo_resized, (final_x, final_y), logo_resized)
-        
         layout_meta["logo"] = {"base_x": CANVAS_W // 2, "base_y": 50, "mode": "percent"}
 
-    # --- 5. テキスト ---
+    # テキスト描画
     footer_base_y = CANVAS_H - 450 - styles.get("footer_pos_y", 0)
     current_y = footer_base_y
 
@@ -328,6 +393,8 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
             "shadow_blur": styles.get(f"{key_prefix}_shadow_blur", 0),
             "shadow_off_x": styles.get(f"{key_prefix}_shadow_off_x", 5),
             "shadow_off_y": styles.get(f"{key_prefix}_shadow_off_y", 5),
+            "shadow_opacity": styles.get(f"{key_prefix}_shadow_opacity", 255), # ★追加
+            "shadow_spread": styles.get(f"{key_prefix}_shadow_spread", 0),     # ★追加
             "pos_x": styles.get(f"{key_prefix}_pos_x", 0),
             "pos_y": styles.get(f"{key_prefix}_pos_y", 0)
         }
@@ -338,7 +405,6 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         base_x = CANVAS_W // 2
         base_y = current_y
         layout_meta["subtitle"] = {"base_x": base_x, "base_y": base_y}
-        
         h = draw_text_with_shadow(
             canvas, subtitle_text,
             base_x + s["pos_x"], base_y - s["pos_y"],
@@ -346,6 +412,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
             anchor="ma",
             shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
             shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
+            shadow_opacity=s["shadow_opacity"], shadow_spread=s["shadow_spread"],
             fallback_font_path=fallback_path
         )
         current_y += h + styles.get("subtitle_date_gap", 10)
@@ -356,7 +423,6 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         base_x = CANVAS_W // 2
         base_y = current_y
         layout_meta["date"] = {"base_x": base_x, "base_y": base_y}
-        
         h = draw_text_with_shadow(
             canvas, date_text, 
             base_x + s["pos_x"], base_y - s["pos_y"],
@@ -364,6 +430,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
             anchor="ma",
             shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
             shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
+            shadow_opacity=s["shadow_opacity"], shadow_spread=s["shadow_spread"],
             fallback_font_path=fallback_path
         )
         current_y += h + styles.get("date_venue_gap", 10)
@@ -374,7 +441,6 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         base_x = CANVAS_W // 2
         base_y = current_y
         layout_meta["venue"] = {"base_x": base_x, "base_y": base_y}
-        
         h = draw_text_with_shadow(
             canvas, venue_text, 
             base_x + s["pos_x"], base_y - s["pos_y"],
@@ -382,6 +448,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
             anchor="ma",
             shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
             shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
+            shadow_opacity=s["shadow_opacity"], shadow_spread=s["shadow_spread"],
             fallback_font_path=fallback_path
         )
         current_y += h + 30
@@ -393,10 +460,11 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
     tri_visible = styles.get("time_tri_visible", True)
     tri_scale = styles.get("time_tri_scale", 1.0)
     line_gap = styles.get("time_line_gap", 0)
+    alignment = styles.get("time_alignment", "center")
     
-    center_x = CANVAS_W // 2
-    start_y = current_y
-    layout_meta["time"] = {"base_x": center_x, "base_y": start_y}
+    center_x = CANVAS_W // 2 + s["pos_x"]
+    start_y = current_y - s["pos_y"]
+    layout_meta["time"] = {"base_x": CANVAS_W // 2, "base_y": current_y} # Metaは基準点
     
     dummy = ImageDraw.Draw(Image.new("RGBA",(1,1)))
     w_open, _ = draw_text_mixed(dummy, (0,0), "OPEN", time_font, None, None)
@@ -404,35 +472,33 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
     fixed_label_w = max(w_open, w_start)
 
     h1 = draw_time_row_aligned(
-        canvas, "OPEN", open_time, 
-        center_x + s["pos_x"], start_y - s["pos_y"],
+        canvas, "OPEN", open_time, center_x, start_y,
         time_font, s["font_size_px"], CANVAS_W, s["fill_color"],
         s["shadow_on"], s["shadow_color"], s["shadow_blur"], s["shadow_off_x"], s["shadow_off_y"], fallback_path,
-        tri_visible, tri_scale, s["fill_color"], "center", fixed_label_w
+        s["shadow_opacity"], s["shadow_spread"],
+        tri_visible, tri_scale, s["fill_color"], alignment, fixed_label_w
     )
     
     h2 = draw_time_row_aligned(
-        canvas, "START", start_time, 
-        center_x + s["pos_x"], start_y + h1 + line_gap - s["pos_y"],
+        canvas, "START", start_time, center_x, start_y + h1 + line_gap,
         time_font, s["font_size_px"], CANVAS_W, s["fill_color"],
         s["shadow_on"], s["shadow_color"], s["shadow_blur"], s["shadow_off_x"], s["shadow_off_y"], fallback_path,
-        tri_visible, tri_scale, s["fill_color"], "center", fixed_label_w
+        s["shadow_opacity"], s["shadow_spread"],
+        tri_visible, tri_scale, s["fill_color"], alignment, fixed_label_w
     )
     current_y = start_y + h1 + line_gap + h2 + styles.get("area_gap", 40)
 
-    # (4) Footer (Ticket / Notes)
+    # (4) Footer
     layout_meta["footer_area"] = {"base_x": CANVAS_W // 2, "base_y": current_y}
     layout_meta["ticket_name"] = {"base_x": CANVAS_W // 2, "base_y": current_y}
     layout_meta["ticket_note"] = {"base_x": CANVAS_W // 2, "base_y": current_y}
     
     s_ticket = get_s("ticket_name")
     t_gap = styles.get("ticket_gap", 20)
-    
     for t in ticket_info_list:
         if not t.get("name") and not t.get("price"): continue
         line_text = f"{t.get('name')} {t.get('price')}"
         if t.get("note"): line_text += f" ({t.get('note')})"
-        
         h = draw_text_with_shadow(
             canvas, line_text, 
             CANVAS_W // 2 + s_ticket["pos_x"], current_y - s_ticket["pos_y"],
@@ -440,6 +506,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
             anchor="ma",
             shadow_on=s_ticket["shadow_on"], shadow_color=s_ticket["shadow_color"],
             shadow_blur=s_ticket["shadow_blur"], shadow_off_x=s_ticket["shadow_off_x"], shadow_off_y=s_ticket["shadow_off_y"],
+            shadow_opacity=s_ticket["shadow_opacity"], shadow_spread=s_ticket["shadow_spread"],
             fallback_font_path=fallback_path
         )
         current_y += h + t_gap
@@ -447,7 +514,6 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
     s_note = get_s("ticket_note")
     n_gap = styles.get("note_gap", 15)
     current_y += 10 
-    
     for note in common_notes_list:
         if not note: continue
         h = draw_text_with_shadow(
@@ -457,9 +523,9 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
             anchor="ma",
             shadow_on=s_note["shadow_on"], shadow_color=s_note["shadow_color"],
             shadow_blur=s_note["shadow_blur"], shadow_off_x=s_note["shadow_off_x"], shadow_off_y=s_note["shadow_off_y"],
+            shadow_opacity=s_note["shadow_opacity"], shadow_spread=s_note["shadow_spread"],
             fallback_font_path=fallback_path
         )
         current_y += h + n_gap
 
-    # ★重要: 画像とメタデータの両方を返す
     return canvas, layout_meta
