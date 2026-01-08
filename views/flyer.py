@@ -27,6 +27,10 @@ def gather_flyer_settings_from_session():
     base_keys = [
         "bg_id", "logo_id", "date_format", 
         "logo_scale", "logo_pos_x", "logo_pos_y",
+        # ★追加: ロゴ影設定
+        "logo_shadow_on", "logo_shadow_color", "logo_shadow_opacity", 
+        "logo_shadow_spread", "logo_shadow_blur", "logo_shadow_off_x", "logo_shadow_off_y",
+        
         "grid_scale_w", "grid_scale_h", "grid_pos_y", 
         "tt_scale_w", "tt_scale_h", "tt_pos_y",       
         "subtitle_date_gap", 
@@ -127,6 +131,16 @@ def render_flyer_editor(project_id):
     init_s("flyer_logo_scale", 1.0)
     init_s("flyer_logo_pos_x", 0.0)
     init_s("flyer_logo_pos_y", 0.0)
+    
+    # ★追加: ロゴ影設定の初期化
+    init_s("flyer_logo_shadow_on", False)
+    init_s("flyer_logo_shadow_color", "#000000")
+    init_s("flyer_logo_shadow_opacity", 128)
+    init_s("flyer_logo_shadow_spread", 0)
+    init_s("flyer_logo_shadow_blur", 5)
+    init_s("flyer_logo_shadow_off_x", 5)
+    init_s("flyer_logo_shadow_off_y", 5)
+
     init_s("flyer_grid_scale_w", 95)
     init_s("flyer_grid_scale_h", 100)
     init_s("flyer_grid_pos_y", 0)    
@@ -322,6 +336,22 @@ def render_flyer_editor(project_id):
                 with c_l1: st.slider("サイズ", 0.1, 2.0, step=0.1, key="flyer_logo_scale")
                 with c_l2: st.number_input("X (右+/左-)", step=1.0, key="flyer_logo_pos_x")
                 with c_l3: st.number_input("Y (上+/下-)", step=1.0, key="flyer_logo_pos_y")
+                
+                # ★追加: ロゴの影設定
+                st.checkbox("ロゴに影をつける", key="flyer_logo_shadow_on")
+                if st.session_state.get("flyer_logo_shadow_on"):
+                    lc1, lc2 = st.columns(2)
+                    with lc1: st.color_picker("影色", key="flyer_logo_shadow_color")
+                    with lc2: st.slider("濃さ", 0, 255, step=5, key="flyer_logo_shadow_opacity")
+                    
+                    lc3, lc4 = st.columns(2)
+                    with lc3: st.slider("太さ", 0, 20, step=1, key="flyer_logo_shadow_spread")
+                    with lc4: st.slider("ぼかし", 0, 20, step=1, key="flyer_logo_shadow_blur")
+                    
+                    lc5, lc6 = st.columns(2)
+                    with lc5: st.number_input("影X", step=1, key="flyer_logo_shadow_off_x")
+                    with lc6: st.number_input("影Y", step=1, key="flyer_logo_shadow_off_y")
+            
             st.markdown("---")
             st.markdown(f"**サブタイトル**: {proj.subtitle if proj.subtitle else '(未設定)'}")
             st.markdown("---")
