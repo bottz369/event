@@ -37,7 +37,8 @@ def gather_flyer_settings_from_session():
         save_data[k] = st.session_state.get(f"flyer_{k}")
     
     target_keys = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
-    style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
+    # ★追加: shadow_opacity, shadow_spread
+    style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "shadow_opacity", "shadow_spread", "pos_x", "pos_y"]
     for k in target_keys:
         for p in style_params:
             save_data[f"{k}_{p}"] = st.session_state.get(f"flyer_{k}_{p}")
@@ -215,6 +216,11 @@ def render_flyer_editor(project_id):
         init_s(f"flyer_{prefix}_shadow_blur", 2)
         init_s(f"flyer_{prefix}_shadow_off_x", 5)
         init_s(f"flyer_{prefix}_shadow_off_y", 5)
+        
+        # ★追加: 新パラメータ
+        init_s(f"flyer_{prefix}_shadow_opacity", 255)
+        init_s(f"flyer_{prefix}_shadow_spread", 0)
+        
         init_s(f"flyer_{prefix}_pos_x", 0)
         init_s(f"flyer_{prefix}_pos_y", 0)
 
@@ -239,7 +245,11 @@ def render_flyer_editor(project_id):
                     st.color_picker("影の色", key=f"flyer_{prefix}_shadow_color")
             with sc2:
                 if st.session_state[f"flyer_{prefix}_shadow_on"]:
+                    # ★UI拡張: 不透明度と太さを追加
+                    st.slider("不透明度 (濃さ)", 0, 255, step=5, key=f"flyer_{prefix}_shadow_opacity")
+                    st.slider("太さ (拡張)", 0, 10, step=1, key=f"flyer_{prefix}_shadow_spread")
                     st.slider("ぼかし", 0, 20, step=1, key=f"flyer_{prefix}_shadow_blur")
+                    
                     c1, c2 = st.columns(2)
                     with c1: st.number_input("影X", step=1, key=f"flyer_{prefix}_shadow_off_x")
                     with c2: st.number_input("影Y", step=1, key=f"flyer_{prefix}_shadow_off_y")
@@ -351,7 +361,6 @@ def render_flyer_editor(project_id):
             
             st.markdown("---")
             st.markdown("**間隔設定**")
-            # ★修正: ここをSliderからNumberInputへ変更（マイナス値許可）
             st.number_input("サブタイトルと日付の間隔", step=1, key="flyer_subtitle_date_gap")
             st.number_input("日付と会場の間隔", step=1, key="flyer_date_venue_gap")
             st.number_input("チケット行間", step=1, key="flyer_ticket_gap", help="マイナス値で間隔を詰められます")
