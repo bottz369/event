@@ -5,7 +5,7 @@ import zipfile
 import os
 from datetime import datetime
 
-# ★追加: 画像座標取得用コンポーネント
+# ★画像座標取得用コンポーネント
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
     HAS_CLICK_COORD = True
@@ -90,7 +90,7 @@ def render_flyer_editor(project_id):
         st.error("プロジェクトエラー: 指定されたプロジェクトが見つかりません。")
         return
 
-    # データ読み込み（事前確保）
+    # データ読み込み
     tickets = []
     if getattr(proj, "tickets_json", None):
         try: tickets = json.loads(proj.tickets_json)
@@ -150,7 +150,7 @@ def render_flyer_editor(project_id):
     def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
     init_s("flyer_fallback_font", def_sys)
 
-    # 移動対象の定義（ロゴなどを除外）
+    # 移動対象の定義
     move_targets = {
         "subtitle": "サブタイトル",
         "date": "日付",
@@ -161,22 +161,20 @@ def render_flyer_editor(project_id):
     }
 
     # ==========================================
-    # ★重要: クリック判定ロジック (画面描画の前に実行)
+    # クリック判定ロジック
     # ==========================================
     def process_click_if_exists(coord_key):
         coords = st.session_state.get(coord_key)
-        # 前回のクリック情報と異なれば処理する（ループ防止）
         last_click_key = f"last_{coord_key}"
         
         if coords and coords != st.session_state.get(last_click_key):
-            st.session_state[last_click_key] = coords # 記録更新
+            st.session_state[last_click_key] = coords 
             
             target = st.session_state.get("flyer_click_target")
             meta = st.session_state.get("flyer_layout_meta", {})
             
             if not target or not meta: return
 
-            # 座標変換 (表示幅 -> 1080px)
             display_width = st.session_state.flyer_preview_width
             original_width = 1080
             scale_ratio = original_width / display_width
@@ -184,7 +182,6 @@ def render_flyer_editor(project_id):
             click_x = coords['x'] * scale_ratio
             click_y = coords['y'] * scale_ratio
             
-            # ターゲット判定
             lookup_key = target
             if target == "ticket_name" or target == "ticket_note": lookup_key = "footer_area"
 
@@ -193,20 +190,15 @@ def render_flyer_editor(project_id):
                 base_x = base_info.get("base_x", 540)
                 base_y = base_info.get("base_y", 675)
                 
-                # 位置計算 (Y軸は反転ロジック)
                 new_pos_x = int(click_x - base_x)
                 new_pos_y = int(base_y - click_y)
                 
-                # セッションステート更新
                 st.session_state[f"flyer_{target}_pos_x"] = new_pos_x
                 st.session_state[f"flyer_{target}_pos_y"] = new_pos_y
                 
                 st.toast(f"{move_targets.get(target, target)} を移動しました (X={new_pos_x}, Y={new_pos_y})")
-                
-                # 即時反映のためにプレビュー再生成をトリガー
                 _generate_preview(db, proj)
 
-    # 実際に判定を実行
     if HAS_CLICK_COORD:
         process_click_if_exists("coord_grid")
         process_click_if_exists("coord_tt")
@@ -356,12 +348,15 @@ def render_flyer_editor(project_id):
                 if st.session_state.flyer_tt_link: st.session_state.flyer_tt_scale_h = new_w
                 with c2: st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
                 st.number_input("Y位置 (上+/下-)", step=10, key="flyer_tt_pos_y")
+            
             st.markdown("---")
-            st.slider("サブタイトルと日付の間隔", 0, 100, step=1, key="flyer_subtitle_date_gap")
-            st.slider("日付と会場の間隔", 0, 100, step=1, key="flyer_date_venue_gap")
-            st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
-            st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
-            st.slider("備考行間", 0, 100, step=1, key="flyer_note_gap")
+            st.markdown("**間隔設定**")
+            # ★修正: ここをSliderからNumberInputへ変更（マイナス値許可）
+            st.number_input("サブタイトルと日付の間隔", step=1, key="flyer_subtitle_date_gap")
+            st.number_input("日付と会場の間隔", step=1, key="flyer_date_venue_gap")
+            st.number_input("チケット行間", step=1, key="flyer_ticket_gap", help="マイナス値で間隔を詰められます")
+            st.number_input("チケットエリアと備考エリアの行間", step=5, key="flyer_area_gap")
+            st.number_input("備考行間", step=1, key="flyer_note_gap")
             st.number_input("フッター位置 (上+/下-)", step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
@@ -382,17 +377,14 @@ def render_flyer_editor(project_id):
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
         
-        # --- ★追加: プレビュー表示幅スライダー ---
         st.caption("画面が狭い場合はこの値を小さくして調整してください")
         st.slider("プレビュー表示幅 (px)", 300, 1000, key="flyer_preview_width")
 
-        # --- クリック移動モードのUI (Grid/TT/Logo 除外済み) ---
         if HAS_CLICK_COORD and st.session_state.get("flyer_result_grid"):
             st.info("👇 画像をクリックして位置調整できます")
             target_key = st.radio("移動させる要素を選択:", list(move_targets.keys()), 
                                   format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
-        # 生成ボタン
         if st.button("プレビューを生成する", type="primary", use_container_width=True):
             _generate_preview(db, proj)
 
@@ -430,7 +422,6 @@ def render_flyer_editor(project_id):
                 st.download_button("DL (TT)", buf.getvalue(), "flyer_tt.png", "image/png", key="dl_tt_single")
             else: st.info("プレビューを生成してください")
             
-        # アーティストリスト構築・テキスト生成
         filtered_artists = []
         try:
             rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).all()
@@ -441,6 +432,7 @@ def render_flyer_editor(project_id):
                 try: raw_order = json.loads(proj.grid_order_json).get("order", [])
                 except: pass
             if not raw_order and rows: raw_order = [r.artist_name for r in sorted(rows, key=lambda x: x.sort_order)]
+            
             for name in raw_order:
                 if name in ["開演前物販", "終演後物販"]: continue
                 if hidden_map.get(name, False): continue
@@ -505,14 +497,14 @@ def _generate_preview(db, proj):
 
     styles = {k.replace("flyer_",""): v for k, v in st.session_state.items() if k.startswith("flyer_")}
     
-    # ★フォント読み込み（絶対パス化）
+    # フォント読み込み (絶対パス化 & ダウンロード)
     targets = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
     for t in targets:
         f_key = f"{t}_font"
         f_name = styles.get(f_key)
         if f_name:
             valid_path = ensure_font_file_exists(db, f_name)
-            if valid_path: styles[f_key] = valid_path # パスを上書き
+            if valid_path: styles[f_key] = valid_path 
             
     v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
     d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
