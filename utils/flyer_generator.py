@@ -1,315 +1,494 @@
 import os
-from PIL import Image, ImageDraw, ImageFont
+import re
+import requests
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 from constants import FONT_DIR
-# Step 1, 2で作ったファイルをインポート
-from utils.flyer_helpers import (
-    load_image_from_source, ensure_font_file_exists, crop_center_to_a4,
-    resize_image_contain, resize_image_to_width, format_time_str
-)
-from utils.flyer_drawing import (
-    draw_text_with_shadow, draw_time_row_aligned, draw_text_mixed, contains_japanese
-)
 
-def create_flyer_image_shadow(
-    db, bg_source, logo_source, main_source,
-    styles,
-    date_text, venue_text, open_time, start_time,
-    ticket_info_list, common_notes_list,
-    subtitle_text="", # ★追加: サブタイトル引数
-    system_fallback_filename=None
-):
-    # 1. フォントファイルの存在確認・準備
-    # ★追加: "subtitle" もチェック対象に追加
-    for k in ["date", "venue", "time", "ticket_name", "ticket_note", "subtitle"]:
-        fname = styles.get(f"{k}_font", "keifont.ttf")
-        ensure_font_file_exists(db, fname)
+# ==========================================
+# 1. ヘルパー関数 (画像読み込みなど)
+# ==========================================
+def load_image(source):
+    """パスまたはURLから画像を読み込む"""
+    if not source: return None
+    try:
+        # すでにPIL画像の場合はそのまま返す
+        if isinstance(source, Image.Image):
+            return source.convert("RGBA")
+            
+        if isinstance(source, str):
+            if source.startswith("http://") or source.startswith("https://"):
+                response = requests.get(source, timeout=10)
+                if response.status_code == 200:
+                    return Image.open(BytesIO(response.content)).convert("RGBA")
+            elif os.path.exists(source):
+                return Image.open(source).convert("RGBA")
+    except Exception as e:
+        print(f"Image Load Error: {e}")
+    return None
+
+# ==========================================
+# 2. 描画・フォントロジック (コアエンジン)
+# ==========================================
+
+def contains_japanese(text):
+    """テキストに日本語（ひらがな、カタカナ、漢字）が含まれているか判定"""
+    if not text: return False
+    return bool(re.search(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]', str(text)))
+
+def is_glyph_available(font, char):
+    """フォントに特定の文字(グリフ)が含まれているか判定"""
+    if char.isspace() or ord(char) < 32: return True
+    try:
+        mask = font.getmask(char)
+        return not (mask.size[0] == 0 or mask.size[1] == 0)
+    except: return True 
+
+def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
+    """メインフォントとフォールバックフォント(日本語用)を文字ごとに切り替えて描画・計測"""
+    x, y = xy
+    total_w = 0
+    max_h = 0
+    current_x = x
     
-    # 日本語用補助フォントの準備
-    fallback_fname = system_fallback_filename if system_fallback_filename else "keifont.ttf"
-    fallback_font_path = ensure_font_file_exists(db, fallback_fname)
+    for char in text:
+        use_font = primary_font
+        # メインフォントに文字がない場合はフォールバックを使用
+        if not is_glyph_available(primary_font, char):
+            if fallback_font:
+                use_font = fallback_font
+        
+        bbox = draw.textbbox((0, 0), char, font=use_font)
+        char_w = bbox[2] - bbox[0]
+        char_h = bbox[3] - bbox[1] 
+        
+        if draw:
+            draw.text((current_x, y), char, font=use_font, fill=fill)
+        
+        try: advance = use_font.getlength(char)
+        except: advance = char_w
+        
+        current_x += advance
+        total_w += advance
+        if char_h > max_h: max_h = char_h
+        
+    return total_w, max_h
 
-    # 2. 背景画像の準備
-    raw_bg = load_image_from_source(bg_source)
-    if raw_bg is None:
-        W, H = 2480, 3508
-        base_img = Image.new("RGBA", (W, H), (20, 20, 30, 255))
+def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_width, fill_color, 
+                          anchor="la", 
+                          shadow_on=False, shadow_color="#000000", shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
+                          fallback_font_path=None, measure_only=False):
+    if not text: return 0
+    text_str = str(text)
+    
+    current_size = int(font_size_px)
+    min_size = 10
+    
+    # フォントロード関数 (サイズを引数に取る)
+    def load_fonts(size):
+        # メインフォント
+        try:
+            p_font = ImageFont.truetype(font_path, size) if font_path and os.path.exists(font_path) else ImageFont.load_default()
+        except:
+            p_font = ImageFont.load_default()
+        
+        # 補助フォント
+        f_font = p_font 
+        if fallback_font_path and os.path.exists(fallback_font_path):
+            try:
+                f_font = ImageFont.truetype(fallback_font_path, size)
+            except:
+                pass
+        return p_font, f_font
+
+    primary_font, fallback_font = load_fonts(current_size)
+    dummy_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    
+    can_resize = True
+
+    # Autoscaling Loop
+    while can_resize and current_size > min_size:
+        w, h = draw_text_mixed(dummy_draw, (0, 0), text_str, primary_font, fallback_font, fill_color)
+        margin_est = max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 10
+        
+        if w + (margin_est * 2) <= max_width:
+            break
+            
+        current_size -= 2
+        primary_font, fallback_font = load_fonts(current_size)
+
+    # 最終計測
+    text_w, text_h = draw_text_mixed(dummy_draw, (0, 0), text_str, primary_font, fallback_font, fill_color)
+    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
+    
+    if measure_only:
+        return int(text_h + margin + current_size * 0.2) 
+
+    # 本番描画
+    canvas_w = int(text_w + margin * 2)
+    canvas_h = int(text_h + margin * 2 + current_size * 0.5) 
+    
+    txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+    txt_draw = ImageDraw.Draw(txt_img)
+    draw_x, draw_y = margin, margin
+    
+    # 実際の描画
+    draw_text_mixed(txt_draw, (draw_x, draw_y), text_str, primary_font, fallback_font, fill_color)
+    
+    final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+    
+    if shadow_on:
+        alpha = txt_img.getchannel("A")
+        shadow_solid = Image.new("RGBA", (canvas_w, canvas_h), shadow_color)
+        shadow_solid.putalpha(alpha)
+        if shadow_blur > 0:
+            shadow_solid = shadow_solid.filter(ImageFilter.GaussianBlur(shadow_blur))
+        final_layer.paste(shadow_solid, (shadow_off_x, shadow_off_y), shadow_solid)
+        
+    final_layer.paste(txt_img, (0, 0), txt_img)
+    
+    content_w, content_h = canvas_w, canvas_h
+    effective_text_w = text_w + (max(abs(shadow_off_x), shadow_blur*2)) 
+    
+    if effective_text_w > max_width:
+        ratio = max_width / effective_text_w
+        new_w = int(content_w * ratio)
+        new_h = int(content_h * ratio)
+        final_layer = final_layer.resize((new_w, new_h), Image.LANCZOS)
+        content_w, content_h = new_w, new_h
+
+    paste_x = x - int(margin * (content_w / canvas_w))
+    paste_y = y - margin
+    
+    if anchor == "ra":
+        paste_x = x - content_w + int(margin * (content_w / canvas_w))
+    elif anchor == "ma":
+        paste_x = x - (content_w // 2)
+
+    if base_img:
+        base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
+        
+    return content_h - margin
+
+def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
+                          shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
+                          tri_visible=True, tri_scale=1.0, tri_color=None,
+                          alignment="right", fixed_label_w=0, measure_only=False):
+    
+    # フォント準備
+    try: primary_font = font
+    except: primary_font = ImageFont.load_default()
+        
+    fallback_font = primary_font
+    if fallback_font_path and os.path.exists(fallback_font_path):
+        try: fallback_font = ImageFont.truetype(fallback_font_path, int(font_size_px))
+        except: pass
+
+    dummy = ImageDraw.Draw(Image.new("RGBA", (1,1)))
+    
+    w_label, h_label = draw_text_mixed(dummy, (0,0), label, primary_font, fallback_font, fill_color)
+    w_time, h_time = draw_text_mixed(dummy, (0,0), time_str, primary_font, fallback_font, fill_color)
+    
+    tri_h = font_size_px * 0.6 * tri_scale
+    tri_w = tri_h * 0.8
+    tri_padding = font_size_px * 0.3
+    
+    if alignment == "triangle":
+        total_w_content = fixed_label_w + (tri_w + tri_padding * 2 if tri_visible else tri_padding) + w_time
     else:
-        base_img = crop_center_to_a4(raw_bg)
-        if base_img.width < 1200:
-            scale = 1200 / base_img.width
-            base_img = base_img.resize((1200, int(base_img.height * scale)), Image.LANCZOS)
+        total_w_content = w_label + (tri_w + tri_padding * 2 if tri_visible else tri_padding) + w_time
+        
+    margin = int(max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 20)
+    canvas_h = int(max(h_label, h_time, tri_h) + margin * 2 + font_size_px * 0.5)
     
-    W, H = base_img.size
-    scale_f = W / 1200.0 # 基準サイズ(1200px)からのスケール係数
+    if measure_only:
+        return canvas_h - (margin * 2)
 
-    # スタイル取得用内部関数
-    def get_style_config(key, default_size=50, default_color="#FFFFFF"):
-        f_name = styles.get(f"{key}_font", "keifont.ttf")
-        f_size_val = styles.get(f"{key}_size", default_size)
-        final_size_px = int(f_size_val * scale_f)
+    canvas_w = int(total_w_content + margin * 2)
+    txt_img = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+    draw = ImageDraw.Draw(txt_img)
+    
+    cur_x, draw_y = margin, margin
+    
+    if alignment == "triangle":
+        label_draw_x = cur_x + (fixed_label_w - w_label)
+        draw_text_mixed(draw, (label_draw_x, draw_y), label, primary_font, fallback_font, fill_color)
+        cur_x += fixed_label_w
+    else:
+        draw_text_mixed(draw, (cur_x, draw_y), label, primary_font, fallback_font, fill_color)
+        cur_x += w_label
+    
+    if tri_visible:
+        cur_x += tri_padding
+        cy = draw_y + (font_size_px * 0.5)
+        draw.polygon([(cur_x, cy - tri_h/2), (cur_x, cy + tri_h/2), (cur_x + tri_w, cy)], fill=tri_color or fill_color)
+        cur_x += tri_w + tri_padding
+    else:
+        cur_x += tri_padding
+
+    draw_text_mixed(draw, (cur_x, draw_y), time_str, primary_font, fallback_font, fill_color)
+    
+    final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+    if shadow_on:
+        alpha = txt_img.getchannel("A")
+        shadow_solid = Image.new("RGBA", (canvas_w, canvas_h), shadow_color)
+        shadow_solid.putalpha(alpha)
+        if shadow_blur > 0:
+            shadow_solid = shadow_solid.filter(ImageFilter.GaussianBlur(shadow_blur))
+        final_layer.paste(shadow_solid, (shadow_off_x, shadow_off_y), shadow_solid)
         
-        path = os.path.join(FONT_DIR, f_name)
+    final_layer.paste(txt_img, (0, 0), txt_img)
+    
+    # 配置
+    paste_x = x
+    paste_y = y - margin
+    
+    if alignment == "right" or alignment == "triangle":
+        paste_x = x - canvas_w + margin
+    elif alignment == "center":
+        paste_x = x - (canvas_w // 2) + margin
+    else:
+        paste_x = x - margin
+    
+    if base_img:
+        base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
         
+    return max(h_label, h_time)
+
+# ==========================================
+# 3. フライヤー生成関数 (メインロジック)
+# ==========================================
+def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
+                              date_text, venue_text, subtitle_text,
+                              open_time, start_time,
+                              ticket_info_list, common_notes_list,
+                              system_fallback_filename="keifont.ttf"):
+    """
+    指定されたパラメータでフライヤー画像を生成する。
+    main_source が PIL.Image オブジェクトの場合に直接使用するように対応。
+    """
+    
+    # --- 1. 背景の準備 ---
+    CANVAS_W, CANVAS_H = 1080, 1350 # Instagram portrait ratio 4:5
+    
+    bg_img = load_image(bg_source)
+    if bg_img:
+        # Coverリサイズ
+        bg_ratio = bg_img.width / bg_img.height
+        canvas_ratio = CANVAS_W / CANVAS_H
+        
+        if bg_ratio > canvas_ratio:
+            new_h = CANVAS_H
+            new_w = int(new_h * bg_ratio)
+        else:
+            new_w = CANVAS_W
+            new_h = int(new_w / bg_ratio)
+            
+        bg_resized = bg_img.resize((new_w, new_h), Image.LANCZOS)
+        # 中央切り抜き
+        left = (new_w - CANVAS_W) // 2
+        top = (new_h - CANVAS_H) // 2
+        bg_final = bg_resized.crop((left, top, left + CANVAS_W, top + CANVAS_H))
+    else:
+        bg_final = Image.new("RGBA", (CANVAS_W, CANVAS_H), (30, 30, 30, 255))
+
+    canvas = bg_final.convert("RGBA")
+    
+    # --- 2. 共通フォントパスの解決 ---
+    def get_font_path(fname):
+        candidates = [
+            fname,
+            os.path.join(FONT_DIR, fname), # constants.FONT_DIR を使用
+            os.path.join("assets", "fonts", fname),
+            "keifont.ttf"
+        ]
+        for c in candidates:
+            if c and os.path.exists(c): return c
+        return None
+
+    fallback_path = get_font_path(system_fallback_filename)
+
+    # --- 3. メイン画像 (Grid/TT) の配置 ---
+    # ★ここが重要: PIL画像ならそのまま使う (load_image関数内で処理)
+    main_img = load_image(main_source)
+
+    if main_img:
+        scale_w_pct = styles.get("content_scale_w", 100)
+        scale_h_pct = styles.get("content_scale_h", 100)
+        pos_y_off = styles.get("content_pos_y", 0)
+        
+        target_w = int(CANVAS_W * (scale_w_pct / 100))
+        # アスペクト比維持しつつ高さも調整（または指定比率でストレッチ）
+        target_h = int(main_img.height * (target_w / main_img.width) * (scale_h_pct/scale_w_pct))
+        
+        main_resized = main_img.resize((target_w, target_h), Image.LANCZOS)
+        
+        main_x = (CANVAS_W - target_w) // 2
+        # デフォルトは中央より少し上、そこからオフセット
+        main_y = (CANVAS_H - target_h) // 2 + pos_y_off
+        
+        canvas.paste(main_resized, (main_x, main_y), main_resized)
+
+    # --- 4. ロゴ配置 ---
+    logo_img = load_image(logo_source)
+    if logo_img:
+        l_scale = styles.get("logo_scale", 1.0)
+        l_off_x = styles.get("logo_pos_x", 0.0) # -100 ~ 100 %
+        l_off_y = styles.get("logo_pos_y", 0.0)
+        
+        # 基準: 横幅の40% * scale
+        base_w = CANVAS_W * 0.4 * l_scale
+        l_ratio = logo_img.height / logo_img.width
+        l_w = int(base_w)
+        l_h = int(l_w * l_ratio)
+        
+        logo_resized = logo_img.resize((l_w, l_h), Image.LANCZOS)
+        
+        # 基準位置: 上部中央 (y=50)
+        base_x = (CANVAS_W - l_w) // 2
+        base_y = 50
+        
+        # オフセット適用
+        final_x = base_x + int(CANVAS_W * (l_off_x / 100))
+        final_y = base_y + int(CANVAS_H * (l_off_y / 100))
+        
+        canvas.paste(logo_resized, (final_x, final_y), logo_resized)
+
+    # --- 5. テキスト描画 (日付・会場・時間・チケット) ---
+    
+    # 基準Y座標 (メイン画像の下あたりから開始)
+    footer_base_y = CANVAS_H - 450 + styles.get("footer_pos_y", 0)
+    current_y = footer_base_y
+
+    # Helper: スタイル取得
+    def get_s(key_prefix):
         return {
-            "font_path": path,
-            "size": final_size_px,
-            "color": styles.get(f"{key}_color", default_color),
-            "shadow_on": styles.get(f"{key}_shadow_on", False),
-            "shadow_color": styles.get(f"{key}_shadow_color", "#000000"),
-            "shadow_blur": styles.get(f"{key}_shadow_blur", 0),
-            "shadow_off_x": int(styles.get(f"{key}_shadow_off_x", 5) * scale_f),
-            "shadow_off_y": int(styles.get(f"{key}_shadow_off_y", 5) * scale_f),
-            "pos_x": int(styles.get(f"{key}_pos_x", 0) * scale_f),
-            "pos_y": int(styles.get(f"{key}_pos_y", 0) * scale_f)
+            "font_path": get_font_path(styles.get(f"{key_prefix}_font")),
+            "font_size_px": styles.get(f"{key_prefix}_size", 40),
+            "fill_color": styles.get(f"{key_prefix}_color", "#FFFFFF"),
+            "shadow_on": styles.get(f"{key_prefix}_shadow_on", False),
+            "shadow_color": styles.get(f"{key_prefix}_shadow_color", "#000000"),
+            "shadow_blur": styles.get(f"{key_prefix}_shadow_blur", 0),
+            "shadow_off_x": styles.get(f"{key_prefix}_shadow_off_x", 5),
+            "shadow_off_y": styles.get(f"{key_prefix}_shadow_off_y", 5),
+            "pos_x": styles.get(f"{key_prefix}_pos_x", 0),
+            "pos_y": styles.get(f"{key_prefix}_pos_y", 0)
         }
 
-    s_date = get_style_config("date", 90)
-    s_venue = get_style_config("venue", 50)
-    s_time = get_style_config("time", 60) 
-    s_ticket = get_style_config("ticket_name", 45)
-    s_note = get_style_config("ticket_note", 30)
-    # ★追加: サブタイトル用スタイル
-    s_subtitle = get_style_config("subtitle", 40)
-
-    # --------------------------------------------------------------------------------
-    # 3. レイアウト計算 (シミュレーション)
-    # --------------------------------------------------------------------------------
-    
-    current_y = int(H * 0.03)
-    logo_img_obj = load_image_from_source(logo_source)
-    if logo_img_obj:
-        logo_w_scaled = int(W * 0.5 * styles.get("logo_scale", 1.0))
-        logo_h_scaled = int(logo_img_obj.height * (logo_w_scaled / logo_img_obj.width))
-        current_y += logo_h_scaled + int(H * styles.get("logo_pos_y", 0) / 100.0)
-    
-    # ★追加: サブタイトルの高さ分を計算に含める
+    # (0) サブタイトル
     if subtitle_text:
-        # 簡易計算 (実際の高さはフォント依存だが、概算でスペース確保)
-        sub_h = s_subtitle["size"] * 1.2
-        current_y += int(sub_h + s_subtitle["pos_y"])
-
-    header_start_y = current_y + int(H * 0.02)
-    current_sim_y = header_start_y
-    
-    # 日付 (シミュレーション)
-    date_str = str(date_text)
-    use_font_date = fallback_font_path if contains_japanese(date_str) and fallback_font_path else s_date["font_path"]
-    
-    h_date_sim = draw_text_with_shadow(
-        None, date_str, 0, 0, use_font_date, s_date["size"], int(W*0.55), "#000",
-        fallback_font_path=fallback_font_path, measure_only=True
-    )
-    current_sim_y += h_date_sim + s_date["pos_y"]
-    
-    # 会場 (シミュレーション)
-    current_sim_y += int(styles.get("date_venue_gap", 10) * scale_f)
-    venue_str = str(venue_text)
-    use_font_venue = fallback_font_path if contains_japanese(venue_str) and fallback_font_path else s_venue["font_path"]
-    
-    h_venue_sim = draw_text_with_shadow(
-        None, venue_str, 0, 0, use_font_venue, s_venue["size"], int(W*0.55), "#000",
-        fallback_font_path=fallback_font_path, measure_only=True
-    )
-    current_sim_y += h_venue_sim + s_venue["pos_y"]
-    
-    # 時間エリア
-    time_line_gap = int(styles.get("time_line_gap", 0) * scale_f)
-    h_time_row_sim = int(s_time["size"] * 1.5)
-    header_bottom_y = max(current_sim_y, header_start_y + (h_time_row_sim * 2 + time_line_gap) + s_time["pos_y"])
-    
-    # --------------------------------------------------------------------------------
-    # 4. メイン画像 (アー写) の描画
-    # --------------------------------------------------------------------------------
-    
-    available_top = header_bottom_y + int(H * 0.02)
-    available_bottom = H - int(H * 0.25)
-    available_h = available_bottom - available_top
-    
-    main_img = load_image_from_source(main_source)
-    if main_img and available_h > 100:
-        target_w = int(W * styles.get("content_scale_w", 95) / 100.0)
-        target_h = int(available_h * styles.get("content_scale_h", 100) / 100.0)
-        
-        main_resized = resize_image_contain(main_img, target_w, target_h)
-        if main_resized:
-            paste_x = (W - main_resized.width) // 2
-            offset_y = int(styles.get("content_pos_y", 0) * scale_f)
-            paste_y = available_top + (available_h - main_resized.height) // 2 + offset_y
-            
-            base_img.paste(main_resized, (paste_x, int(paste_y)), main_resized)
-
-    # --------------------------------------------------------------------------------
-    # 5. テキスト等の描画 (前面レイヤー)
-    # --------------------------------------------------------------------------------
-    
-    # A. ロゴ
-    logo_img = load_image_from_source(logo_source)
-    current_y = int(H * 0.03)
-    if logo_img:
-        logo_img = resize_image_to_width(logo_img, int(W * 0.5 * styles.get("logo_scale", 1.0)))
-        lx = (W - logo_img.width) // 2 + int(W * styles.get("logo_pos_x", 0) / 100.0)
-        ly = int(H * 0.03) + int(H * styles.get("logo_pos_y", 0) / 100.0)
-        base_img.paste(logo_img, (lx, ly), logo_img)
-        current_y = ly + logo_img.height
-
-    # ★追加: サブタイトル (ロゴの下)
-    if subtitle_text:
-        sub_str = str(subtitle_text)
-        use_font_sub = fallback_font_path if contains_japanese(sub_str) and fallback_font_path else s_subtitle["font_path"]
-        
-        # ロゴと日付の間隔を考慮して配置 (ロゴのすぐ下)
-        sub_y = current_y + s_subtitle["pos_y"]
-        
-        h_sub = draw_text_with_shadow(
-            base_img, sub_str, W//2 + s_subtitle["pos_x"], sub_y, 
-            use_font_sub, s_subtitle["size"], int(W*0.9), s_subtitle["color"], 
-            anchor="ma", # 中央揃え (Middle Anchor)
-            shadow_on=s_subtitle["shadow_on"], 
-            shadow_color=s_subtitle["shadow_color"], 
-            shadow_blur=s_subtitle["shadow_blur"], 
-            shadow_off_x=s_subtitle["shadow_off_x"], 
-            shadow_off_y=s_subtitle["shadow_off_y"],
-            fallback_font_path=fallback_font_path
+        s = get_s("subtitle")
+        h = draw_text_with_shadow(
+            canvas, subtitle_text,
+            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            s["font_path"], s["font_size_px"], CANVAS_W - 40, s["fill_color"],
+            anchor="ma",
+            shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
+            shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
+            fallback_font_path=fallback_path
         )
-        current_y += h_sub
+        current_y += h + styles.get("subtitle_date_gap", 10)
 
-    header_y = current_y + int(H * 0.02)
-    padding_x = int(W * 0.05)
-    left_x = padding_x
-    right_x = W - padding_x
-    left_max_w = int(W * 0.55)
-    right_max_w = int(W * 0.35)
-
-    # 日付 (描画)
-    h_date = draw_text_with_shadow(
-        base_img, date_str, left_x + s_date["pos_x"], header_y + s_date["pos_y"], 
-        use_font_date, s_date["size"], left_max_w, s_date["color"], "la",
-        s_date["shadow_on"], s_date["shadow_color"], s_date["shadow_blur"], s_date["shadow_off_x"], s_date["shadow_off_y"],
-        fallback_font_path=fallback_font_path
-    )
-    
-    venue_y = header_y + h_date + int(styles.get("date_venue_gap", 10) * scale_f)
-    
-    # 会場 (描画)
-    draw_text_with_shadow(
-        base_img, venue_str, left_x + s_venue["pos_x"], venue_y + s_venue["pos_y"], 
-        use_font_venue, s_venue["size"], left_max_w, s_venue["color"], "la",
-        s_venue["shadow_on"], s_venue["shadow_color"], s_venue["shadow_blur"], s_venue["shadow_off_x"], s_venue["shadow_off_y"],
-        fallback_font_path=fallback_font_path
-    )
-    
-    # 時間 (OPEN/START)
-    try:
-        t_font_obj = ImageFont.truetype(s_time["font_path"], s_time["size"])
-    except:
-        t_font_obj = ImageFont.load_default()
-
-    align_mode = styles.get("time_alignment", "right")
-    base_time_x = (W - padding_x if align_mode in ["right", "triangle"] else int(W*0.6) if align_mode=="left" else int(W*0.775)) + s_time["pos_x"]
-    
-    fixed_label_w = 0
-    if align_mode == "triangle":
-        d_draw = ImageDraw.Draw(Image.new("RGBA",(1,1)))
-        try: fb_font = ImageFont.truetype(fallback_font_path, s_time["size"]) if fallback_font_path else t_font_obj
-        except: fb_font = t_font_obj
-        w1, _ = draw_text_mixed(d_draw, (0,0), "OPEN", t_font_obj, fb_font, (0,0,0))
-        w2, _ = draw_text_mixed(d_draw, (0,0), "START", t_font_obj, fb_font, (0,0,0))
-        fixed_label_w = max(w1, w2)
-
-    draw_time_row_aligned(
-        base_img, "OPEN", str(open_time or "TBA"), base_time_x, header_y + s_time["pos_y"],
-        t_font_obj, s_time["size"], int(W*0.35), s_time["color"],
-        s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
-        fallback_font_path,
-        styles.get("time_tri_visible", True), styles.get("time_tri_scale", 1.0), None,
-        align_mode, fixed_label_w
-    )
-    
-    start_y = header_y + int(s_time["size"]*1.3) + time_line_gap
-    draw_time_row_aligned(
-        base_img, "START", str(start_time or "TBA"), base_time_x, start_y + s_time["pos_y"],
-        t_font_obj, s_time["size"], int(W*0.35), s_time["color"],
-        s_time["shadow_on"], s_time["shadow_color"], s_time["shadow_blur"], s_time["shadow_off_x"], s_time["shadow_off_y"],
-        fallback_font_path,
-        styles.get("time_tri_visible", True), styles.get("time_tri_scale", 1.0), None,
-        align_mode, fixed_label_w
-    )
-
-    # C. フッター (チケット・備考)
-    footer_lines = []
-    
-    note_gap = int(styles.get("note_gap", 15) * scale_f)
-    ticket_gap = int(styles.get("ticket_gap", 20) * scale_f)
-    area_gap = int(styles.get("area_gap", 40) * scale_f)
-    footer_pos_y = int(styles.get("footer_pos_y", 0) * scale_f)
-
-    for n in reversed(common_notes_list):
-        if n and str(n).strip():
-            footer_lines.append({"text": f"※{str(n).strip()}", "style": s_note, "gap": note_gap})
-    
-    is_first = True
-    for t in reversed(ticket_info_list):
-        name = t.get('name', '')
-        price = t.get('price', '')
-        t_note = t.get('note', '')
-        txt = f"{name} {price}"
-        if t_note: txt += f" ({t_note})"
-        
-        gap = ticket_gap + (area_gap if is_first and footer_lines else 0)
-        footer_lines.append({"text": txt, "style": s_ticket, "gap": gap})
-        is_first = False
-
-    # フッター高さ計算 (安全策付き)
-    ft_h = int(H * 0.05)
-    processed_footer = []
-    
-    def get_calc_font(style_obj):
-        try: return ImageFont.truetype(style_obj["font_path"], style_obj["size"])
-        except: return ImageFont.load_default()
-    
-    def get_fallback_calc_font(style_obj):
-        if fallback_font_path:
-            try: return ImageFont.truetype(fallback_font_path, style_obj["size"])
-            except: pass
-        return ImageFont.load_default()
-
-    f_note_obj = get_calc_font(s_note)
-    f_ticket_obj = get_calc_font(s_ticket)
-    f_fb_note = get_fallback_calc_font(s_note)
-    f_fb_ticket = get_fallback_calc_font(s_ticket)
-
-    for item in footer_lines:
-        has_jp = contains_japanese(item["text"])
-        
-        if item["style"] == s_ticket:
-            u_font = f_fb_ticket if has_jp else f_ticket_obj
-        else:
-            u_font = f_fb_note if has_jp else f_note_obj
-        
-        dummy_draw = ImageDraw.Draw(Image.new("RGBA",(1,1)))
-        bbox = dummy_draw.textbbox((0,0), item["text"], font=u_font)
-        h = bbox[3] - bbox[1]
-        processed_footer.append({**item, "h": h})
-        ft_h += h + item["gap"]
-
-    footer_start_y = H - ft_h + footer_pos_y
-    curr_fy = footer_start_y
-    
-    for item in reversed(processed_footer):
-        st_obj = item["style"]
-        
-        use_font_path = st_obj["font_path"]
-        if contains_japanese(item["text"]) and fallback_font_path:
-            use_font_path = fallback_font_path
-        
-        actual_h = draw_text_with_shadow(
-            base_img, item["text"], W//2 + st_obj["pos_x"], curr_fy + st_obj["pos_y"], 
-            use_font_path, 
-            st_obj["size"], int(W*0.9), st_obj["color"], "ma",
-            st_obj["shadow_on"], st_obj["shadow_color"], st_obj["shadow_blur"], st_obj["shadow_off_x"], st_obj["shadow_off_y"],
-            fallback_font_path=fallback_font_path
+    # (1) 日付
+    if date_text:
+        s = get_s("date")
+        h = draw_text_with_shadow(
+            canvas, date_text, 
+            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            s["font_path"], s["font_size_px"], CANVAS_W - 40, s["fill_color"],
+            anchor="ma",
+            shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
+            shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
+            fallback_font_path=fallback_path
         )
-        curr_fy += item["h"] + item["gap"]
+        current_y += h + styles.get("date_venue_gap", 10)
 
-    return base_img
+    # (2) 会場
+    if venue_text:
+        s = get_s("venue")
+        h = draw_text_with_shadow(
+            canvas, venue_text, 
+            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            s["font_path"], s["font_size_px"], CANVAS_W - 40, s["fill_color"],
+            anchor="ma",
+            shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
+            shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
+            fallback_font_path=fallback_path
+        )
+        current_y += h + 30 
+
+    # (3) 時間 (OPEN/START)
+    s = get_s("time")
+    try: time_font = ImageFont.truetype(s["font_path"], int(s["font_size_px"]))
+    except: time_font = ImageFont.load_default()
+    
+    tri_visible = styles.get("time_tri_visible", True)
+    tri_scale = styles.get("time_tri_scale", 1.0)
+    line_gap = styles.get("time_line_gap", 0)
+    alignment = styles.get("time_alignment", "right")
+
+    center_x = CANVAS_W // 2 + s["pos_x"]
+    start_y = current_y + s["pos_y"]
+    
+    # ラベル幅計測
+    dummy_draw = ImageDraw.Draw(Image.new("RGBA",(1,1)))
+    w_open, _ = draw_text_mixed(dummy_draw, (0,0), "OPEN", time_font, None, None)
+    w_start, _ = draw_text_mixed(dummy_draw, (0,0), "START", time_font, None, None)
+    fixed_label_w = max(w_open, w_start)
+
+    h1 = draw_time_row_aligned(
+        canvas, "OPEN", open_time, center_x, start_y,
+        time_font, s["font_size_px"], CANVAS_W, s["fill_color"],
+        s["shadow_on"], s["shadow_color"], s["shadow_blur"], s["shadow_off_x"], s["shadow_off_y"], fallback_path,
+        tri_visible, tri_scale, s["fill_color"], alignment, fixed_label_w
+    )
+    
+    h2 = draw_time_row_aligned(
+        canvas, "START", start_time, center_x, start_y + h1 + line_gap,
+        time_font, s["font_size_px"], CANVAS_W, s["fill_color"],
+        s["shadow_on"], s["shadow_color"], s["shadow_blur"], s["shadow_off_x"], s["shadow_off_y"], fallback_path,
+        tri_visible, tri_scale, s["fill_color"], alignment, fixed_label_w
+    )
+    
+    current_y = start_y + h1 + line_gap + h2 + styles.get("area_gap", 40)
+
+    # (4) チケット情報
+    s = get_s("ticket_name")
+    t_gap = styles.get("ticket_gap", 20)
+    
+    for t in ticket_info_list:
+        if not t.get("name") and not t.get("price"): continue
+        line_text = f"{t.get('name')} {t.get('price')}"
+        if t.get("note"): line_text += f" ({t.get('note')})"
+        
+        h = draw_text_with_shadow(
+            canvas, line_text, 
+            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            s["font_path"], s["font_size_px"], CANVAS_W - 60, s["fill_color"],
+            anchor="ma",
+            shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
+            shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
+            fallback_font_path=fallback_path
+        )
+        current_y += h + t_gap
+
+    # (5) 共通備考
+    s = get_s("ticket_note")
+    n_gap = styles.get("note_gap", 15)
+    current_y += 10 
+    
+    for note in common_notes_list:
+        if not note: continue
+        h = draw_text_with_shadow(
+            canvas, note, 
+            CANVAS_W // 2 + s["pos_x"], current_y + s["pos_y"],
+            s["font_path"], s["font_size_px"], CANVAS_W - 60, s["fill_color"],
+            anchor="ma",
+            shadow_on=s["shadow_on"], shadow_color=s["shadow_color"],
+            shadow_blur=s["shadow_blur"], shadow_off_x=s["shadow_off_x"], shadow_off_y=s["shadow_off_y"],
+            fallback_font_path=fallback_path
+        )
+        current_y += h + n_gap
+
+    return canvas
