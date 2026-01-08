@@ -3,17 +3,20 @@ import io
 import json
 import zipfile
 import os
-from datetime import datetime
+import datetime
+from datetime import datetime as dt_class # datetime型判定用
 
-# ★追加: FlyerTemplate をインポート
-from database import get_db, TimetableProject, Asset, get_image_url, SystemFontConfig, FlyerTemplate
+# ★追加: TimetableRow, FlyerTemplate をインポート
+from database import get_db, TimetableProject, TimetableRow, Asset, get_image_url, SystemFontConfig, FlyerTemplate
 from utils import get_sorted_font_list, create_font_specimen_img
 
-# ここでインポートしている generate_event_summary_text_from_proj が
-# 先ほど更新した共通ロジックを利用するため、自動的に最新のテキスト生成ルールが適用されます。
+# ★追加: 共通テキスト生成ロジックを使用
+from utils.text_generator import build_event_summary_text
+
 from utils.flyer_helpers import (
     format_event_date, format_time_str,
-    generate_event_summary_text_from_proj, generate_timetable_csv_string
+    # generate_event_summary_text_from_proj,  <-- これは使わず、build_event_summary_text に置き換えます
+    generate_timetable_csv_string
 )
 from utils.flyer_generator import create_flyer_image_shadow
 
@@ -31,7 +34,7 @@ def gather_flyer_settings_from_session():
         "logo_scale", "logo_pos_x", "logo_pos_y",
         "grid_scale_w", "grid_scale_h", "grid_pos_y", 
         "tt_scale_w", "tt_scale_h", "tt_pos_y",       
-        "subtitle_date_gap", # ★追加
+        "subtitle_date_gap", 
         "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
         "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment"
     ]
@@ -210,7 +213,7 @@ def render_flyer_editor(project_id):
     c_conf, c_prev = st.columns([1, 1.2])
 
     with c_conf:
-        # ★追加: テンプレート管理エリア (Supabase対応)
+        # テンプレート管理エリア (Supabase対応)
         with st.expander("📂 テンプレート管理 (読込/保存)", expanded=False):
             st.caption("現在のデザイン設定をテンプレートとして保存し、他のプロジェクトで再利用できます。")
             
@@ -366,6 +369,7 @@ def render_flyer_editor(project_id):
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
         
+        # チケット・備考などの取得
         tickets = []
         if getattr(proj, "tickets_json", None):
             try: tickets = json.loads(proj.tickets_json)
@@ -374,6 +378,11 @@ def render_flyer_editor(project_id):
         notes = []
         if getattr(proj, "ticket_notes_json", None):
             try: notes = json.loads(proj.ticket_notes_json)
+            except: pass
+        
+        free_texts = []
+        if getattr(proj, "free_text_json", None):
+            try: free_texts = json.loads(proj.free_text_json)
             except: pass
 
         if st.button("プレビューを生成する", type="primary", use_container_width=True):
@@ -435,6 +444,59 @@ def render_flyer_editor(project_id):
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
+        # ---------------------------------------------------------
+        # ★重要: ここでアーティストリストをDBから再構築する
+        # （JSONではなくテーブルから is_hidden を考慮して取得）
+        # ---------------------------------------------------------
+        filtered_artists = []
+        try:
+            # アー写グリッドの設定順 (grid_order) をベースにしたいが
+            # 非表示設定 (is_hidden) は TimetableRow が持っているため、両方を参照する。
+            
+            # 1. タイムテーブル全行取得（非表示フラグの辞書作成）
+            rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).all()
+            hidden_map = {r.artist_name: r.is_hidden for r in rows if r.artist_name}
+
+            # 2. 表示順の取得 (グリッド設定 > DB JSON > タイムテーブル順)
+            raw_order = []
+            if st.session_state.get("grid_order"):
+                raw_order = st.session_state.grid_order
+            elif proj.grid_order_json:
+                try:
+                    g_data = json.loads(proj.grid_order_json)
+                    raw_order = g_data.get("order", []) if isinstance(g_data, dict) else g_data
+                except: pass
+            
+            if not raw_order and rows:
+                raw_order = [r.artist_name for r in sorted(rows, key=lambda x: x.sort_order)]
+
+            # 3. フィルタリング実行
+            for name in raw_order:
+                if name in ["開演前物販", "終演後物販"]: continue
+                # マップにあってTrueなら非表示
+                if hidden_map.get(name, False): continue
+                filtered_artists.append(name)
+
+        except Exception as e:
+            print(f"Artist Filter Error: {e}")
+            # エラー時は安全策としてセッションの値をそのまま使う
+            filtered_artists = st.session_state.get("grid_order", [])
+
+        # 共通関数でテキスト生成
+        summary_text = build_event_summary_text(
+            title=proj.title,
+            subtitle=proj.subtitle,
+            date_val=proj.event_date,
+            venue=proj.venue_name,
+            url=proj.venue_url,
+            open_time=proj.open_time,
+            start_time=proj.start_time,
+            tickets=tickets,
+            ticket_notes=notes,
+            artists=filtered_artists, # ★フィルタリング済みのリストを渡す
+            free_texts=free_texts
+        )
+
         with t1:
             if st.session_state.get("flyer_result_grid"):
                 st.image(st.session_state.flyer_result_grid, use_container_width=True)
@@ -453,8 +515,7 @@ def render_flyer_editor(project_id):
             
         with t3:
             st.markdown("### 告知用テキストプレビュー")
-            # ★ここで共通ロジック経由の関数を呼び出しています
-            summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
+            # 生成したテキストを表示
             st.text_area("内容", value=summary_text, height=300, disabled=True)
             st.download_button(
                 label="📄 テキストをダウンロード",
@@ -483,8 +544,7 @@ def render_flyer_editor(project_id):
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
-                            # ★ここでも共通ロジック経由の関数を呼び出しています
-                            summary_text = generate_event_summary_text_from_proj(proj, tickets, notes)
+                            # テキストファイル
                             zip_file.writestr("Event_Outline.txt", summary_text)
 
                             if include_assets:
