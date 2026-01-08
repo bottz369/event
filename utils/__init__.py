@@ -3,6 +3,7 @@ import io
 import os
 import json
 import zipfile
+import requests
 from datetime import datetime, timedelta
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -15,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 # 定数とDBモデルのインポート
 from constants import FONT_DIR, ASSETS_DIR
-from database import get_db, Asset, Artist, FavoriteFont, SystemFontConfig
+from database import get_db, Asset, Artist, FavoriteFont, SystemFontConfig, get_image_url
 
 # =========================================================
 # ユーティリティ関数群
@@ -85,9 +86,6 @@ def get_sorted_font_list(db):
     1. 標準フォント
     2. お気に入りフォント (登録順)
     3. その他のフォント (アルファベット -> 日本語順)
-    
-    Returns:
-        [{"name": "表示名", "filename": "ファイル名", "type": "standard/fav/other"}, ...]
     """
     # 1. 全フォント取得
     all_fonts = db.query(Asset).filter(Asset.asset_type == "font", Asset.is_deleted == False).all()
@@ -141,19 +139,8 @@ def get_sorted_font_list(db):
     return result
 
 def create_font_specimen_img(session, font_assets):
-    """
-    フォント一覧見本画像を作成する関数
-    
-    Args:
-        session: DBセッション (SystemFontConfig取得用)
-        font_assets: Assetモデルのリスト、または辞書リスト({'name':..., 'filename':...})
-                      ※ views/assets.py はモデルオブジェクト、grid/timetable は辞書を渡す可能性があるため両対応
-    
-    Returns:
-        Imageオブジェクト
-    """
+    """フォント一覧見本画像を作成する関数"""
     if not font_assets:
-        # フォントがない場合は適当な空白画像を返す
         return Image.new("RGB", (800, 100), (255, 255, 255))
 
     # --- キャンバス設定 ---
@@ -167,7 +154,6 @@ def create_font_specimen_img(session, font_assets):
     draw = ImageDraw.Draw(img)
 
     # --- ラベル描画用フォントの準備 ---
-    # DBからシステムフォント設定を取得
     system_font_config = session.query(SystemFontConfig).first()
     label_font_path = os.path.join(FONT_DIR, "keifont.ttf") # デフォルト
     
@@ -191,13 +177,10 @@ def create_font_specimen_img(session, font_assets):
     current_y = header_height
 
     for asset in font_assets:
-        # ★重要: 入力が「辞書」か「DBモデル」かで値の取り方を変える
         if isinstance(asset, dict):
-            # get_sorted_font_list から来た場合
             name = asset.get("name", "No Name")
             filename = asset.get("filename", "")
         else:
-            # Assetモデルオブジェクトの場合
             name = asset.name if asset.name else "No Name"
             filename = asset.image_filename if asset.image_filename else ""
 
@@ -220,7 +203,6 @@ def create_font_specimen_img(session, font_assets):
             except Exception:
                 preview_font = None
         
-        # 見本描画エリア
         preview_x = 300
         preview_y = current_y + 20
         
@@ -236,51 +218,86 @@ def create_font_specimen_img(session, font_assets):
 
     return img
 
-# ★新規追加: アーティスト背景画像描画関数
+# --- ★新規追加: 画像ロードヘルパー ---
+def load_artist_image(image_filename):
+    """ファイル名から画像をロード（URL対応）"""
+    if not image_filename: return None
+    try:
+        # URL取得
+        url = get_image_url(image_filename)
+        if not url: return None
+        
+        if url.startswith("http"):
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                return Image.open(io.BytesIO(response.content)).convert("RGBA")
+        elif os.path.exists(url):
+            return Image.open(url).convert("RGBA")
+    except Exception as e:
+        print(f"Image Load Error: {e}")
+    return None
+
+# ★更新: アーティスト背景画像描画関数 (設定反映・縮小対応版)
 def draw_artist_background(base_img, box, artist_name, db, opacity=128):
     """
     指定されたboxエリア(x, y, w, h)にアーティスト画像を配置し、
     その上に半透明の黒(Overlay)をかける関数
-    
-    Args:
-        base_img: 描画対象のキャンバス (Imageオブジェクト)
-        box: (x, y, w, h) のタプル
-        artist_name: アーティスト名
-        db: データベースセッション
-        opacity: 黒背景の濃さ (0=透明 〜 255=真っ黒)。デフォルト128(約50%)
+    ★アーティストの手動トリミング設定(scale, x, y)を反映します。
     """
     x, y, w, h = box
     
-    # 1. DBからアーティスト画像を検索
+    # 1. DBからアーティストを検索
     artist = db.query(Artist).filter(Artist.name == artist_name).first()
     
-    target_image_path = None
-    if artist and artist.image_filename:
-        # 画像パスの構築: 定数ASSETS_DIRを使用
-        possible_path = os.path.join(ASSETS_DIR, "artists", artist.image_filename)
-        if os.path.exists(possible_path):
-            target_image_path = possible_path
-
-    # 画像が見つからない場合は処理をスキップ（呼び出し元で背景色を塗っている前提、あるいはそのまま返す）
-    if not target_image_path:
+    if not artist or not artist.image_filename:
         return base_img
 
     try:
-        # 2. 画像を開いて、行のサイズに合わせてリサイズ＆トリミング
-        with Image.open(target_image_path) as img:
-            img = img.convert("RGBA")
-            
-            # アスペクト比を維持して、エリアを埋めるサイズにリサイズ (ImageOps.fitが便利)
-            fitted_img = ImageOps.fit(img, (w, h), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-            
-            # 3. 半透明の黒レイヤー(Overlay)を作成
-            overlay = Image.new('RGBA', fitted_img.size, (0, 0, 0, opacity))
-            
-            # 画像と黒レイヤーを合成
-            composite_img = Image.alpha_composite(fitted_img, overlay)
-            
-            # 4. 元のキャンバスに貼り付け
-            base_img.paste(composite_img, (x, y), composite_img)
+        # 2. 画像読み込み (URL対応版)
+        img = load_artist_image(artist.image_filename)
+        if not img: return base_img
+
+        # 3. リサイズ & トリミングロジック (手動設定反映)
+        crop_scale = getattr(artist, 'crop_scale', 1.0) or 1.0
+        crop_x = getattr(artist, 'crop_x', 0) or 0
+        crop_y = getattr(artist, 'crop_y', 0) or 0
+
+        # --- 基準サイズ(Cover)計算 ---
+        img_ratio = img.width / img.height
+        target_ratio = w / h
+
+        if img_ratio > target_ratio:
+            # 画像の方が横長 -> 高さを合わせる
+            base_h = h
+            base_w = int(base_h * img_ratio)
+        else:
+            # 画像の方が縦長 -> 幅を合わせる
+            base_w = w
+            base_h = int(base_w / img_ratio)
+
+        # --- スケール適用 (縮小対応) ---
+        final_w = max(1, int(base_w * crop_scale))
+        final_h = max(1, int(base_h * crop_scale))
+
+        resized_img = img.resize((final_w, final_h), Image.LANCZOS)
+
+        # --- 黒背景キャンバス (縮小時の余白用) ---
+        # タイムテーブル行は黒背景が基本なので、ここでは透過なしの黒(0,0,0,255)で埋める
+        # その上に半透明オーバーレイを掛けるため、ベースは黒でOK
+        strip_canvas = Image.new("RGBA", (int(w), int(h)), (0, 0, 0, 255))
+
+        # --- 配置位置計算 (中央 + オフセット) ---
+        paste_x = int((w - final_w) / 2 + crop_x)
+        paste_y = int((h - final_h) / 2 + crop_y)
+
+        strip_canvas.paste(resized_img, (paste_x, paste_y), resized_img)
+
+        # 4. 指定された濃さの半透明黒レイヤー(Overlay)を合成
+        overlay = Image.new('RGBA', strip_canvas.size, (0, 0, 0, opacity))
+        composite_img = Image.alpha_composite(strip_canvas, overlay)
+        
+        # 5. 元のキャンバスに貼り付け
+        base_img.paste(composite_img, (int(x), int(y)), composite_img)
             
     except Exception as e:
         print(f"画像描画エラー ({artist_name}): {e}")
