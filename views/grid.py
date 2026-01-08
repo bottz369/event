@@ -2,10 +2,11 @@ import streamlit as st
 import os
 import json
 import io
-import requests # ★追加: URLダウンロード用
+import requests # URLダウンロード用
 
 # Asset, AssetFile, get_image_url をインポート
-from database import get_db, TimetableProject, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
+# ★修正: TimetableRow を追加インポート
+from database import get_db, TimetableProject, TimetableRow, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
 from constants import FONT_DIR
 from logic_project import save_current_project
 from utils import create_font_specimen_img, get_sorted_font_list
@@ -20,7 +21,7 @@ try:
 except ImportError:
     generate_grid_image = None
 
-# --- ★修正: フォント確保関数 (URL対応版) ---
+# --- フォント確保関数 (URL対応版) ---
 def check_and_download_font(db, font_filename):
     """
     指定されたフォントファイルがローカルになければ、
@@ -103,21 +104,34 @@ def render_grid_page():
         if selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
             
-            # --- DBからの設定復元ロジック ---
+            # --- DBからの設定復元ロジック (初回ロード時) ---
             if proj:
                 # 1. アーティストリストの初期化
-                if not st.session_state.grid_order and proj.data_json:
+                if not st.session_state.grid_order:
+                    # ★修正: JSONではなく TimetableRow テーブルから直接読み込む
                     try:
-                        d = json.loads(proj.data_json)
-                        # ★修正: IS_HIDDEN が True のものは除外する
-                        tt_artists = [
-                            i["ARTIST"] for i in d 
-                            if i["ARTIST"] not in ["開演前物販", "終演後物販"]
-                            and not i.get("IS_HIDDEN", False) # ←ここを追加
-                        ]
-                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                    except: pass
-                
+                        rows = db.query(TimetableRow).filter(TimetableRow.project_id == selected_id).order_by(TimetableRow.sort_order).all()
+                        
+                        if rows:
+                            # テーブルから取得できた場合
+                            tt_artists = [
+                                r.artist_name for r in rows
+                                if r.artist_name not in ["開演前物販", "終演後物販"]
+                                and not r.is_hidden # ★DBカラムを直接チェック
+                            ]
+                            st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                        elif proj.data_json:
+                            # DBに行がない場合のバックアップ (旧仕様互換)
+                            d = json.loads(proj.data_json)
+                            tt_artists = [
+                                i["ARTIST"] for i in d 
+                                if i["ARTIST"] not in ["開演前物販", "終演後物販"]
+                                and not i.get("IS_HIDDEN", False)
+                            ]
+                            st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                    except Exception as e:
+                        print(f"Initial Load Error: {e}")
+
                 # 2. グリッド設定の復元
                 if "grid_settings_loaded" not in st.session_state or st.session_state.get("current_proj_id_check") != selected_id:
                     if proj.settings_json:
@@ -141,7 +155,7 @@ def render_grid_page():
             st.divider()
             
             # --- 設定エリア ---
-            # ★修正: DetachedInstanceError を防ぐため、コールバック内でDBを開き直す
+            # ★修正: リセットボタンが押されたときの処理関数 (ここもテーブル参照に変更)
             def reset_grid_settings():
                 current_id_in_cb = st.session_state.get("ws_active_project_id")
                 if not current_id_in_cb:
@@ -150,28 +164,44 @@ def render_grid_page():
                 # 一時的なDBセッションを作成
                 temp_db = next(get_db())
                 try:
-                    fresh_proj = temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first()
+                    # JSONではなく、TimetableRowテーブルから最新状態を取得する
+                    rows = temp_db.query(TimetableRow).filter(TimetableRow.project_id == current_id_in_cb).order_by(TimetableRow.sort_order).all()
                     
-                    if fresh_proj and fresh_proj.data_json:
-                        try:
-                            d = json.loads(fresh_proj.data_json)
-                            # ★修正: リセット時も IS_HIDDEN を考慮して除外
-                            tt_artists = [
-                                i["ARTIST"] for i in d 
-                                if i["ARTIST"] not in ["開演前物販", "終演後物販"]
-                                and not i.get("IS_HIDDEN", False) # ←ここを追加
-                            ]
-                            st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                        except:
-                            pass
+                    if rows:
+                        tt_artists = []
+                        for r in rows:
+                            # 除外条件
+                            if r.artist_name in ["開演前物販", "終演後物販"]:
+                                continue
+                            if r.is_hidden: # ★ここでDBの is_hidden カラムを確認
+                                continue
+                            
+                            tt_artists.append(r.artist_name)
+                        
+                        # リストを更新
+                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                        st.toast("タイムテーブルから最新の構成を読み込みました（非表示行は除外）", icon="🔄")
                     
-                    # 設定もリセット
+                    elif temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first().data_json:
+                        # テーブルが空の場合のバックアップ (JSON利用)
+                        proj_temp = temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first()
+                        d = json.loads(proj_temp.data_json)
+                        tt_artists = [
+                            i["ARTIST"] for i in d 
+                            if i["ARTIST"] not in ["開演前物販", "終演後物販"]
+                            and not i.get("IS_HIDDEN", False)
+                        ]
+                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                        st.toast("JSONから構成を読み込みました", icon="🔄")
+                    
+                    # レイアウト設定もリセット
                     st.session_state.grid_rows = 5
                     st.session_state.grid_row_counts_str = "5,5,5,5,5"
                     st.session_state.grid_font = "keifont.ttf"
                     
                 except Exception as e:
                     print(f"Reset Error: {e}")
+                    st.error(f"読み込みエラー: {e}")
                 finally:
                     temp_db.close()
 
@@ -179,7 +209,7 @@ def render_grid_page():
             with c_set1: 
                 new_rows = st.number_input("行数", min_value=1, key="grid_rows")
             with c_set2:
-                # ★修正箇所: on_click で関数を指定
+                # ボタンクリック時に上の reset_grid_settings 関数を実行
                 st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset", on_click=reset_grid_settings)
 
             # --- 行ごとの枚数設定 ---
@@ -302,7 +332,7 @@ def render_grid_page():
                     
                     if target_artists:
                         try:
-                            # ★フォント確保
+                            # フォント確保
                             check_and_download_font(db, st.session_state.grid_font)
 
                             is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
@@ -332,7 +362,7 @@ def render_grid_page():
                     if not target_artists:
                         st.warning("表示するアーティストデータがありません。")
                     else:
-                        # ★重要: 生成直前にフォント確保
+                        # フォント確保
                         check_and_download_font(db, st.session_state.grid_font)
 
                         with st.spinner("画像を生成＆保存中..."):
@@ -341,7 +371,7 @@ def render_grid_page():
                                 align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
                                 align_val = align_map.get(st.session_state.grid_alignment, "center")
 
-                                # ★重要: 絶対パスを渡す
+                                # 絶対パスを渡す
                                 abs_font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.grid_font)
 
                                 img = generate_grid_image(
