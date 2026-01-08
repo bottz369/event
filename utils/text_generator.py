@@ -1,4 +1,3 @@
-# utils/text_generator.py
 import datetime
 
 def get_day_of_week_jp(dt):
@@ -66,9 +65,12 @@ def build_event_summary_text(
                 price = ""
                 note = ""
 
-            line = f"- {name}: {price}"
-            if note: line += f" ({note})"
-            if name or price: text += "\n" + line
+            # 空行でない場合のみ追加
+            if name or price:
+                line = f"- {name}"
+                if price: line += f": {price}"
+                if note: line += f" ({note})"
+                text += "\n" + line
     else:
         text += "\n(情報なし)"
 
@@ -79,8 +81,13 @@ def build_event_summary_text(
                 text += f"\n※{str(note).strip()}"
 
     # 出演者
-    # 重複排除しつつ順序保持
-    valid_artists = list(dict.fromkeys(artists)) if artists else []
+    # 安全策: Noneや空文字を除去してから重複排除
+    if artists:
+        clean_artists = [a for a in artists if a and str(a).strip()]
+        valid_artists = list(dict.fromkeys(clean_artists))
+    else:
+        valid_artists = []
+
     if valid_artists:
         text += f"\n\n■出演者（{len(valid_artists)}組予定）"
         for i, artist_name in enumerate(valid_artists, 1):
