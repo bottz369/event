@@ -5,7 +5,7 @@ import zipfile
 import os
 from datetime import datetime
 
-# ★追加: 画像座標取得用コンポーネント
+# ★画像座標取得用コンポーネント
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
     HAS_CLICK_COORD = True
@@ -89,6 +89,22 @@ def render_flyer_editor(project_id):
     if not proj:
         st.error("プロジェクトエラー: 指定されたプロジェクトが見つかりません。")
         return
+
+    # ★修正: データ読み込みをここ（関数の最初）に移動して、変数が確実に定義されるようにする
+    tickets = []
+    if getattr(proj, "tickets_json", None):
+        try: tickets = json.loads(proj.tickets_json)
+        except: pass
+    
+    notes = []
+    if getattr(proj, "ticket_notes_json", None):
+        try: notes = json.loads(proj.ticket_notes_json)
+        except: pass
+    
+    free_texts = []
+    if getattr(proj, "free_text_json", None):
+        try: free_texts = json.loads(proj.free_text_json)
+        except: pass
 
     st.subheader("📑 フライヤー生成 (Custom V6 - Click & Move)")
 
@@ -313,9 +329,9 @@ def render_flyer_editor(project_id):
             target_key = st.radio("移動させる要素を選択:", list(move_targets.keys()), 
                                   format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
-        # 生成ボタン (修正箇所: 関数呼び出しに変更)
+        # 生成ボタン
         if st.button("プレビューを生成する", type="primary", use_container_width=True):
-            _generate_preview(db, proj)
+            _generate_preview(db, proj) # ★ここも修正済み（画像・メタデータ対応）
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
@@ -466,6 +482,8 @@ def _generate_preview(db, proj):
     fallback_filename = st.session_state.get("flyer_fallback_font")
     subtitle_text = proj.subtitle or ""
     
+    # ★修正: データは渡されるか、ここで再取得するが、上のrender_flyer_editorで読み込んだ変数を使うのが安全
+    # ただ、関数外の変数は参照できないので、ここでも安全に再取得しておく（念のため）
     tickets = []; notes = []
     try: tickets = json.loads(proj.tickets_json)
     except: pass
