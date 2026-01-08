@@ -32,7 +32,7 @@ def get_face_center_y_from_cv_img(cv_img):
     if cv_img is None: return None
     gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
     face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-    # カスケードファイルがない場合のフォールバック（cv2のデータパスを探す）
+    # カスケードファイルがない場合のフォールバック
     if not os.path.exists(face_cascade_path):
         return None
         
@@ -78,41 +78,52 @@ def crop_smart(pil_img):
     
     return resized_img.crop((left, int(top), left + int(crop_width), int(top) + int(crop_height)))
 
-# --- ★追加: 手動トリミングロジック ---
+# --- ★修正: 手動トリミングロジック (縮小・黒背景対応) ---
 def apply_manual_crop(img, scale=1.0, x_off=0, y_off=0, target_w=TILE_WIDTH, target_h=TILE_HEIGHT):
     """
-    手動調整値を適用して画像を切り抜く
+    画像を中心からトリミング・リサイズ・配置する関数
+    scale: 1.0=基準サイズ, <1.0=縮小, >1.0=拡大
+    x_off: 正=右へ移動, 負=左へ移動 (ピクセル)
+    y_off: 正=下へ移動, 負=上へ移動 (ピクセル)
+    余白は黒塗り(0,0,0)で埋めます。
     """
     if not img: return create_no_image_placeholder(target_w, target_h)
 
-    # 1. ターゲットのアスペクト比に合わせて「隙間なく埋まるサイズ」にリサイズ（Cover）
+    # 1. 基準サイズ(Cover)の計算
     img_ratio = img.width / img.height
     target_ratio = target_w / target_h
 
     if img_ratio > target_ratio:
-        new_h = target_h
-        new_w = int(new_h * img_ratio)
+        # 画像の方が横長 -> 高さを合わせる
+        base_h = target_h
+        base_w = int(base_h * img_ratio)
     else:
-        new_w = target_w
-        new_h = int(new_w / img_ratio)
+        # 画像の方が縦長 -> 幅を合わせる
+        base_w = target_w
+        base_h = int(base_w / img_ratio)
 
-    resized_img = img.resize((new_w, new_h), Image.LANCZOS)
+    # 2. スケール適用 (縮小も許可)
+    final_w = max(1, int(base_w * scale))
+    final_h = max(1, int(base_h * scale))
 
-    # 2. ズーム適用
-    if scale > 1.0:
-        z_w = int(new_w * scale)
-        z_h = int(new_h * scale)
-        resized_img = resized_img.resize((z_w, z_h), Image.LANCZOS)
+    resized_img = img.resize((final_w, final_h), Image.LANCZOS)
+
+    # 3. 黒背景のキャンバス作成
+    canvas = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 255))
+
+    # 4. 配置位置の計算
+    # キャンバス中心 (target_w/2, target_h/2) に 画像中心 (final_w/2, final_h/2) を合わせる
+    # そこにオフセット (x_off, y_off) を加算
+    paste_x = int((target_w - final_w) / 2 + x_off)
+    paste_y = int((target_h - final_h) / 2 + y_off)
+
+    # 5. 貼り付け (透過情報も考慮)
+    if resized_img.mode != "RGBA":
+        resized_img = resized_img.convert("RGBA")
     
-    # 3. 切り抜き位置の計算 (中心基準 + オフセット)
-    center_x = resized_img.width // 2
-    center_y = resized_img.height // 2
+    canvas.paste(resized_img, (paste_x, paste_y), resized_img)
 
-    # UIのスライダー操作に合わせて計算 (スライダー右=画像右移動 なら cropは左へ)
-    crop_x = center_x - (target_w // 2) - x_off
-    crop_y = center_y - (target_h // 2) - y_off
-
-    return resized_img.crop((crop_x, crop_y, crop_x + target_w, crop_y + target_h))
+    return canvas.convert("RGB")
 
 
 def create_no_image_placeholder(width, height):
@@ -138,25 +149,23 @@ def load_image_from_url(url):
         return None
 
 # =========================================================
-# ★修正: 強力なフォントパス解決ロジック
+# フォントパス解決ロジック
 # =========================================================
 def resolve_font_path(font_path_input):
     """
-    入力されたフォントパス（ファイル名のみの場合も含む）から、
-    実際に存在するファイルパスを探し出して返す。
-    見つからない場合は None を返す。
+    入力されたフォントパスから実在するパスを返す
     """
     if not font_path_input:
         return None
 
     # 検索候補リスト
     candidates = [
-        font_path_input,                                              # そのまま
-        os.path.join(FONT_DIR, os.path.basename(font_path_input)), # constantsのFONT_DIR + ファイル名
-        os.path.join("assets", "fonts", os.path.basename(font_path_input)), # assets/fonts/ + ファイル名 (相対)
-        os.path.join(BASE_DIR, "assets", "fonts", os.path.basename(font_path_input)), # 絶対パス
-        os.path.join("fonts", os.path.basename(font_path_input)), # fonts/ + ファイル名
-        os.path.join(os.getcwd(), os.path.basename(font_path_input)), # カレントディレクトリ + ファイル名
+        font_path_input,                                                      
+        os.path.join(FONT_DIR, os.path.basename(font_path_input)), 
+        os.path.join("assets", "fonts", os.path.basename(font_path_input)), 
+        os.path.join(BASE_DIR, "assets", "fonts", os.path.basename(font_path_input)), 
+        os.path.join("fonts", os.path.basename(font_path_input)), 
+        os.path.join(os.getcwd(), os.path.basename(font_path_input)), 
     ]
 
     for path in candidates:
@@ -252,14 +261,10 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
     current_y = MARGIN 
     default_font = ImageFont.load_default()
 
-    # ★修正: フォントパスの解決（ここで徹底的に探します）
+    # フォントパスの解決
     valid_font_path = resolve_font_path(font_path)
-    
-    # もし指定されたフォントが見つからない場合、デフォルトの 'keifont.ttf' も探してみる
     if not valid_font_path:
         valid_font_path = resolve_font_path("keifont.ttf")
-
-    # それでも見つからなければ None (後で default_font になる)
     font_exists = (valid_font_path is not None)
 
     for config in row_configs:
@@ -284,8 +289,7 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                         img = load_image_from_url(img_url)
                 
                 if img:
-                    # ★修正箇所: ここでDBの値をチェックして手動/自動を切り替え
-                    # DBカラムが存在しない場合の安全策として getattr を使用
+                    # DB値の読み込み
                     crop_scale = getattr(target_artist, 'crop_scale', 1.0) or 1.0
                     crop_x = getattr(target_artist, 'crop_x', 0) or 0
                     crop_y = getattr(target_artist, 'crop_y', 0) or 0
@@ -293,7 +297,7 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                     is_manual = (crop_scale != 1.0) or (crop_x != 0) or (crop_y != 0)
 
                     if is_manual:
-                        # 手動調整 (TILE_WIDTH, TILE_HEIGHT はこのファイルの定数を使用)
+                        # ★修正: 縮小対応版の apply_manual_crop を呼び出す
                         cropped = apply_manual_crop(img, crop_scale, crop_x, crop_y, TILE_WIDTH, TILE_HEIGHT)
                     else:
                         # 自動調整
@@ -304,7 +308,6 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                 resized_final = cropped.resize((w, h), Image.LANCZOS)
                 canvas.paste(resized_final, (int(x), int(current_y)))
             except Exception as e:
-                # 画像処理エラー時はプレースホルダー
                 print(f"Image Error ({artist_name}): {e}")
                 ph = create_no_image_placeholder(w, h)
                 canvas.paste(ph, (int(x), int(current_y)))
@@ -313,9 +316,9 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
             text_bg_y = current_y + h
             draw.rectangle([(x, text_bg_y), (x + w, text_bg_y + th)], fill="white")
 
-            # --- ★テキスト描画（フォント適用） ---
+            # --- テキスト描画 ---
             current_font_size = font_max
-            target_font = default_font # 初期値はデフォルト
+            target_font = default_font
 
             while current_font_size > MIN_FONT_SIZE:
                 try:
@@ -325,25 +328,22 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                         target_font = default_font
                         break
                 except Exception:
-                    # 読み込み失敗時はデフォルトへ
                     target_font = default_font
                     break
 
                 bbox = draw.textbbox((0, 0), artist_name, font=target_font)
                 text_w = bbox[2] - bbox[0]
                 
-                # 幅に収まるかチェック (-10pxの余裕)
                 if text_w < (w - 10):
                     break 
                 
                 current_font_size -= 2 
 
-            # 最終的な文字描画
             try:
                 bbox = draw.textbbox((0, 0), artist_name, font=target_font)
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
-                # 上下左右中央寄せ
+                
                 text_x = x + (w - text_w) / 2
                 text_y = text_bg_y + (th - text_h) / 2 - bbox[1]
                 
