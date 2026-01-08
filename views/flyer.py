@@ -15,7 +15,6 @@ from utils.text_generator import build_event_summary_text
 
 from utils.flyer_helpers import (
     format_event_date, format_time_str,
-    # generate_event_summary_text_from_proj,  <-- これは使わず、build_event_summary_text に置き換えます
     generate_timetable_csv_string
 )
 from utils.flyer_generator import create_flyer_image_shadow
@@ -30,7 +29,6 @@ def gather_flyer_settings_from_session():
     # 1. 基本設定
     base_keys = [
         "bg_id", "logo_id", "date_format", 
-        # "sub_title",  <-- テキスト自体は保存せず、あくまでデザイン設定のみ保存
         "logo_scale", "logo_pos_x", "logo_pos_y",
         "grid_scale_w", "grid_scale_h", "grid_pos_y", 
         "tt_scale_w", "tt_scale_h", "tt_pos_y",       
@@ -146,7 +144,7 @@ def render_flyer_editor(project_id):
     init_s("flyer_time_tri_visible", True)
     init_s("flyer_time_tri_scale", 1.0)
     init_s("flyer_time_line_gap", 0)
-    init_s("flyer_time_alignment", "right")
+    init_s("flyer_time_alignment", "center") # デフォルト中央
     
     sys_conf = db.query(SystemFontConfig).first()
     def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
@@ -175,9 +173,12 @@ def render_flyer_editor(project_id):
             
             st.slider("ベースサイズ", 10, 200, step=5, key=f"flyer_{prefix}_size")
             
+            # ★修正: UIラベルをわかりやすく変更
             cp1, cp2 = st.columns(2)
-            with cp1: st.number_input("X移動 (横)", -500, 500, step=5, key=f"flyer_{prefix}_pos_x")
-            with cp2: st.number_input("Y移動 (縦)", -500, 500, step=5, key=f"flyer_{prefix}_pos_y")
+            with cp1: 
+                st.number_input("X (右+ / 左-)", -500, 500, step=5, key=f"flyer_{prefix}_pos_x", help="プラスで右へ、マイナスで左へ移動")
+            with cp2: 
+                st.number_input("Y (上+ / 下-)", -500, 500, step=5, key=f"flyer_{prefix}_pos_y", help="プラスで上へ、マイナスで下へ移動")
 
             st.markdown("---")
             sc1, sc2 = st.columns([1, 2])
@@ -213,13 +214,12 @@ def render_flyer_editor(project_id):
     c_conf, c_prev = st.columns([1, 1.2])
 
     with c_conf:
-        # テンプレート管理エリア (Supabase対応)
+        # テンプレート管理エリア
         with st.expander("📂 テンプレート管理 (読込/保存)", expanded=False):
             st.caption("現在のデザイン設定をテンプレートとして保存し、他のプロジェクトで再利用できます。")
             
-            # テンプレート読み込み
             templates = db.query(FlyerTemplate).all()
-            templates.sort(key=lambda x: x.created_at or "", reverse=True) # 新しい順
+            templates.sort(key=lambda x: x.created_at or "", reverse=True) 
             
             t_options = ["(選択してください)"] + [t.name for t in templates]
             
@@ -233,22 +233,17 @@ def render_flyer_editor(project_id):
                         if target_t and target_t.data_json:
                             try:
                                 loaded_data = json.loads(target_t.data_json)
-                                # セッションステートを上書き
                                 for k, v in loaded_data.items():
                                     st.session_state[f"flyer_{k}"] = v
                                 
-                                # プロジェクト設定にも即時保存 (リロードで戻らないように)
                                 proj.flyer_json = json.dumps(loaded_data)
                                 db.commit()
-                                
                                 st.toast(f"テンプレート「{sel_template}」を適用しました！", icon="✨")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"読込エラー: {e}")
             
             st.divider()
-            
-            # テンプレート保存
             c_save1, c_save2 = st.columns([3, 1])
             with c_save1:
                 new_t_name = st.text_input("新規テンプレート名", placeholder="例: 赤系ロック風")
@@ -281,8 +276,9 @@ def render_flyer_editor(project_id):
                 st.markdown("**ロゴ微調整**")
                 c_l1, c_l2, c_l3 = st.columns(3)
                 with c_l1: st.slider("サイズ", 0.1, 2.0, step=0.1, key="flyer_logo_scale")
-                with c_l2: st.slider("X位置", -100.0, 100.0, step=1.0, key="flyer_logo_pos_x")
-                with c_l3: st.slider("Y位置", -100.0, 100.0, step=1.0, key="flyer_logo_pos_y")
+                # ★修正: ラベル変更
+                with c_l2: st.slider("X (右+/左-)", -100.0, 100.0, step=1.0, key="flyer_logo_pos_x")
+                with c_l3: st.slider("Y (上+/下-)", -100.0, 100.0, step=1.0, key="flyer_logo_pos_y")
             
             st.markdown("---")
             current_subtitle = proj.subtitle if proj.subtitle else "(未設定)"
@@ -294,7 +290,6 @@ def render_flyer_editor(project_id):
 
             st.markdown("---")
             date_opts = ["EN (例: 2025.2.15.SUN)", "JP (例: 2025年2月15日 (日))"]
-            
             curr_fmt = st.session_state.flyer_date_format
             idx = 0 if curr_fmt == "EN" else 1
             sel_fmt = st.radio("📅 日付表示形式", date_opts, index=idx)
@@ -327,7 +322,8 @@ def render_flyer_editor(project_id):
                 with c2:
                     st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
                 
-                st.slider("上下位置調整 (Y)", -500, 500, step=10, key="flyer_grid_pos_y", help="グリッド画像の表示位置を上下に調整します")
+                # ★修正: ラベル変更
+                st.slider("Y位置 (上+/下-)", -500, 500, step=10, key="flyer_grid_pos_y", help="中心からの上下位置を調整します")
 
             with t_sz2:
                 c_link1, c_link2 = st.columns([0.15, 0.85])
@@ -340,7 +336,8 @@ def render_flyer_editor(project_id):
                 with c2:
                     st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
                 
-                st.slider("上下位置調整 (Y)", -500, 500, step=10, key="flyer_tt_pos_y", help="タイムテーブル画像の表示位置を上下に調整します")
+                # ★修正: ラベル変更
+                st.slider("Y位置 (上+/下-)", -500, 500, step=10, key="flyer_tt_pos_y", help="中心からの上下位置を調整します")
 
             st.markdown("---")
             st.markdown("**間隔設定**")
@@ -349,7 +346,8 @@ def render_flyer_editor(project_id):
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
             st.slider("備考行間", 0, 100, step=1, key="flyer_note_gap")
-            st.slider("フッターエリア位置 (Y移動)", -200, 200, step=5, key="flyer_footer_pos_y")
+            # ★修正: ラベル変更
+            st.slider("フッター位置 (上+/下-)", -200, 200, step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
         render_style_editor("サブタイトル (Subtitle)", "subtitle")
@@ -445,14 +443,10 @@ def render_flyer_editor(project_id):
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
         # ---------------------------------------------------------
-        # ★重要: ここでアーティストリストをDBから再構築する
-        # （JSONではなくテーブルから is_hidden を考慮して取得）
+        # アーティストリストの構築 (DB参照)
         # ---------------------------------------------------------
         filtered_artists = []
         try:
-            # アー写グリッドの設定順 (grid_order) をベースにしたいが
-            # 非表示設定 (is_hidden) は TimetableRow が持っているため、両方を参照する。
-            
             # 1. タイムテーブル全行取得（非表示フラグの辞書作成）
             rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).all()
             hidden_map = {r.artist_name: r.is_hidden for r in rows if r.artist_name}
@@ -473,13 +467,11 @@ def render_flyer_editor(project_id):
             # 3. フィルタリング実行
             for name in raw_order:
                 if name in ["開演前物販", "終演後物販"]: continue
-                # マップにあってTrueなら非表示
                 if hidden_map.get(name, False): continue
                 filtered_artists.append(name)
 
         except Exception as e:
             print(f"Artist Filter Error: {e}")
-            # エラー時は安全策としてセッションの値をそのまま使う
             filtered_artists = st.session_state.get("grid_order", [])
 
         # 共通関数でテキスト生成
@@ -493,7 +485,7 @@ def render_flyer_editor(project_id):
             start_time=proj.start_time,
             tickets=tickets,
             ticket_notes=notes,
-            artists=filtered_artists, # ★フィルタリング済みのリストを渡す
+            artists=filtered_artists, 
             free_texts=free_texts
         )
 
@@ -515,7 +507,6 @@ def render_flyer_editor(project_id):
             
         with t3:
             st.markdown("### 告知用テキストプレビュー")
-            # 生成したテキストを表示
             st.text_area("内容", value=summary_text, height=300, disabled=True)
             st.download_button(
                 label="📄 テキストをダウンロード",
@@ -544,7 +535,6 @@ def render_flyer_editor(project_id):
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
                             
-                            # テキストファイル
                             zip_file.writestr("Event_Outline.txt", summary_text)
 
                             if include_assets:
