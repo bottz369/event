@@ -3,8 +3,7 @@ import io
 import json
 import zipfile
 import os
-import datetime
-from datetime import datetime as dt_class # datetime型判定用
+from datetime import datetime # ★修正: インポートをシンプルに修正
 
 # ★追加: TimetableRow, FlyerTemplate をインポート
 from database import get_db, TimetableProject, TimetableRow, Asset, get_image_url, SystemFontConfig, FlyerTemplate
@@ -144,7 +143,7 @@ def render_flyer_editor(project_id):
     init_s("flyer_time_tri_visible", True)
     init_s("flyer_time_tri_scale", 1.0)
     init_s("flyer_time_line_gap", 0)
-    init_s("flyer_time_alignment", "center") # デフォルト中央
+    init_s("flyer_time_alignment", "center")
     
     sys_conf = db.query(SystemFontConfig).first()
     def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
@@ -173,12 +172,12 @@ def render_flyer_editor(project_id):
             
             st.slider("ベースサイズ", 10, 200, step=5, key=f"flyer_{prefix}_size")
             
-            # ★修正: UIラベルをわかりやすく変更
+            # ★修正: 上限・下限を撤廃 (min_value, max_value を指定しない)
             cp1, cp2 = st.columns(2)
             with cp1: 
-                st.number_input("X (右+ / 左-)", -500, 500, step=5, key=f"flyer_{prefix}_pos_x", help="プラスで右へ、マイナスで左へ移動")
+                st.number_input("X (右+ / 左-)", step=5, key=f"flyer_{prefix}_pos_x", help="プラスで右へ、マイナスで左へ移動")
             with cp2: 
-                st.number_input("Y (上+ / 下-)", -500, 500, step=5, key=f"flyer_{prefix}_pos_y", help="プラスで上へ、マイナスで下へ移動")
+                st.number_input("Y (上+ / 下-)", step=5, key=f"flyer_{prefix}_pos_y", help="プラスで上へ、マイナスで下へ移動")
 
             st.markdown("---")
             sc1, sc2 = st.columns([1, 2])
@@ -190,8 +189,9 @@ def render_flyer_editor(project_id):
                 if st.session_state[f"flyer_{prefix}_shadow_on"]:
                     st.slider("ぼかし", 0, 20, step=1, key=f"flyer_{prefix}_shadow_blur")
                     c1, c2 = st.columns(2)
-                    with c1: st.number_input("影X", -50, 50, key=f"flyer_{prefix}_shadow_off_x")
-                    with c2: st.number_input("影Y", -50, 50, key=f"flyer_{prefix}_shadow_off_y")
+                    # 影の位置は大きく動かすものではないので制限付きのままでもOKだが、統一感のため外してもよい
+                    with c1: st.number_input("影X", step=1, key=f"flyer_{prefix}_shadow_off_x")
+                    with c2: st.number_input("影Y", step=1, key=f"flyer_{prefix}_shadow_off_y")
             
             if prefix == "time":
                 st.markdown("---")
@@ -260,6 +260,7 @@ def render_flyer_editor(project_id):
                             new_tmpl = FlyerTemplate(
                                 name=new_t_name,
                                 data_json=json.dumps(save_data),
+                                # ★修正: datetime.now() のエラーを回避
                                 created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             )
                             db.add(new_tmpl)
@@ -276,9 +277,10 @@ def render_flyer_editor(project_id):
                 st.markdown("**ロゴ微調整**")
                 c_l1, c_l2, c_l3 = st.columns(3)
                 with c_l1: st.slider("サイズ", 0.1, 2.0, step=0.1, key="flyer_logo_scale")
-                # ★修正: ラベル変更
-                with c_l2: st.slider("X (右+/左-)", -100.0, 100.0, step=1.0, key="flyer_logo_pos_x")
-                with c_l3: st.slider("Y (上+/下-)", -100.0, 100.0, step=1.0, key="flyer_logo_pos_y")
+                
+                # ★修正: スライダーから number_input (上限撤廃) に変更
+                with c_l2: st.number_input("X (右+/左-)", step=1.0, key="flyer_logo_pos_x")
+                with c_l3: st.number_input("Y (上+/下-)", step=1.0, key="flyer_logo_pos_y")
             
             st.markdown("---")
             current_subtitle = proj.subtitle if proj.subtitle else "(未設定)"
@@ -322,8 +324,8 @@ def render_flyer_editor(project_id):
                 with c2:
                     st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
                 
-                # ★修正: ラベル変更
-                st.slider("Y位置 (上+/下-)", -500, 500, step=10, key="flyer_grid_pos_y", help="中心からの上下位置を調整します")
+                # ★修正: スライダーから number_input (上限撤廃) に変更
+                st.number_input("Y位置 (上+/下-)", step=10, key="flyer_grid_pos_y", help="中心からの上下位置を調整します")
 
             with t_sz2:
                 c_link1, c_link2 = st.columns([0.15, 0.85])
@@ -336,8 +338,8 @@ def render_flyer_editor(project_id):
                 with c2:
                     st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
                 
-                # ★修正: ラベル変更
-                st.slider("Y位置 (上+/下-)", -500, 500, step=10, key="flyer_tt_pos_y", help="中心からの上下位置を調整します")
+                # ★修正: スライダーから number_input (上限撤廃) に変更
+                st.number_input("Y位置 (上+/下-)", step=10, key="flyer_tt_pos_y", help="中心からの上下位置を調整します")
 
             st.markdown("---")
             st.markdown("**間隔設定**")
@@ -346,8 +348,9 @@ def render_flyer_editor(project_id):
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
             st.slider("備考行間", 0, 100, step=1, key="flyer_note_gap")
-            # ★修正: ラベル変更
-            st.slider("フッター位置 (上+/下-)", -200, 200, step=5, key="flyer_footer_pos_y")
+            
+            # ★修正: スライダーから number_input (上限撤廃) に変更
+            st.number_input("フッター位置 (上+/下-)", step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
         render_style_editor("サブタイトル (Subtitle)", "subtitle")
