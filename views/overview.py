@@ -4,12 +4,12 @@ import json
 import traceback
 
 # データベース関連
-from database import get_db, TimetableProject
+# ★修正: TimetableRow を追加インポート
+from database import get_db, TimetableProject, TimetableRow
 from logic_project import save_current_project, load_project_data
 from constants import TIME_OPTIONS
 
 # ★追加: 共通のテキスト生成ロジックをインポート
-# （これにより、このファイル内で generate_event_text を定義する必要がなくなりました）
 from utils.text_generator import build_event_summary_text
 
 # ==========================================
@@ -305,8 +305,28 @@ def render_overview_page():
     # ★修正: 共通関数を使用してプレビュー生成
     # ==========================================
     
-    # Session Stateから必要なデータを収集して共通ロジックに渡す
-    artists_list = st.session_state.get("grid_order") or st.session_state.get("tt_artists_order", [])
+    # Session Stateのリストではなく、DBから最新のアーティスト順を取得して使用する
+    # これにより「非表示」設定が確実に反映される
+    if project_id:
+        db = next(get_db())
+        try:
+            # テーブルから行を取得（非表示を除外）
+            rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).order_by(TimetableRow.sort_order).all()
+            if rows:
+                artists_list = [
+                    r.artist_name for r in rows
+                    if r.artist_name not in ["開演前物販", "終演後物販"]
+                    and not r.is_hidden # ★DBのカラムをチェック
+                ]
+            else:
+                # DBに行がない場合のバックアップ
+                artists_list = st.session_state.get("tt_artists_order", [])
+        except:
+            artists_list = st.session_state.get("tt_artists_order", [])
+        finally:
+            db.close()
+    else:
+        artists_list = []
     
     generated_text = build_event_summary_text(
         title=st.session_state.get("proj_title", ""),
@@ -318,7 +338,7 @@ def render_overview_page():
         start_time=st.session_state.get("tt_start_time", "※調整中"),
         tickets=st.session_state.get("proj_tickets", []),
         ticket_notes=st.session_state.get("proj_ticket_notes", []),
-        artists=artists_list,
+        artists=artists_list, # ★修正したリストを渡す
         free_texts=st.session_state.get("proj_free_text", [])
     )
 
