@@ -132,6 +132,7 @@ def render_timetable_page():
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                                         "PLACE": safe_str(item.get("PLACE")),
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加
                                     }
                                     continue
                                 if name == "終演後物販":
@@ -139,6 +140,7 @@ def render_timetable_page():
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                                         "PLACE": safe_str(item.get("PLACE")),
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加
                                     }
                                     continue
                                 
@@ -153,7 +155,8 @@ def render_timetable_page():
                                         "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
                                         "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
                                         "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
-                                        "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
+                                        "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False)),
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加
                                     })
                             st.session_state.tt_artists_order = new_order
                             st.session_state.tt_artist_settings = new_artist_settings
@@ -249,7 +252,8 @@ def render_timetable_page():
                     "ADD_GOODS_START": safe_str(row.get("AddGoodsStart")), 
                     "ADD_GOODS_DURATION": safe_int(row.get("AddGoodsDuration"), None), 
                     "ADD_GOODS_PLACE": safe_str(row.get("AddGoodsPlace")),
-                    "IS_POST_GOODS": bool(row.get("IS_POST_GOODS", False))
+                    "IS_POST_GOODS": bool(row.get("IS_POST_GOODS", False)),
+                    "IS_HIDDEN": False # ★追加: CSV取込時はデフォルト非表示なし
                 })
 
             st.session_state.tt_artists_order = new_order
@@ -295,7 +299,10 @@ def render_timetable_page():
                     if new_artist:
                         st.session_state.tt_artists_order.append(new_artist)
                         st.session_state.tt_artist_settings[new_artist] = {"DURATION": 20}
-                        st.session_state.tt_row_settings.append(get_default_row_settings())
+                        # ★追加: 新規行も IS_HIDDEN 初期値 False
+                        def_row = get_default_row_settings()
+                        def_row["IS_HIDDEN"] = False
+                        st.session_state.tt_row_settings.append(def_row)
                         st.session_state.rebuild_table_flag = True 
                         mark_dirty()
                         st.rerun()
@@ -323,15 +330,19 @@ def render_timetable_page():
             else:
                 if st.session_state.tt_has_pre_goods: st.session_state.tt_has_pre_goods = False; st.session_state.rebuild_table_flag = True; st.rerun()
 
-            column_order = ["ARTIST", "DURATION", "IS_POST_GOODS", "ADJUSTMENT", "GOODS_START_MANUAL", "GOODS_DURATION", "PLACE", "ADD_GOODS_START", "ADD_GOODS_DURATION", "ADD_GOODS_PLACE"]
+            # ★追加: IS_HIDDEN をカラム順に追加
+            column_order = ["IS_HIDDEN", "ARTIST", "DURATION", "IS_POST_GOODS", "ADJUSTMENT", "GOODS_START_MANUAL", "GOODS_DURATION", "PLACE", "ADD_GOODS_START", "ADD_GOODS_DURATION", "ADD_GOODS_PLACE"]
             
             if st.session_state.rebuild_table_flag:
                 rows = []
                 if st.session_state.tt_has_pre_goods:
                     p = st.session_state.tt_pre_goods_settings
-                    rows.append({"ARTIST": "開演前物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False, 
-                                 "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "", 
-                                 "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":""})
+                    rows.append({
+                        "ARTIST": "開演前物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False, 
+                        "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "", 
+                        "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":"",
+                        "IS_HIDDEN": bool(p.get("IS_HIDDEN", False)) # ★追加
+                    })
                 while len(st.session_state.tt_row_settings) < len(st.session_state.tt_artists_order):
                     st.session_state.tt_row_settings.append(get_default_row_settings())
 
@@ -345,13 +356,17 @@ def render_timetable_page():
                         "ARTIST": name, "DURATION": safe_int(ad.get("DURATION"), 20), "IS_POST_GOODS": is_p,
                         "ADJUSTMENT": safe_int(rd.get("ADJUSTMENT"), 0),
                         "GOODS_START_MANUAL": safe_str(rd.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(rd.get("GOODS_DURATION"), 60), "PLACE": safe_str(rd.get("PLACE")),
-                        "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE"))
+                        "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE")),
+                        "IS_HIDDEN": bool(rd.get("IS_HIDDEN", False)) # ★追加
                     })
                 if has_post:
                     p = st.session_state.tt_post_goods_settings
-                    rows.append({"ARTIST": "終演後物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False,
-                                 "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
-                                 "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":""})
+                    rows.append({
+                        "ARTIST": "終演後物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False,
+                        "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
+                        "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":"",
+                        "IS_HIDDEN": bool(p.get("IS_HIDDEN", False)) # ★追加
+                    })
 
                 st.session_state.binding_df = pd.DataFrame(rows, columns=column_order)
                 st.session_state.tt_editor_key = st.session_state.get("tt_editor_key", 0) + 1
@@ -368,6 +383,7 @@ def render_timetable_page():
             edited_df = st.data_editor(
                 st.session_state.binding_df, key=current_key, num_rows="fixed", use_container_width=True,
                 column_config={
+                    "IS_HIDDEN": st.column_config.CheckboxColumn("非表示", width="small"), # ★追加
                     "ARTIST": st.column_config.TextColumn("アーティスト", disabled=True),
                     "DURATION": st.column_config.SelectboxColumn("出演", options=DURATION_OPTIONS, width="small"),
                     "IS_POST_GOODS": st.column_config.CheckboxColumn("終演後", width="small"),
@@ -388,12 +404,25 @@ def render_timetable_page():
             for i, row in edited_df.iterrows():
                 name = row["ARTIST"]
                 is_post = bool(row.get("IS_POST_GOODS", False))
+                # ★追加: is_hidden を取得
+                is_hidden = bool(row.get("IS_HIDDEN", False))
+
                 if name == "開演前物販":
                     dur = get_duration_minutes(st.session_state.tt_open_time, st.session_state.tt_start_time)
-                    st.session_state.tt_pre_goods_settings = {"GOODS_START_MANUAL": st.session_state.tt_open_time, "GOODS_DURATION": dur, "PLACE": ""}
+                    st.session_state.tt_pre_goods_settings = {
+                        "GOODS_START_MANUAL": st.session_state.tt_open_time, 
+                        "GOODS_DURATION": dur, 
+                        "PLACE": "",
+                        "IS_HIDDEN": is_hidden # ★追加: 保存
+                    }
                     continue
                 if name == "終演後物販":
-                    st.session_state.tt_post_goods_settings = {"GOODS_START_MANUAL": safe_str(row["GOODS_START_MANUAL"]), "GOODS_DURATION": safe_int(row["GOODS_DURATION"], 60), "PLACE": ""}
+                    st.session_state.tt_post_goods_settings = {
+                        "GOODS_START_MANUAL": safe_str(row["GOODS_START_MANUAL"]), 
+                        "GOODS_DURATION": safe_int(row["GOODS_DURATION"], 60), 
+                        "PLACE": "",
+                        "IS_HIDDEN": is_hidden # ★追加: 保存
+                    }
                     continue
                 if is_post: current_has_post_check = True
                 st.session_state.tt_artist_settings[name] = {"DURATION": safe_int(row["DURATION"], 20)}
@@ -408,7 +437,8 @@ def render_timetable_page():
                     "ADJUSTMENT": safe_int(row["ADJUSTMENT"], 0),
                     "GOODS_START_MANUAL": g_start, "GOODS_DURATION": g_dur, "PLACE": safe_str(row["PLACE"]),
                     "ADD_GOODS_START": add_start, "ADD_GOODS_DURATION": add_dur, "ADD_GOODS_PLACE": add_place,
-                    "IS_POST_GOODS": is_post
+                    "IS_POST_GOODS": is_post,
+                    "IS_HIDDEN": is_hidden # ★追加: 保存
                 })
             if len(new_row_settings_from_edit) == len(st.session_state.tt_artists_order):
                 st.session_state.tt_row_settings = new_row_settings_from_edit
@@ -439,10 +469,45 @@ def render_timetable_page():
             calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
             st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], use_container_width=True, hide_index=True)
             
+            # ★変更: 画像生成用リストの作成時に IS_HIDDEN を考慮してフィルタリング
             gen_list = []
+            
+            # edited_df から IS_HIDDEN のフラグリストを作成（インデックスで紐付けるため）
+            # calculated_df には OPEN/START の行などが追加されている場合があるが、
+            # 基本のアーティスト行は edited_df と順序が一致している前提で処理。
+            # ただし、calculate_timetable_flow が OPEN/START を先頭に追加することを見越して調整。
+            
+            # まずは edited_df 全体の非表示フラグを取得
+            hidden_flags = []
+            if "IS_HIDDEN" in edited_df.columns:
+                hidden_flags = edited_df["IS_HIDDEN"].tolist()
+            else:
+                hidden_flags = [False] * len(edited_df)
+            
+            # calculated_df を走査
+            # calculated_df の行数は、通常「OPEN/START(1行)」+「edited_dfの行数」となる
+            # edited_df のカウンターを用意
+            
+            edited_row_idx = 0
+            
             for _, row in calculated_df.iterrows():
-                if row["ARTIST"] == "OPEN / START": continue
+                # OPEN / START は常に表示（または別ロジックで制御だが、基本アーティスト行ではないのでスルー）
+                if row["ARTIST"] == "OPEN / START": 
+                    continue
+                
+                # 対応する edited_df の行が非表示かどうかチェック
+                is_hidden = False
+                if edited_row_idx < len(hidden_flags):
+                    is_hidden = hidden_flags[edited_row_idx]
+                
+                edited_row_idx += 1
+                
+                # 非表示ならリストに追加しない
+                if is_hidden:
+                    continue
+                
                 gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
+
             st.session_state.tt_gen_list = gen_list
             
             st.divider()
@@ -540,7 +605,8 @@ def render_timetable_page():
                                             "ARTIST": "開演前物販", 
                                             "GOODS_START_MANUAL": p.get("GOODS_START_MANUAL"), 
                                             "GOODS_DURATION": p.get("GOODS_DURATION"), 
-                                            "PLACE": p.get("PLACE")
+                                            "PLACE": p.get("PLACE"),
+                                            "IS_HIDDEN": p.get("IS_HIDDEN", False) # ★追加
                                         })
                                     
                                     # 本編
@@ -558,7 +624,8 @@ def render_timetable_page():
                                             "ADD_GOODS_START": rd.get("ADD_GOODS_START"),
                                             "ADD_GOODS_DURATION": rd.get("ADD_GOODS_DURATION"),
                                             "ADD_GOODS_PLACE": rd.get("ADD_GOODS_PLACE"),
-                                            "IS_POST_GOODS": rd.get("IS_POST_GOODS", False)
+                                            "IS_POST_GOODS": rd.get("IS_POST_GOODS", False),
+                                            "IS_HIDDEN": rd.get("IS_HIDDEN", False) # ★追加
                                         }
                                         data_export.append(item)
                                     
@@ -570,7 +637,8 @@ def render_timetable_page():
                                             "ARTIST": "終演後物販", 
                                             "GOODS_START_MANUAL": p.get("GOODS_START_MANUAL"), 
                                             "GOODS_DURATION": p.get("GOODS_DURATION"), 
-                                            "PLACE": p.get("PLACE")
+                                            "PLACE": p.get("PLACE"),
+                                            "IS_HIDDEN": p.get("IS_HIDDEN", False) # ★追加
                                         })
 
                                     # JSONにも一応保存 (互換性のため)
