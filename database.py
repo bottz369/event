@@ -103,6 +103,9 @@ class TimetableRow(Base):
     add_goods_start_time = Column(String)
     add_goods_duration = Column(Integer, nullable=True)
     add_goods_place = Column(String)
+
+    # ★追加: 行を画像生成時に非表示にするフラグ
+    is_hidden = Column(Boolean, default=False)
     
     project = relationship("TimetableProject", back_populates="rows")
 
