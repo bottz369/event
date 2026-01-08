@@ -2,7 +2,7 @@ import os
 import re
 import requests
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageColor, ImageChops
 
 from constants import FONT_DIR
 
@@ -98,6 +98,7 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     can_resize = True
     while can_resize and current_size > min_size:
         w, h = draw_text_mixed(dummy_draw, (0, 0), text_str, primary_font, fallback_font, fill_color)
+        # 余白計算にspreadも含める
         margin_est = max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 10 + shadow_spread
         if w + (margin_est * 2) <= max_width: break
         current_size -= 2
@@ -119,40 +120,35 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     
+    # ★修正: 影の描画ロジック強化 (不透明度・太さ対応)
     if shadow_on:
-        # 1. 影のベースを作成 (テキストの形)
+        # 影の色作成 (RGB + Alpha)
+        try: s_rgb = ImageColor.getrgb(shadow_color)
+        except: s_rgb = (0, 0, 0)
+        s_color_with_alpha = s_rgb + (int(shadow_opacity),)
+        
+        # 影用のレイヤー作成
         shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
         shadow_draw = ImageDraw.Draw(shadow_layer)
         
-        # 影の色パース
-        from PIL import ImageColor
-        try:
-            s_rgb = ImageColor.getrgb(shadow_color)
-        except:
-            s_rgb = (0, 0, 0)
+        # テキストを描画 (これが影のベースになる)
+        draw_text_mixed(shadow_draw, (draw_x + shadow_off_x, draw_y + shadow_off_y), 
+                        text_str, primary_font, fallback_font, s_color_with_alpha)
         
-        # 不透明度を適用
-        s_color_with_alpha = s_rgb + (int(shadow_opacity),)
-        
-        # 2. テキスト形状を描画 (太さ調整含む)
+        # 太さ (Spread) の適用: アルファチャンネルを膨張させる
         if shadow_spread > 0:
-            # 太らせる処理: 複数回ずらして描画 (簡易的なStroke効果)
-            # 正確なStrokeは重いので、上下左右斜めにずらして重ねる
-            spread_steps = 1 # 簡易
-            if shadow_spread > 2: spread_steps = 2
+            # アルファチャンネルを取り出し、MaxFilterで膨張
+            r, g, b, a = shadow_layer.split()
+            # フィルターサイズは奇数 (1 + 2*spread)
+            a_dilated = a.filter(ImageFilter.MaxFilter(1 + shadow_spread * 2))
             
-            for sx in range(-shadow_spread, shadow_spread + 1, spread_steps):
-                for sy in range(-shadow_spread, shadow_spread + 1, spread_steps):
-                    # 円形に近い範囲だけ描画
-                    if sx*sx + sy*sy <= shadow_spread*shadow_spread + spread_steps:
-                        draw_text_mixed(shadow_draw, (draw_x + sx + shadow_off_x, draw_y + sy + shadow_off_y), 
-                                        text_str, primary_font, fallback_font, s_color_with_alpha)
-        else:
-            # 通常描画
-            draw_text_mixed(shadow_draw, (draw_x + shadow_off_x, draw_y + shadow_off_y), 
-                            text_str, primary_font, fallback_font, s_color_with_alpha)
-        
-        # 3. ぼかし適用
+            # 膨張したアルファチャンネルを使って、単色画像を作成
+            # (元のRGB値を維持しつつアルファだけ拡張)
+            shadow_expanded = Image.new("RGBA", shadow_layer.size, s_color_with_alpha)
+            shadow_expanded.putalpha(a_dilated)
+            shadow_layer = shadow_expanded
+
+        # ぼかし適用
         if shadow_blur > 0:
             shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow_blur))
             
@@ -162,6 +158,7 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     
     content_w, content_h = canvas_w, canvas_h
     effective_text_w = text_w + (max(abs(shadow_off_x), shadow_blur*2)) + shadow_spread*2
+    
     if effective_text_w > max_width:
         ratio = max_width / effective_text_w
         new_w = int(content_w * ratio)
@@ -241,60 +238,47 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     
+    # ★修正: 時間行の影描画ロジック強化
     if shadow_on:
-        shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
-        shadow_draw = ImageDraw.Draw(shadow_layer)
-        from PIL import ImageColor
         try: s_rgb = ImageColor.getrgb(shadow_color)
         except: s_rgb = (0,0,0)
         s_color_with_alpha = s_rgb + (int(shadow_opacity),)
         
-        # 影の描画 (本体のアルファチャンネルを使うのではなく、形状を描画する)
-        # テキスト部分のみマスクとして抽出して描画する方法もあるが、
-        # ここでは draw_text_mixed と同じロジックで影位置に描画する
+        # 影用のレイヤー
+        shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
+        shadow_draw = ImageDraw.Draw(shadow_layer)
         
-        # ※簡易実装: 影用のテキストレイヤーを作ってぼかす
-        # 位置ずれとSpreadを考慮
-        
-        # 1. 影用のテキスト画像作成
-        s_temp = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
-        s_draw = ImageDraw.Draw(s_temp)
-        
-        # 再度描画位置計算 (同じロジック)
-        s_cur_x = margin # 初期位置
-        
+        # 影として同じ内容を描画
+        s_cur_x = margin 
         if alignment == "triangle":
             s_cur_x += (fixed_label_w - w_label)
-            draw_text_mixed(s_draw, (s_cur_x, draw_y), label, primary_font, fallback_font, s_color_with_alpha)
+            draw_text_mixed(shadow_draw, (s_cur_x, draw_y), label, primary_font, fallback_font, s_color_with_alpha)
             s_cur_x = margin + fixed_label_w
         else:
-            draw_text_mixed(s_draw, (s_cur_x, draw_y), label, primary_font, fallback_font, s_color_with_alpha)
+            draw_text_mixed(shadow_draw, (s_cur_x, draw_y), label, primary_font, fallback_font, s_color_with_alpha)
             s_cur_x += w_label
             
         s_cur_x += tri_padding
         if tri_visible:
             cy = draw_y + (font_size_px * 0.5)
-            s_draw.polygon([(s_cur_x, cy - tri_h/2), (s_cur_x, cy + tri_h/2), (s_cur_x + tri_w, cy)], fill=s_color_with_alpha)
+            shadow_draw.polygon([(s_cur_x, cy - tri_h/2), (s_cur_x, cy + tri_h/2), (s_cur_x + tri_w, cy)], fill=s_color_with_alpha)
             s_cur_x += tri_w + tri_padding
         
-        draw_text_mixed(s_draw, (s_cur_x, draw_y), time_str, primary_font, fallback_font, s_color_with_alpha)
+        draw_text_mixed(shadow_draw, (s_cur_x, draw_y), time_str, primary_font, fallback_font, s_color_with_alpha)
         
-        # 2. Spread適用 (膨張)
+        # Spread適用
         if shadow_spread > 0:
-            # 膨張フィルター (MaxFilter)
-            # アルファチャンネルに対して適用
-            r, g, b, a = s_temp.split()
-            a = a.filter(ImageFilter.MaxFilter(1 + shadow_spread*2))
-            s_temp = Image.merge("RGBA", (r, g, b, a))
-            # 色を再適用 (MaxFilterでエッジが汚くなるのを防ぐためベタ塗り合成)
-            solid_color = Image.new("RGBA", s_temp.size, s_color_with_alpha)
-            s_temp = ImageChops.multiply(solid_color, s_temp)
+            r, g, b, a = shadow_layer.split()
+            a = a.filter(ImageFilter.MaxFilter(1 + shadow_spread * 2))
+            shadow_expanded = Image.new("RGBA", shadow_layer.size, s_color_with_alpha)
+            shadow_expanded.putalpha(a)
+            shadow_layer = shadow_expanded
 
-        # 3. Blur適用
+        # Blur適用
         if shadow_blur > 0:
-            s_temp = s_temp.filter(ImageFilter.GaussianBlur(shadow_blur))
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow_blur))
             
-        final_layer.paste(s_temp, (shadow_off_x, shadow_off_y), s_temp)
+        final_layer.paste(shadow_layer, (shadow_off_x, shadow_off_y), shadow_layer)
 
     final_layer.paste(txt_img, (0, 0), txt_img)
     
@@ -361,7 +345,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         canvas.paste(main_resized, (main_x, main_y), main_resized)
         layout_meta["main"] = {"base_x": main_base_x, "base_y": main_base_y}
 
-    # ロゴ
+    # --- 4. ロゴ (★影機能追加) ---
     logo_img = load_image(logo_source)
     if logo_img:
         l_scale = styles.get("logo_scale", 1.0)
@@ -372,10 +356,48 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         l_w = int(base_w)
         l_h = int(l_w * l_ratio)
         logo_resized = logo_img.resize((l_w, l_h), Image.LANCZOS)
+        
         base_x = (CANVAS_W - l_w) // 2
         base_y = 50
         final_x = base_x + int(CANVAS_W * (l_off_x / 100))
         final_y = base_y - int(CANVAS_H * (l_off_y / 100))
+        
+        # ★追加: ロゴの影描画
+        if styles.get("logo_shadow_on", False):
+            try:
+                # 影の色と濃さ
+                ls_rgb = ImageColor.getrgb(styles.get("logo_shadow_color", "#000000"))
+                ls_opacity = int(styles.get("logo_shadow_opacity", 128))
+                ls_spread = int(styles.get("logo_shadow_spread", 0))
+                ls_blur = int(styles.get("logo_shadow_blur", 5))
+                ls_off_x = int(styles.get("logo_shadow_off_x", 5))
+                ls_off_y = int(styles.get("logo_shadow_off_y", 5))
+                
+                # ロゴのアルファチャンネル（形状）を取得
+                l_alpha = logo_resized.getchannel("A")
+                
+                # 影レイヤー作成 (単色塗りつぶし)
+                shadow_base = Image.new("RGBA", logo_resized.size, ls_rgb + (ls_opacity,))
+                shadow_base.putalpha(l_alpha)
+                
+                # Spread (形状拡張)
+                if ls_spread > 0:
+                    mask = shadow_base.getchannel("A")
+                    mask = mask.filter(ImageFilter.MaxFilter(1 + ls_spread * 2))
+                    shadow_expanded = Image.new("RGBA", logo_resized.size, ls_rgb + (ls_opacity,))
+                    shadow_expanded.putalpha(mask)
+                    shadow_base = shadow_expanded
+                
+                # Blur (ぼかし)
+                if ls_blur > 0:
+                    shadow_base = shadow_base.filter(ImageFilter.GaussianBlur(ls_blur))
+                
+                # 配置 (ロゴの下に描画)
+                canvas.paste(shadow_base, (final_x + ls_off_x, final_y + ls_off_y), shadow_base)
+            
+            except Exception as e:
+                print(f"Logo shadow error: {e}")
+
         canvas.paste(logo_resized, (final_x, final_y), logo_resized)
         layout_meta["logo"] = {"base_x": CANVAS_W // 2, "base_y": 50, "mode": "percent"}
 
@@ -393,8 +415,8 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
             "shadow_blur": styles.get(f"{key_prefix}_shadow_blur", 0),
             "shadow_off_x": styles.get(f"{key_prefix}_shadow_off_x", 5),
             "shadow_off_y": styles.get(f"{key_prefix}_shadow_off_y", 5),
-            "shadow_opacity": styles.get(f"{key_prefix}_shadow_opacity", 255), # ★追加
-            "shadow_spread": styles.get(f"{key_prefix}_shadow_spread", 0),     # ★追加
+            "shadow_opacity": styles.get(f"{key_prefix}_shadow_opacity", 255),
+            "shadow_spread": styles.get(f"{key_prefix}_shadow_spread", 0),
             "pos_x": styles.get(f"{key_prefix}_pos_x", 0),
             "pos_y": styles.get(f"{key_prefix}_pos_y", 0)
         }
@@ -464,7 +486,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
     
     center_x = CANVAS_W // 2 + s["pos_x"]
     start_y = current_y - s["pos_y"]
-    layout_meta["time"] = {"base_x": CANVAS_W // 2, "base_y": current_y} # Metaは基準点
+    layout_meta["time"] = {"base_x": CANVAS_W // 2, "base_y": current_y}
     
     dummy = ImageDraw.Draw(Image.new("RGBA",(1,1)))
     w_open, _ = draw_text_mixed(dummy, (0,0), "OPEN", time_font, None, None)
