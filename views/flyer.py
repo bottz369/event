@@ -3,29 +3,27 @@ import io
 import json
 import zipfile
 import os
-from datetime import datetime # ★修正: インポートをシンプルに修正
+from datetime import datetime
 
-# ★追加: TimetableRow, FlyerTemplate をインポート
+# ★追加: 画像座標取得用コンポーネント
+try:
+    from streamlit_image_coordinates import streamlit_image_coordinates
+    HAS_CLICK_COORD = True
+except ImportError:
+    HAS_CLICK_COORD = False
+
 from database import get_db, TimetableProject, TimetableRow, Asset, get_image_url, SystemFontConfig, FlyerTemplate
 from utils import get_sorted_font_list, create_font_specimen_img
-
-# ★追加: 共通テキスト生成ロジックを使用
 from utils.text_generator import build_event_summary_text
-
-from utils.flyer_helpers import (
-    format_event_date, format_time_str,
-    generate_timetable_csv_string
-)
+from utils.flyer_helpers import format_event_date, format_time_str, generate_timetable_csv_string
 from utils.flyer_generator import create_flyer_image_shadow
 
 # ==========================================
-# 設定データの収集関数 (保存・テンプレート共通)
+# 設定データの収集関数
 # ==========================================
 def gather_flyer_settings_from_session():
     """現在のセッションステートから保存すべき設定データを辞書で返す"""
     save_data = {}
-    
-    # 1. 基本設定
     base_keys = [
         "bg_id", "logo_id", "date_format", 
         "logo_scale", "logo_pos_x", "logo_pos_y",
@@ -38,7 +36,6 @@ def gather_flyer_settings_from_session():
     for k in base_keys:
         save_data[k] = st.session_state.get(f"flyer_{k}")
     
-    # 2. スタイル設定 (subtitle含む)
     target_keys = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
     style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "pos_x", "pos_y"]
     for k in target_keys:
@@ -47,9 +44,6 @@ def gather_flyer_settings_from_session():
             
     return save_data
 
-# ==========================================
-# UI コンポーネント
-# ==========================================
 def render_visual_selector(label, options, key_name, current_value, allow_none=False):
     st.markdown(f"**{label}**")
     if allow_none:
@@ -57,11 +51,9 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
         if st.button(f"🚫 {label}なし", key=f"btn_none_{key_name}", type="primary" if is_none else "secondary"):
             st.session_state[key_name] = 0
             st.rerun()
-            
     if not options:
         st.info("選択肢がありません")
         return
-
     cols = st.columns(4)
     for i, opt in enumerate(options):
         with cols[i % 4]:
@@ -69,12 +61,8 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
             img_url = None
             if hasattr(opt, "image_filename") and opt.image_filename:
                 img_url = get_image_url(opt.image_filename)
-            
-            if img_url:
-                st.image(img_url, use_container_width=True)
-            else:
-                st.markdown(f"🔲 {opt.name}")
-
+            if img_url: st.image(img_url, use_container_width=True)
+            else: st.markdown(f"🔲 {opt.name}")
             if is_selected:
                 st.button("✅ 選択中", key=f"btn_{key_name}_{opt.id}", disabled=True, use_container_width=True)
             else:
@@ -102,7 +90,7 @@ def render_flyer_editor(project_id):
         st.error("プロジェクトエラー: 指定されたプロジェクトが見つかりません。")
         return
 
-    st.subheader("📑 フライヤー生成 (Custom V6 - Layout Safe)")
+    st.subheader("📑 フライヤー生成 (Custom V6 - Click & Move)")
 
     # 設定読み込み
     saved_config = {}
@@ -110,20 +98,18 @@ def render_flyer_editor(project_id):
         try: saved_config = json.loads(proj.flyer_json)
         except: pass
 
-    # Session State 初期化ヘルパー
+    # Session State 初期化
     def init_s(key, val):
         if key not in st.session_state:
             short_key = key.replace("flyer_", "")
             st.session_state[key] = saved_config.get(short_key, val)
 
-    # --- パラメータ初期化 ---
     init_s("flyer_bg_id", 0)
     init_s("flyer_logo_id", 0)
     init_s("flyer_date_format", "EN")
     init_s("flyer_logo_scale", 1.0)
     init_s("flyer_logo_pos_x", 0.0)
     init_s("flyer_logo_pos_y", 0.0)
-
     init_s("flyer_grid_scale_w", 95)
     init_s("flyer_grid_scale_h", 100)
     init_s("flyer_grid_pos_y", 0)    
@@ -132,14 +118,12 @@ def render_flyer_editor(project_id):
     init_s("flyer_tt_pos_y", 0)      
     init_s("flyer_grid_link", True) 
     init_s("flyer_tt_link", True)
-
     init_s("flyer_subtitle_date_gap", 10) 
     init_s("flyer_date_venue_gap", 10)
     init_s("flyer_ticket_gap", 20)
     init_s("flyer_area_gap", 40)
     init_s("flyer_note_gap", 15)
     init_s("flyer_footer_pos_y", 0)
-    
     init_s("flyer_time_tri_visible", True)
     init_s("flyer_time_tri_scale", 1.0)
     init_s("flyer_time_line_gap", 0)
@@ -165,19 +149,15 @@ def render_flyer_editor(project_id):
         with st.expander(f"📝 {label} スタイル", expanded=False):
             c1, c2 = st.columns([2, 1])
             with c1:
-                st.selectbox("フォント", font_options, key=f"flyer_{prefix}_font", 
-                             format_func=lambda x: font_map.get(x, x))
+                st.selectbox("フォント", font_options, key=f"flyer_{prefix}_font", format_func=lambda x: font_map.get(x, x))
             with c2:
                 st.color_picker("文字色", key=f"flyer_{prefix}_color")
             
             st.slider("ベースサイズ", 10, 200, step=5, key=f"flyer_{prefix}_size")
             
-            # ★修正: 上限・下限を撤廃 (min_value, max_value を指定しない)
             cp1, cp2 = st.columns(2)
-            with cp1: 
-                st.number_input("X (右+ / 左-)", step=5, key=f"flyer_{prefix}_pos_x", help="プラスで右へ、マイナスで左へ移動")
-            with cp2: 
-                st.number_input("Y (上+ / 下-)", step=5, key=f"flyer_{prefix}_pos_y", help="プラスで上へ、マイナスで下へ移動")
+            with cp1: st.number_input("X (右+ / 左-)", step=5, key=f"flyer_{prefix}_pos_x")
+            with cp2: st.number_input("Y (上+ / 下-)", step=5, key=f"flyer_{prefix}_pos_y")
 
             st.markdown("---")
             sc1, sc2 = st.columns([1, 2])
@@ -189,7 +169,6 @@ def render_flyer_editor(project_id):
                 if st.session_state[f"flyer_{prefix}_shadow_on"]:
                     st.slider("ぼかし", 0, 20, step=1, key=f"flyer_{prefix}_shadow_blur")
                     c1, c2 = st.columns(2)
-                    # 影の位置は大きく動かすものではないので制限付きのままでもOKだが、統一感のため外してもよい
                     with c1: st.number_input("影X", step=1, key=f"flyer_{prefix}_shadow_off_x")
                     with c2: st.number_input("影Y", step=1, key=f"flyer_{prefix}_shadow_off_y")
             
@@ -198,8 +177,7 @@ def render_flyer_editor(project_id):
                 align_map = {"right":"右揃え", "center":"中央揃え", "left":"左揃え", "triangle":"▶揃え"}
                 c_al1, c_al2 = st.columns(2)
                 with c_al1:
-                    sel_align = st.selectbox("配置モード", list(align_map.keys()), 
-                                             format_func=lambda x: align_map[x],
+                    sel_align = st.selectbox("配置モード", list(align_map.keys()), format_func=lambda x: align_map[x],
                                              key="flyer_time_alignment_sel",
                                              index=list(align_map.keys()).index(st.session_state.flyer_time_alignment))
                     st.session_state.flyer_time_alignment = sel_align
@@ -214,15 +192,11 @@ def render_flyer_editor(project_id):
     c_conf, c_prev = st.columns([1, 1.2])
 
     with c_conf:
-        # テンプレート管理エリア
+        # テンプレート管理
         with st.expander("📂 テンプレート管理 (読込/保存)", expanded=False):
-            st.caption("現在のデザイン設定をテンプレートとして保存し、他のプロジェクトで再利用できます。")
-            
             templates = db.query(FlyerTemplate).all()
             templates.sort(key=lambda x: x.created_at or "", reverse=True) 
-            
             t_options = ["(選択してください)"] + [t.name for t in templates]
-            
             c_load1, c_load2 = st.columns([3, 1])
             with c_load1:
                 sel_template = st.selectbox("保存済みテンプレート", t_options, label_visibility="collapsed")
@@ -233,75 +207,49 @@ def render_flyer_editor(project_id):
                         if target_t and target_t.data_json:
                             try:
                                 loaded_data = json.loads(target_t.data_json)
-                                for k, v in loaded_data.items():
-                                    st.session_state[f"flyer_{k}"] = v
-                                
+                                for k, v in loaded_data.items(): st.session_state[f"flyer_{k}"] = v
                                 proj.flyer_json = json.dumps(loaded_data)
                                 db.commit()
                                 st.toast(f"テンプレート「{sel_template}」を適用しました！", icon="✨")
                                 st.rerun()
-                            except Exception as e:
-                                st.error(f"読込エラー: {e}")
-            
+                            except Exception as e: st.error(f"読込エラー: {e}")
             st.divider()
             c_save1, c_save2 = st.columns([3, 1])
-            with c_save1:
-                new_t_name = st.text_input("新規テンプレート名", placeholder="例: 赤系ロック風")
+            with c_save1: new_t_name = st.text_input("新規テンプレート名", placeholder="例: 赤系ロック風")
             with c_save2:
                 if st.button("保存", use_container_width=True):
-                    if not new_t_name:
-                        st.error("名前を入力してください")
+                    if not new_t_name: st.error("名前を入力してください")
                     else:
                         existing = db.query(FlyerTemplate).filter(FlyerTemplate.name == new_t_name).first()
-                        if existing:
-                            st.error("同名のテンプレートが存在します")
+                        if existing: st.error("同名のテンプレートが存在します")
                         else:
                             save_data = gather_flyer_settings_from_session()
-                            new_tmpl = FlyerTemplate(
-                                name=new_t_name,
-                                data_json=json.dumps(save_data),
-                                # ★修正: datetime.now() のエラーを回避
-                                created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            )
+                            new_tmpl = FlyerTemplate(name=new_t_name, data_json=json.dumps(save_data), created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                             db.add(new_tmpl)
                             db.commit()
-                            st.toast(f"テンプレート「{new_t_name}」をSupabaseに保存しました！", icon="💾")
+                            st.toast(f"テンプレート「{new_t_name}」を保存しました！", icon="💾")
                             st.rerun()
 
         with st.expander("🖼️ 基本設定", expanded=True):
             render_visual_selector("背景画像", bgs, "flyer_bg_id", st.session_state.flyer_bg_id)
             st.markdown("---")
             render_visual_selector("ロゴ画像", logos, "flyer_logo_id", st.session_state.flyer_logo_id, allow_none=True)
-            
             if st.session_state.flyer_logo_id:
                 st.markdown("**ロゴ微調整**")
                 c_l1, c_l2, c_l3 = st.columns(3)
                 with c_l1: st.slider("サイズ", 0.1, 2.0, step=0.1, key="flyer_logo_scale")
-                
-                # ★修正: スライダーから number_input (上限撤廃) に変更
                 with c_l2: st.number_input("X (右+/左-)", step=1.0, key="flyer_logo_pos_x")
                 with c_l3: st.number_input("Y (上+/下-)", step=1.0, key="flyer_logo_pos_y")
-            
             st.markdown("---")
-            current_subtitle = proj.subtitle if proj.subtitle else "(未設定)"
-            st.markdown(f"**サブタイトル** (イベント概要から自動取得)")
-            if not proj.subtitle:
-                st.caption("※イベント概要タブで設定してください")
-            else:
-                st.info(current_subtitle)
-
+            st.markdown(f"**サブタイトル**: {proj.subtitle if proj.subtitle else '(未設定)'}")
             st.markdown("---")
             date_opts = ["EN (例: 2025.2.15.SUN)", "JP (例: 2025年2月15日 (日))"]
             curr_fmt = st.session_state.flyer_date_format
             idx = 0 if curr_fmt == "EN" else 1
             sel_fmt = st.radio("📅 日付表示形式", date_opts, index=idx)
             st.session_state.flyer_date_format = "EN" if sel_fmt.startswith("EN") else "JP"
-            
             st.markdown("---")
-            st.selectbox("🇯🇵 日本語用フォント (補助)", font_options, 
-                         key="flyer_fallback_font", 
-                         format_func=lambda x: font_map.get(x, x),
-                         help="デザインフォントで日本語が表示できない場合に、このフォントを使用します。")
+            st.selectbox("🇯🇵 日本語用フォント (補助)", font_options, key="flyer_fallback_font", format_func=lambda x: font_map.get(x, x))
 
         with st.expander("🔤 フォント一覧見本を表示"):
             with st.container(height=300):
@@ -312,44 +260,28 @@ def render_flyer_editor(project_id):
         with st.expander("📐 コンテンツ・余白調整", expanded=False):
             st.markdown("**メイン画像サイズ・位置**")
             t_sz1, t_sz2 = st.tabs(["グリッド画像", "TT画像"])
-            
             with t_sz1:
                 c_link1, c_link2 = st.columns([0.15, 0.85])
                 with c_link1: st.checkbox("🔗", key="flyer_grid_link", help="縦横比を固定")
                 c1, c2 = st.columns(2)
-                with c1:
-                    new_w = st.slider("横幅 (%)", 10, 150, step=1, key="flyer_grid_scale_w")
-                if st.session_state.flyer_grid_link:
-                    st.session_state.flyer_grid_scale_h = new_w
-                with c2:
-                    st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
-                
-                # ★修正: スライダーから number_input (上限撤廃) に変更
-                st.number_input("Y位置 (上+/下-)", step=10, key="flyer_grid_pos_y", help="中心からの上下位置を調整します")
-
+                with c1: new_w = st.slider("横幅 (%)", 10, 150, step=1, key="flyer_grid_scale_w")
+                if st.session_state.flyer_grid_link: st.session_state.flyer_grid_scale_h = new_w
+                with c2: st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
+                st.number_input("Y位置 (上+/下-)", step=10, key="flyer_grid_pos_y")
             with t_sz2:
                 c_link1, c_link2 = st.columns([0.15, 0.85])
                 with c_link1: st.checkbox("🔗", key="flyer_tt_link", help="縦横比を固定")
                 c1, c2 = st.columns(2)
-                with c1:
-                    new_w = st.slider("横幅 (%)", 10, 150, step=1, key="flyer_tt_scale_w")
-                if st.session_state.flyer_tt_link:
-                    st.session_state.flyer_tt_scale_h = new_w
-                with c2:
-                    st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
-                
-                # ★修正: スライダーから number_input (上限撤廃) に変更
-                st.number_input("Y位置 (上+/下-)", step=10, key="flyer_tt_pos_y", help="中心からの上下位置を調整します")
-
+                with c1: new_w = st.slider("横幅 (%)", 10, 150, step=1, key="flyer_tt_scale_w")
+                if st.session_state.flyer_tt_link: st.session_state.flyer_tt_scale_h = new_w
+                with c2: st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
+                st.number_input("Y位置 (上+/下-)", step=10, key="flyer_tt_pos_y")
             st.markdown("---")
-            st.markdown("**間隔設定**")
             st.slider("サブタイトルと日付の間隔", 0, 100, step=1, key="flyer_subtitle_date_gap")
             st.slider("日付と会場の間隔", 0, 100, step=1, key="flyer_date_venue_gap")
             st.slider("チケット行間", 0, 100, step=1, key="flyer_ticket_gap")
             st.slider("チケットエリアと備考エリアの行間", 0, 200, step=5, key="flyer_area_gap")
             st.slider("備考行間", 0, 100, step=1, key="flyer_note_gap")
-            
-            # ★修正: スライダーから number_input (上限撤廃) に変更
             st.number_input("フッター位置 (上+/下-)", step=5, key="flyer_footer_pos_y")
 
         st.markdown("#### 🎨 各要素のスタイル")
@@ -370,131 +302,71 @@ def render_flyer_editor(project_id):
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
         
-        # チケット・備考などの取得
-        tickets = []
-        if getattr(proj, "tickets_json", None):
-            try: tickets = json.loads(proj.tickets_json)
-            except: pass
-        
-        notes = []
-        if getattr(proj, "ticket_notes_json", None):
-            try: notes = json.loads(proj.ticket_notes_json)
-            except: pass
-        
-        free_texts = []
-        if getattr(proj, "free_text_json", None):
-            try: free_texts = json.loads(proj.free_text_json)
-            except: pass
+        # --- クリック移動モードのUI ---
+        if HAS_CLICK_COORD and st.session_state.get("flyer_result_grid"):
+            st.info("👇 画像をクリックして位置調整できます")
+            move_targets = {
+                "subtitle": "サブタイトル", "date": "日付", "venue": "会場",
+                "time": "時間 (OPEN/START)", "ticket_name": "チケット情報", "ticket_note": "備考",
+                "grid": "メイン画像 (Grid)", "tt": "メイン画像 (TT)", "logo": "ロゴ"
+            }
+            target_key = st.radio("移動させる要素を選択:", list(move_targets.keys()), 
+                                  format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
+        # 生成ボタン (修正箇所: 関数呼び出しに変更)
         if st.button("プレビューを生成する", type="primary", use_container_width=True):
-            bg_url = None
-            if st.session_state.flyer_bg_id:
-                asset = db.query(Asset).get(st.session_state.flyer_bg_id)
-                if asset: bg_url = get_image_url(asset.image_filename)
-            
-            logo_url = None
-            if st.session_state.flyer_logo_id:
-                asset = db.query(Asset).get(st.session_state.flyer_logo_id)
-                if asset: logo_url = get_image_url(asset.image_filename)
-
-            styles = {k.replace("flyer_",""): v for k, v in st.session_state.items() if k.startswith("flyer_")}
-            
-            v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
-            d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
-            fallback_filename = st.session_state.get("flyer_fallback_font")
-            subtitle_text = proj.subtitle or ""
-
-            with st.spinner("生成中..."):
-                # 1. Generate Grid Flyer
-                grid_src = st.session_state.get("last_generated_grid_image")
-                if grid_src:
-                    s_grid = styles.copy()
-                    s_grid["content_scale_w"] = st.session_state.flyer_grid_scale_w
-                    s_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
-                    s_grid["content_pos_y"] = st.session_state.flyer_grid_pos_y 
-                    
-                    st.session_state.flyer_result_grid = create_flyer_image_shadow(
-                        db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
-                        styles=s_grid,
-                        date_text=d_text, venue_text=v_text,
-                        subtitle_text=subtitle_text,
-                        open_time=format_time_str(proj.open_time),
-                        start_time=format_time_str(proj.start_time),
-                        ticket_info_list=tickets, common_notes_list=notes,
-                        system_fallback_filename=fallback_filename 
-                    )
-                
-                # 2. Generate TT Flyer
-                tt_src = st.session_state.get("last_generated_tt_image")
-                if tt_src:
-                    s_tt = styles.copy()
-                    s_tt["content_scale_w"] = st.session_state.flyer_tt_scale_w
-                    s_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
-                    s_tt["content_pos_y"] = st.session_state.flyer_tt_pos_y 
-                    
-                    st.session_state.flyer_result_tt = create_flyer_image_shadow(
-                        db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
-                        styles=s_tt,
-                        date_text=d_text, venue_text=v_text,
-                        subtitle_text=subtitle_text,
-                        open_time=format_time_str(proj.open_time),
-                        start_time=format_time_str(proj.start_time),
-                        ticket_info_list=tickets, common_notes_list=notes,
-                        system_fallback_filename=fallback_filename 
-                    )
+            _generate_preview(db, proj)
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
-        # ---------------------------------------------------------
-        # アーティストリストの構築 (DB参照)
-        # ---------------------------------------------------------
-        filtered_artists = []
-        try:
-            # 1. タイムテーブル全行取得（非表示フラグの辞書作成）
-            rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).all()
-            hidden_map = {r.artist_name: r.is_hidden for r in rows if r.artist_name}
+        # --- クリックイベント処理関数 ---
+        def handle_click(coords, mode="grid"):
+            if not coords: return
+            target = st.session_state.get("flyer_click_target")
+            if not target: return
+            meta = st.session_state.get("flyer_layout_meta", {})
+            if not meta:
+                st.warning("レイアウト情報がありません。")
+                return
 
-            # 2. 表示順の取得 (グリッド設定 > DB JSON > タイムテーブル順)
-            raw_order = []
-            if st.session_state.get("grid_order"):
-                raw_order = st.session_state.grid_order
-            elif proj.grid_order_json:
-                try:
-                    g_data = json.loads(proj.grid_order_json)
-                    raw_order = g_data.get("order", []) if isinstance(g_data, dict) else g_data
-                except: pass
+            click_x = coords['x']
+            click_y = coords['y']
             
-            if not raw_order and rows:
-                raw_order = [r.artist_name for r in sorted(rows, key=lambda x: x.sort_order)]
+            lookup_key = target
+            if target == "grid" or target == "tt": lookup_key = "main"
+            if target == "ticket_name" or target == "ticket_note": lookup_key = "footer_area"
 
-            # 3. フィルタリング実行
-            for name in raw_order:
-                if name in ["開演前物販", "終演後物販"]: continue
-                if hidden_map.get(name, False): continue
-                filtered_artists.append(name)
-
-        except Exception as e:
-            print(f"Artist Filter Error: {e}")
-            filtered_artists = st.session_state.get("grid_order", [])
-
-        # 共通関数でテキスト生成
-        summary_text = build_event_summary_text(
-            title=proj.title,
-            subtitle=proj.subtitle,
-            date_val=proj.event_date,
-            venue=proj.venue_name,
-            url=proj.venue_url,
-            open_time=proj.open_time,
-            start_time=proj.start_time,
-            tickets=tickets,
-            ticket_notes=notes,
-            artists=filtered_artists, 
-            free_texts=free_texts
-        )
+            base_info = meta.get(lookup_key)
+            if base_info:
+                base_x = base_info.get("base_x", 540)
+                base_y = base_info.get("base_y", 675)
+                
+                new_pos_x = click_x - base_x
+                new_pos_y = base_y - click_y
+                
+                param_prefix = f"flyer_{target}"
+                if target in ["grid", "tt"]:
+                    st.session_state[f"{param_prefix}_pos_y"] = new_pos_y
+                    st.toast(f"{move_targets[target]} の位置を更新しました (Y={new_pos_y})")
+                elif target == "logo":
+                    st.warning("ロゴのクリック移動は現在サポートしていません")
+                    return
+                else:
+                    st.session_state[f"{param_prefix}_pos_x"] = new_pos_x
+                    st.session_state[f"{param_prefix}_pos_y"] = new_pos_y
+                    st.toast(f"{move_targets[target]} を移動しました")
+                
+                _generate_preview(db, proj)
+                st.rerun()
 
         with t1:
             if st.session_state.get("flyer_result_grid"):
-                st.image(st.session_state.flyer_result_grid, use_container_width=True)
+                if HAS_CLICK_COORD:
+                    coords = streamlit_image_coordinates(st.session_state.flyer_result_grid, key="coord_grid")
+                    if coords: handle_click(coords, "grid")
+                else:
+                    st.image(st.session_state.flyer_result_grid, use_container_width=True)
+                
                 buf = io.BytesIO()
                 st.session_state.flyer_result_grid.save(buf, format="PNG")
                 st.download_button("DL (Grid)", buf.getvalue(), "flyer_grid.png", "image/png", key="dl_grid_single")
@@ -502,29 +374,51 @@ def render_flyer_editor(project_id):
             
         with t2:
             if st.session_state.get("flyer_result_tt"):
-                st.image(st.session_state.flyer_result_tt, use_container_width=True)
+                if HAS_CLICK_COORD:
+                    coords = streamlit_image_coordinates(st.session_state.flyer_result_tt, key="coord_tt")
+                    if coords: handle_click(coords, "tt")
+                else:
+                    st.image(st.session_state.flyer_result_tt, use_container_width=True)
+
                 buf = io.BytesIO()
                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                 st.download_button("DL (TT)", buf.getvalue(), "flyer_tt.png", "image/png", key="dl_tt_single")
             else: st.info("プレビューを生成してください")
             
+        # アーティストリスト構築
+        filtered_artists = []
+        try:
+            rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).all()
+            hidden_map = {r.artist_name: r.is_hidden for r in rows if r.artist_name}
+            raw_order = []
+            if st.session_state.get("grid_order"): raw_order = st.session_state.grid_order
+            elif proj.grid_order_json:
+                try: raw_order = json.loads(proj.grid_order_json).get("order", [])
+                except: pass
+            if not raw_order and rows: raw_order = [r.artist_name for r in sorted(rows, key=lambda x: x.sort_order)]
+            
+            for name in raw_order:
+                if name in ["開演前物販", "終演後物販"]: continue
+                if hidden_map.get(name, False): continue
+                filtered_artists.append(name)
+        except: filtered_artists = st.session_state.get("grid_order", [])
+
+        summary_text = build_event_summary_text(
+            title=proj.title, subtitle=proj.subtitle, date_val=proj.event_date,
+            venue=proj.venue_name, url=proj.venue_url, open_time=format_time_str(proj.open_time),
+            start_time=format_time_str(proj.start_time), tickets=tickets, ticket_notes=notes,
+            artists=filtered_artists, free_texts=free_texts
+        )
+
         with t3:
-            st.markdown("### 告知用テキストプレビュー")
             st.text_area("内容", value=summary_text, height=300, disabled=True)
-            st.download_button(
-                label="📄 テキストをダウンロード",
-                data=summary_text,
-                file_name=f"event_outline_{proj.id}.txt",
-                mime="text/plain"
-            )
+            st.download_button("📄 テキストをダウンロード", summary_text, f"event_outline_{proj.id}.txt")
 
         with t4:
             st.markdown("### ファイル一括ダウンロード")
-            include_assets = st.checkbox("素材データを含める (透過PNG, CSV, テキスト等)")
-            
+            include_assets = st.checkbox("素材データを含める")
             if st.button("📦 ZIPファイルを生成", type="primary"):
-                if not st.session_state.get("flyer_result_grid"):
-                    st.error("先にプレビューを生成してください。")
+                if not st.session_state.get("flyer_result_grid"): st.error("先にプレビューを生成してください。")
                 else:
                     try:
                         zip_buffer = io.BytesIO()
@@ -532,36 +426,83 @@ def render_flyer_editor(project_id):
                             buf = io.BytesIO()
                             st.session_state.flyer_result_grid.save(buf, format="PNG")
                             zip_file.writestr("Flyer_Grid.png", buf.getvalue())
-                            
                             if st.session_state.get("flyer_result_tt"):
                                 buf = io.BytesIO()
                                 st.session_state.flyer_result_tt.save(buf, format="PNG")
                                 zip_file.writestr("Flyer_Timetable.png", buf.getvalue())
-                            
                             zip_file.writestr("Event_Outline.txt", summary_text)
-
                             if include_assets:
                                 if st.session_state.get("last_generated_grid_image"):
                                     buf = io.BytesIO()
                                     st.session_state.last_generated_grid_image.save(buf, format="PNG")
                                     zip_file.writestr("Source_Grid_Transparent.png", buf.getvalue())
-                                
                                 if st.session_state.get("last_generated_tt_image"):
                                     buf = io.BytesIO()
                                     st.session_state.last_generated_tt_image.save(buf, format="PNG")
                                     zip_file.writestr("Source_Timetable_Transparent.png", buf.getvalue())
-                                
                                 csv_str = generate_timetable_csv_string(proj)
-                                if csv_str:
-                                    zip_file.writestr("Timetable_Data.csv", csv_str)
-
-                        st.download_button(
-                            label="⬇️ ZIPをダウンロード",
-                            data=zip_buffer.getvalue(),
-                            file_name=f"flyer_assets_{proj.id}.zip",
-                            mime="application/zip"
-                        )
-                    except Exception as e:
-                        st.error(f"ZIP生成エラー: {e}")
+                                if csv_str: zip_file.writestr("Timetable_Data.csv", csv_str)
+                        st.download_button("⬇️ ZIPをダウンロード", zip_buffer.getvalue(), f"flyer_assets_{proj.id}.zip", "application/zip")
+                    except Exception as e: st.error(f"ZIP生成エラー: {e}")
 
     db.close()
+
+# プレビュー生成ロジックの切り出し
+def _generate_preview(db, proj):
+    bg_url = None
+    if st.session_state.flyer_bg_id:
+        asset = db.query(Asset).get(st.session_state.flyer_bg_id)
+        if asset: bg_url = get_image_url(asset.image_filename)
+    
+    logo_url = None
+    if st.session_state.flyer_logo_id:
+        asset = db.query(Asset).get(st.session_state.flyer_logo_id)
+        if asset: logo_url = get_image_url(asset.image_filename)
+
+    styles = {k.replace("flyer_",""): v for k, v in st.session_state.items() if k.startswith("flyer_")}
+    
+    v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
+    d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
+    fallback_filename = st.session_state.get("flyer_fallback_font")
+    subtitle_text = proj.subtitle or ""
+    
+    tickets = []; notes = []
+    try: tickets = json.loads(proj.tickets_json)
+    except: pass
+    try: notes = json.loads(proj.ticket_notes_json)
+    except: pass
+
+    with st.spinner("生成中..."):
+        # Grid
+        grid_src = st.session_state.get("last_generated_grid_image")
+        if grid_src:
+            s_grid = styles.copy()
+            s_grid["content_scale_w"] = st.session_state.flyer_grid_scale_w
+            s_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
+            s_grid["content_pos_y"] = st.session_state.flyer_grid_pos_y 
+            
+            # ★戻り値変更: img, meta を受け取る
+            img, meta = create_flyer_image_shadow(
+                db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
+                styles=s_grid, date_text=d_text, venue_text=v_text, subtitle_text=subtitle_text,
+                open_time=format_time_str(proj.open_time), start_time=format_time_str(proj.start_time),
+                ticket_info_list=tickets, common_notes_list=notes, system_fallback_filename=fallback_filename 
+            )
+            st.session_state.flyer_result_grid = img
+            st.session_state.flyer_layout_meta = meta
+
+        # TT
+        tt_src = st.session_state.get("last_generated_tt_image")
+        if tt_src:
+            s_tt = styles.copy()
+            s_tt["content_scale_w"] = st.session_state.flyer_tt_scale_w
+            s_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
+            s_tt["content_pos_y"] = st.session_state.flyer_tt_pos_y 
+            
+            img_tt, _ = create_flyer_image_shadow(
+                db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
+                styles=s_tt, date_text=d_text, venue_text=v_text, subtitle_text=subtitle_text,
+                open_time=format_time_str(proj.open_time), start_time=format_time_str(proj.start_time),
+                ticket_info_list=tickets, common_notes_list=notes, system_fallback_filename=fallback_filename 
+            )
+            st.session_state.flyer_result_tt = img_tt
