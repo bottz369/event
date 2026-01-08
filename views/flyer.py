@@ -5,7 +5,7 @@ import zipfile
 import os
 from datetime import datetime
 
-# ★画像座標取得用コンポーネント
+# ★追加: 画像座標取得用コンポーネント
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
     HAS_CLICK_COORD = True
@@ -15,7 +15,7 @@ except ImportError:
 from database import get_db, TimetableProject, TimetableRow, Asset, get_image_url, SystemFontConfig, FlyerTemplate
 from utils import get_sorted_font_list, create_font_specimen_img
 from utils.text_generator import build_event_summary_text
-from utils.flyer_helpers import format_event_date, format_time_str, generate_timetable_csv_string
+from utils.flyer_helpers import format_event_date, format_time_str, generate_timetable_csv_string, ensure_font_file_exists
 from utils.flyer_generator import create_flyer_image_shadow
 
 # ==========================================
@@ -90,7 +90,7 @@ def render_flyer_editor(project_id):
         st.error("プロジェクトエラー: 指定されたプロジェクトが見つかりません。")
         return
 
-    # ★修正: データ読み込みをここ（関数の最初）に移動して、変数が確実に定義されるようにする
+    # ★修正: データ読み込みをここ（関数の最初）に移動
     tickets = []
     if getattr(proj, "tickets_json", None):
         try: tickets = json.loads(proj.tickets_json)
@@ -144,6 +144,9 @@ def render_flyer_editor(project_id):
     init_s("flyer_time_tri_scale", 1.0)
     init_s("flyer_time_line_gap", 0)
     init_s("flyer_time_alignment", "center")
+    
+    # ★追加: プレビュー表示幅の設定（初期値500px）
+    init_s("flyer_preview_width", 500)
     
     sys_conf = db.query(SystemFontConfig).first()
     def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
@@ -318,6 +321,11 @@ def render_flyer_editor(project_id):
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
         
+        # --- ★追加: プレビュー表示幅スライダー ---
+        # これにより、画面が狭くても画像全体を表示し、座標ズレも補正可能にします
+        st.caption("画面が狭い場合はこの値を小さくして調整してください")
+        prev_width = st.slider("プレビュー表示幅 (px)", 300, 1000, key="flyer_preview_width")
+
         # --- クリック移動モードのUI ---
         if HAS_CLICK_COORD and st.session_state.get("flyer_result_grid"):
             st.info("👇 画像をクリックして位置調整できます")
@@ -331,11 +339,11 @@ def render_flyer_editor(project_id):
 
         # 生成ボタン
         if st.button("プレビューを生成する", type="primary", use_container_width=True):
-            _generate_preview(db, proj) # ★ここも修正済み（画像・メタデータ対応）
+            _generate_preview(db, proj)
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
-        # --- クリックイベント処理関数 ---
+        # --- クリックイベント処理関数 (レスポンシブ対応) ---
         def handle_click(coords, mode="grid"):
             if not coords: return
             target = st.session_state.get("flyer_click_target")
@@ -345,8 +353,17 @@ def render_flyer_editor(project_id):
                 st.warning("レイアウト情報がありません。")
                 return
 
-            click_x = coords['x']
-            click_y = coords['y']
+            # 画像上のクリック座標 (表示幅ベース)
+            click_x_display = coords['x']
+            click_y_display = coords['y']
+            
+            # ★修正: 実際の画像サイズ(1080)に変換
+            display_width = st.session_state.flyer_preview_width
+            original_width = 1080
+            scale_ratio = original_width / display_width
+            
+            click_x = click_x_display * scale_ratio
+            click_y = click_y_display * scale_ratio
             
             lookup_key = target
             if target == "grid" or target == "tt": lookup_key = "main"
@@ -357,8 +374,9 @@ def render_flyer_editor(project_id):
                 base_x = base_info.get("base_x", 540)
                 base_y = base_info.get("base_y", 675)
                 
-                new_pos_x = click_x - base_x
-                new_pos_y = base_y - click_y
+                # Logic: pos_x = click_x - base_x, pos_y = base_y - click_y (Y反転)
+                new_pos_x = int(click_x - base_x)
+                new_pos_y = int(base_y - click_y)
                 
                 param_prefix = f"flyer_{target}"
                 if target in ["grid", "tt"]:
@@ -378,10 +396,15 @@ def render_flyer_editor(project_id):
         with t1:
             if st.session_state.get("flyer_result_grid"):
                 if HAS_CLICK_COORD:
-                    coords = streamlit_image_coordinates(st.session_state.flyer_result_grid, key="coord_grid")
+                    # ★修正: widthを指定して表示
+                    coords = streamlit_image_coordinates(
+                        st.session_state.flyer_result_grid, 
+                        key="coord_grid",
+                        width=st.session_state.flyer_preview_width
+                    )
                     if coords: handle_click(coords, "grid")
                 else:
-                    st.image(st.session_state.flyer_result_grid, use_container_width=True)
+                    st.image(st.session_state.flyer_result_grid, width=st.session_state.flyer_preview_width)
                 
                 buf = io.BytesIO()
                 st.session_state.flyer_result_grid.save(buf, format="PNG")
@@ -391,10 +414,14 @@ def render_flyer_editor(project_id):
         with t2:
             if st.session_state.get("flyer_result_tt"):
                 if HAS_CLICK_COORD:
-                    coords = streamlit_image_coordinates(st.session_state.flyer_result_tt, key="coord_tt")
+                    coords = streamlit_image_coordinates(
+                        st.session_state.flyer_result_tt, 
+                        key="coord_tt",
+                        width=st.session_state.flyer_preview_width
+                    )
                     if coords: handle_click(coords, "tt")
                 else:
-                    st.image(st.session_state.flyer_result_tt, use_container_width=True)
+                    st.image(st.session_state.flyer_result_tt, width=st.session_state.flyer_preview_width)
 
                 buf = io.BytesIO()
                 st.session_state.flyer_result_tt.save(buf, format="PNG")
@@ -482,13 +509,19 @@ def _generate_preview(db, proj):
     fallback_filename = st.session_state.get("flyer_fallback_font")
     subtitle_text = proj.subtitle or ""
     
-    # ★修正: データは渡されるか、ここで再取得するが、上のrender_flyer_editorで読み込んだ変数を使うのが安全
-    # ただ、関数外の変数は参照できないので、ここでも安全に再取得しておく（念のため）
     tickets = []; notes = []
     try: tickets = json.loads(proj.tickets_json)
     except: pass
     try: notes = json.loads(proj.ticket_notes_json)
     except: pass
+
+    # ★追加: フォント読み込み処理
+    # 使用しているフォント(subtitle, date, venue, time, ticket_name, ticket_note) を確保
+    targets = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
+    for t in targets:
+        f_name = styles.get(f"{t}_font")
+        if f_name: ensure_font_file_exists(db, f_name)
+    if fallback_filename: ensure_font_file_exists(db, fallback_filename)
 
     with st.spinner("生成中..."):
         # Grid
@@ -499,7 +532,6 @@ def _generate_preview(db, proj):
             s_grid["content_scale_h"] = st.session_state.flyer_grid_scale_h
             s_grid["content_pos_y"] = st.session_state.flyer_grid_pos_y 
             
-            # ★戻り値変更: img, meta を受け取る
             img, meta = create_flyer_image_shadow(
                 db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
                 styles=s_grid, date_text=d_text, venue_text=v_text, subtitle_text=subtitle_text,
