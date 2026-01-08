@@ -4,18 +4,16 @@ import json
 import traceback
 
 # データベース関連
-# ★修正: TimetableRow を追加インポート
 from database import get_db, TimetableProject, TimetableRow
 from logic_project import save_current_project, load_project_data
 from constants import TIME_OPTIONS
 
-# ★追加: 共通のテキスト生成ロジックをインポート
+# 共通のテキスト生成ロジック
 from utils.text_generator import build_event_summary_text
 
 # ==========================================
 # 定数定義
 # ==========================================
-# 既存の時間リストの先頭に選択肢を追加します
 EXTENDED_TIME_OPTIONS = ["※調整中"] + TIME_OPTIONS
 
 # ==========================================
@@ -51,7 +49,6 @@ def render_overview_page():
         should_restore = False
         if "tt_open_time" not in st.session_state: should_restore = True
         if "tt_start_time" not in st.session_state: should_restore = True
-        # ★追加: サブタイトルが未ロードの場合も復旧対象にする
         if "proj_subtitle" not in st.session_state: should_restore = True
         
         if should_restore:
@@ -59,10 +56,8 @@ def render_overview_page():
             try:
                 proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
                 if proj:
-                    # DB値があれば使う、なければ "※調整中"
                     st.session_state.tt_open_time = proj.open_time or "※調整中"
                     st.session_state.tt_start_time = proj.start_time or "※調整中"
-                    # ★追加: サブタイトルのロード
                     st.session_state.proj_subtitle = getattr(proj, "subtitle", "")
             finally:
                 db.close()
@@ -73,7 +68,6 @@ def render_overview_page():
             db = next(get_db())
             try:
                 load_project_data(db, project_id)
-                # ★追加: load_project_dataでサブタイトルが読まれていない場合の保険
                 if "proj_subtitle" not in st.session_state:
                     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
                     st.session_state.proj_subtitle = getattr(proj, "subtitle", "")
@@ -83,7 +77,7 @@ def render_overview_page():
                     "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
                     "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
                     "title": st.session_state.get("proj_title", ""),
-                    "subtitle": st.session_state.get("proj_subtitle", ""), # ★追加
+                    "subtitle": st.session_state.get("proj_subtitle", ""),
                     "venue": st.session_state.get("proj_venue", ""),
                     "url": st.session_state.get("proj_url", ""),
                     "date": str(st.session_state.get("proj_date", "")),
@@ -99,7 +93,6 @@ def render_overview_page():
     with c_basic1:
         st.date_input("開催日", key="proj_date")
         st.text_input("イベント名", key="proj_title")
-        # ★追加: サブタイトル入力欄
         st.text_input("サブタイトル", key="proj_subtitle", placeholder="例：〜夏の特大号〜")
     with c_basic2:
         st.text_input("会場名", key="proj_venue")
@@ -107,12 +100,9 @@ def render_overview_page():
     
     # --- UI描画: 時間設定 ---
     c_time1, c_time2 = st.columns(2)
-    
-    # 現在の値取得 (なければ ※調整中)
     curr_open = st.session_state.get("tt_open_time", "※調整中")
     curr_start = st.session_state.get("tt_start_time", "※調整中")
     
-    # リストに含まれていない値の場合のフォールバック
     if curr_open not in EXTENDED_TIME_OPTIONS: curr_open = EXTENDED_TIME_OPTIONS[0]
     if curr_start not in EXTENDED_TIME_OPTIONS: curr_start = EXTENDED_TIME_OPTIONS[0]
 
@@ -226,7 +216,6 @@ def render_overview_page():
     st.divider()
 
     # --- 変更検知 ---
-    # プレビュー同期 (ここでも最新の値を入れておく)
     if "ov_tt_open_time" in st.session_state:
         st.session_state.tt_open_time = st.session_state.ov_tt_open_time
     if "ov_tt_start_time" in st.session_state:
@@ -237,7 +226,7 @@ def render_overview_page():
         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
         "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
         "title": st.session_state.get("proj_title", ""),
-        "subtitle": st.session_state.get("proj_subtitle", ""), # ★追加: 検知対象に追加
+        "subtitle": st.session_state.get("proj_subtitle", ""),
         "venue": st.session_state.get("proj_venue", ""),
         "url": st.session_state.get("proj_url", ""),
         "date": str(st.session_state.get("proj_date", "")),
@@ -256,7 +245,6 @@ def render_overview_page():
 
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", use_container_width=True, key="btn_overview_save"):
         
-        # 最終同期
         if "proj_ticket_notes" in st.session_state:
             for i in range(len(st.session_state.proj_ticket_notes)):
                 key = f"t_common_note_{i}"
@@ -265,12 +253,10 @@ def render_overview_page():
         if project_id:
             db = next(get_db())
             try:
-                # 時間・サブタイトルの保存
                 proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
                 if proj:
                     proj.open_time = st.session_state.tt_open_time
                     proj.start_time = st.session_state.tt_start_time
-                    # ★追加: サブタイトルのDB保存（モデルにカラムがある前提）
                     if hasattr(proj, "subtitle"):
                         proj.subtitle = st.session_state.proj_subtitle
 
@@ -282,7 +268,7 @@ def render_overview_page():
                         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
                         "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
                         "title": st.session_state.get("proj_title", ""),
-                        "subtitle": st.session_state.get("proj_subtitle", ""), # ★追加
+                        "subtitle": st.session_state.get("proj_subtitle", ""),
                         "venue": st.session_state.get("proj_venue", ""),
                         "url": st.session_state.get("proj_url", ""),
                         "date": str(st.session_state.get("proj_date", "")),
@@ -302,31 +288,69 @@ def render_overview_page():
             st.error("プロジェクトIDが不明です")
 
     # ==========================================
-    # ★修正: 共通関数を使用してプレビュー生成
+    # ★修正: リスト生成ロジックの刷新
+    # 1. アー写グリッドの設定順 (grid_order) を最優先
+    # 2. タイムテーブルの設定 (is_hidden) と突き合わせて非表示を除外
     # ==========================================
     
-    # Session Stateのリストではなく、DBから最新のアーティスト順を取得して使用する
-    # これにより「非表示」設定が確実に反映される
+    artists_list = []
+    
     if project_id:
         db = next(get_db())
         try:
-            # テーブルから行を取得（非表示を除外）
-            rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).order_by(TimetableRow.sort_order).all()
-            if rows:
-                artists_list = [
-                    r.artist_name for r in rows
-                    if r.artist_name not in ["開演前物販", "終演後物販"]
-                    and not r.is_hidden # ★DBのカラムをチェック
-                ]
-            else:
-                # DBに行がない場合のバックアップ
-                artists_list = st.session_state.get("tt_artists_order", [])
-        except:
-            artists_list = st.session_state.get("tt_artists_order", [])
+            # 1. DBからタイムテーブル情報を全取得（非表示設定の辞書を作るため）
+            rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).all()
+            
+            # アーティスト名 -> 非表示フラグ のマップを作成
+            hidden_map = {}
+            for r in rows:
+                if r.artist_name:
+                    hidden_map[r.artist_name] = r.is_hidden
+
+            # 2. 順序情報の取得（アー写グリッド設定を優先）
+            # まずは現在編集中のセッションステートを確認
+            raw_order = st.session_state.get("grid_order", [])
+            
+            # セッションになければDBの grid_order_json から取得
+            if not raw_order:
+                proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+                if proj and proj.grid_order_json:
+                    try:
+                        grid_data = json.loads(proj.grid_order_json)
+                        if isinstance(grid_data, dict):
+                            raw_order = grid_data.get("order", [])
+                        elif isinstance(grid_data, list):
+                            raw_order = grid_data
+                    except:
+                        pass
+            
+            # それでもなければタイムテーブル順（rowsのsort_order順）をバックアップとして使う
+            if not raw_order and rows:
+                sorted_rows = sorted(rows, key=lambda x: x.sort_order)
+                raw_order = [r.artist_name for r in sorted_rows]
+
+            # 3. リストの構築とフィルタリング (ここが重要)
+            final_artists = []
+            for name in raw_order:
+                # 特殊行は除外
+                if name in ["開演前物販", "終演後物販"]:
+                    continue
+                
+                # hidden_map に問い合わせる。
+                # マップに存在し、かつ True なら非表示なのでスキップ。
+                # マップにない場合（新しく追加されたが未保存など）は一応表示する扱いに。
+                is_hidden = hidden_map.get(name, False)
+                
+                if not is_hidden:
+                    final_artists.append(name)
+            
+            artists_list = final_artists
+
+        except Exception as e:
+            st.error(f"リスト生成エラー: {e}")
+            artists_list = st.session_state.get("grid_order", [])
         finally:
             db.close()
-    else:
-        artists_list = []
     
     generated_text = build_event_summary_text(
         title=st.session_state.get("proj_title", ""),
@@ -338,7 +362,7 @@ def render_overview_page():
         start_time=st.session_state.get("tt_start_time", "※調整中"),
         tickets=st.session_state.get("proj_tickets", []),
         ticket_notes=st.session_state.get("proj_ticket_notes", []),
-        artists=artists_list, # ★修正したリストを渡す
+        artists=artists_list, # ★修正済みのリストを使用
         free_texts=st.session_state.get("proj_free_text", [])
     )
 
