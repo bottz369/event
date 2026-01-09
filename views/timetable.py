@@ -3,10 +3,9 @@ import pandas as pd
 import json
 import io
 import os
-import requests # ★追加: URLダウンロード用
+import requests
 from datetime import datetime, date, timedelta
 
-# ★重要: AssetFile, Asset, get_image_url をインポート
 from database import get_db, SessionLocal, Artist, TimetableProject, AssetFile, Asset, get_image_url
 from constants import (
     TIME_OPTIONS, DURATION_OPTIONS, ADJUSTMENT_OPTIONS, 
@@ -27,28 +26,16 @@ except Exception as e:
     import_error_msg = str(e)
     generate_timetable_image = None
 
-# --- ★強化版: フォント確保関数 (URL対応) ---
+# --- フォント確保関数 ---
 def ensure_font_exists(db, font_filename):
-    """
-    指定されたフォントがローカル(FONT_DIR)にあるか確認し、なければ:
-    1. Assetテーブル (Storage URL)
-    2. AssetFileテーブル (Binary)
-    の順でダウンロードして保存する。
-    """
-    if not font_filename: 
-        return None
-
-    # 絶対パスでディレクトリを確保
+    if not font_filename: return None
     abs_font_dir = os.path.abspath(FONT_DIR)
     os.makedirs(abs_font_dir, exist_ok=True)
-    
     file_path = os.path.join(abs_font_dir, font_filename)
 
-    # すでに有効なファイルがあればパスを返す
     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
         return file_path
 
-    # 1. URL (Storage) から取得
     try:
         asset = db.query(Asset).filter(Asset.image_filename == font_filename).first()
         if asset:
@@ -63,7 +50,6 @@ def ensure_font_exists(db, font_filename):
     except Exception as e:
         print(f"URL Font Download Error: {e}")
 
-    # 2. Binary (DB) から取得 (予備)
     try:
         asset_file = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
         if asset_file and asset_file.file_data:
@@ -132,7 +118,7 @@ def render_timetable_page():
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                                         "PLACE": safe_str(item.get("PLACE")),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★復元
                                     }
                                     continue
                                 if name == "終演後物販":
@@ -140,13 +126,15 @@ def render_timetable_page():
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                                         "PLACE": safe_str(item.get("PLACE")),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★復元
                                     }
                                     continue
                                 
                                 if name:
                                     new_order.append(name)
                                     new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
+                                    
+                                    # ★修正: ここで IS_HIDDEN も読み込んで設定に反映させる
                                     new_row_settings.append({
                                         "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
@@ -156,7 +144,7 @@ def render_timetable_page():
                                         "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
                                         "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
                                         "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False)),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★ここが重要
                                     })
                             st.session_state.tt_artists_order = new_order
                             st.session_state.tt_artist_settings = new_artist_settings
@@ -253,7 +241,7 @@ def render_timetable_page():
                     "ADD_GOODS_DURATION": safe_int(row.get("AddGoodsDuration"), None), 
                     "ADD_GOODS_PLACE": safe_str(row.get("AddGoodsPlace")),
                     "IS_POST_GOODS": bool(row.get("IS_POST_GOODS", False)),
-                    "IS_HIDDEN": False # ★追加: CSV取込時はデフォルト非表示なし
+                    "IS_HIDDEN": False
                 })
 
             st.session_state.tt_artists_order = new_order
@@ -299,7 +287,6 @@ def render_timetable_page():
                     if new_artist:
                         st.session_state.tt_artists_order.append(new_artist)
                         st.session_state.tt_artist_settings[new_artist] = {"DURATION": 20}
-                        # ★追加: 新規行も IS_HIDDEN 初期値 False
                         def_row = get_default_row_settings()
                         def_row["IS_HIDDEN"] = False
                         st.session_state.tt_row_settings.append(def_row)
@@ -330,7 +317,6 @@ def render_timetable_page():
             else:
                 if st.session_state.tt_has_pre_goods: st.session_state.tt_has_pre_goods = False; st.session_state.rebuild_table_flag = True; st.rerun()
 
-            # ★追加: IS_HIDDEN をカラム順に追加
             column_order = ["IS_HIDDEN", "ARTIST", "DURATION", "IS_POST_GOODS", "ADJUSTMENT", "GOODS_START_MANUAL", "GOODS_DURATION", "PLACE", "ADD_GOODS_START", "ADD_GOODS_DURATION", "ADD_GOODS_PLACE"]
             
             if st.session_state.rebuild_table_flag:
@@ -341,7 +327,7 @@ def render_timetable_page():
                         "ARTIST": "開演前物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False, 
                         "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "", 
                         "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":"",
-                        "IS_HIDDEN": bool(p.get("IS_HIDDEN", False)) # ★追加
+                        "IS_HIDDEN": bool(p.get("IS_HIDDEN", False))
                     })
                 while len(st.session_state.tt_row_settings) < len(st.session_state.tt_artists_order):
                     st.session_state.tt_row_settings.append(get_default_row_settings())
@@ -357,7 +343,7 @@ def render_timetable_page():
                         "ADJUSTMENT": safe_int(rd.get("ADJUSTMENT"), 0),
                         "GOODS_START_MANUAL": safe_str(rd.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(rd.get("GOODS_DURATION"), 60), "PLACE": safe_str(rd.get("PLACE")),
                         "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE")),
-                        "IS_HIDDEN": bool(rd.get("IS_HIDDEN", False)) # ★追加
+                        "IS_HIDDEN": bool(rd.get("IS_HIDDEN", False))
                     })
                 if has_post:
                     p = st.session_state.tt_post_goods_settings
@@ -365,7 +351,7 @@ def render_timetable_page():
                         "ARTIST": "終演後物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False,
                         "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
                         "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":"",
-                        "IS_HIDDEN": bool(p.get("IS_HIDDEN", False)) # ★追加
+                        "IS_HIDDEN": bool(p.get("IS_HIDDEN", False))
                     })
 
                 st.session_state.binding_df = pd.DataFrame(rows, columns=column_order)
@@ -383,7 +369,7 @@ def render_timetable_page():
             edited_df = st.data_editor(
                 st.session_state.binding_df, key=current_key, num_rows="fixed", use_container_width=True,
                 column_config={
-                    "IS_HIDDEN": st.column_config.CheckboxColumn("非表示", width="small"), # ★追加
+                    "IS_HIDDEN": st.column_config.CheckboxColumn("非表示", width="small"),
                     "ARTIST": st.column_config.TextColumn("アーティスト", disabled=True),
                     "DURATION": st.column_config.SelectboxColumn("出演", options=DURATION_OPTIONS, width="small"),
                     "IS_POST_GOODS": st.column_config.CheckboxColumn("終演後", width="small"),
@@ -404,7 +390,6 @@ def render_timetable_page():
             for i, row in edited_df.iterrows():
                 name = row["ARTIST"]
                 is_post = bool(row.get("IS_POST_GOODS", False))
-                # ★追加: is_hidden を取得
                 is_hidden = bool(row.get("IS_HIDDEN", False))
 
                 if name == "開演前物販":
@@ -413,7 +398,7 @@ def render_timetable_page():
                         "GOODS_START_MANUAL": st.session_state.tt_open_time, 
                         "GOODS_DURATION": dur, 
                         "PLACE": "",
-                        "IS_HIDDEN": is_hidden # ★追加: 保存
+                        "IS_HIDDEN": is_hidden
                     }
                     continue
                 if name == "終演後物販":
@@ -421,7 +406,7 @@ def render_timetable_page():
                         "GOODS_START_MANUAL": safe_str(row["GOODS_START_MANUAL"]), 
                         "GOODS_DURATION": safe_int(row["GOODS_DURATION"], 60), 
                         "PLACE": "",
-                        "IS_HIDDEN": is_hidden # ★追加: 保存
+                        "IS_HIDDEN": is_hidden
                     }
                     continue
                 if is_post: current_has_post_check = True
@@ -438,7 +423,7 @@ def render_timetable_page():
                     "GOODS_START_MANUAL": g_start, "GOODS_DURATION": g_dur, "PLACE": safe_str(row["PLACE"]),
                     "ADD_GOODS_START": add_start, "ADD_GOODS_DURATION": add_dur, "ADD_GOODS_PLACE": add_place,
                     "IS_POST_GOODS": is_post,
-                    "IS_HIDDEN": is_hidden # ★追加: 保存
+                    "IS_HIDDEN": is_hidden
                 })
             if len(new_row_settings_from_edit) == len(st.session_state.tt_artists_order):
                 st.session_state.tt_row_settings = new_row_settings_from_edit
@@ -469,40 +454,26 @@ def render_timetable_page():
             calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
             st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], use_container_width=True, hide_index=True)
             
-            # ★変更: 画像生成用リストの作成時に IS_HIDDEN を考慮してフィルタリング
+            # 画像生成用リスト (IS_HIDDEN対応)
             gen_list = []
-            
-            # edited_df から IS_HIDDEN のフラグリストを作成（インデックスで紐付けるため）
-            # calculated_df には OPEN/START の行などが追加されている場合があるが、
-            # 基本のアーティスト行は edited_df と順序が一致している前提で処理。
-            # ただし、calculate_timetable_flow が OPEN/START を先頭に追加することを見越して調整。
-            
-            # まずは edited_df 全体の非表示フラグを取得
             hidden_flags = []
             if "IS_HIDDEN" in edited_df.columns:
                 hidden_flags = edited_df["IS_HIDDEN"].tolist()
             else:
                 hidden_flags = [False] * len(edited_df)
             
-            # calculated_df を走査
-            # calculated_df の行数は、通常「OPEN/START(1行)」+「edited_dfの行数」となる
-            # edited_df のカウンターを用意
-            
             edited_row_idx = 0
             
             for _, row in calculated_df.iterrows():
-                # OPEN / START は常に表示（または別ロジックで制御だが、基本アーティスト行ではないのでスルー）
                 if row["ARTIST"] == "OPEN / START": 
                     continue
                 
-                # 対応する edited_df の行が非表示かどうかチェック
                 is_hidden = False
                 if edited_row_idx < len(hidden_flags):
                     is_hidden = hidden_flags[edited_row_idx]
                 
                 edited_row_idx += 1
                 
-                # 非表示ならリストに追加しない
                 if is_hidden:
                     continue
                 
@@ -549,30 +520,22 @@ def render_timetable_page():
             if st.session_state.get("last_generated_tt_image") is None:
                 if generate_timetable_image and gen_list:
                     try:
-                        # ★追加: 初回自動生成時もフォント確保
                         ensure_font_exists(db, st.session_state.tt_font)
-                        
-                        # ★修正: 絶対パスを使用
                         font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
-                        
                         auto_img = generate_timetable_image(gen_list, font_path=font_path)
                         st.session_state.last_generated_tt_image = auto_img
                         st.session_state.tt_last_generated_params = current_tt_params
                     except Exception as e: pass
 
-            # ★重要: 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
-                # ★修正: エラーメッセージがあれば表示
                 if import_error_msg:
                     st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
                 elif generate_timetable_image:
                     if gen_list:
-                        # ★重要: 生成直前に、選択されているフォントを確実にダウンロードする
                         ensure_font_exists(db, st.session_state.tt_font)
 
                         with st.spinner("画像を生成＆保存中..."):
                             try:
-                                # ★修正: 絶対パスを作成して渡す
                                 font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
 
                                 # 1. 画像生成
@@ -583,12 +546,10 @@ def render_timetable_page():
                                 # 2. DB保存用データの準備
                                 proj_to_save = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
                                 if proj_to_save:
-                                    # 時間設定更新
                                     proj_to_save.open_time = st.session_state.tt_open_time
                                     proj_to_save.start_time = st.session_state.tt_start_time
                                     proj_to_save.goods_start_offset = st.session_state.tt_goods_offset
                                     
-                                    # settings_json 更新 (フォント)
                                     settings = {}
                                     if proj_to_save.settings_json:
                                         try: settings = json.loads(proj_to_save.settings_json)
@@ -596,9 +557,7 @@ def render_timetable_page():
                                     settings["tt_font"] = st.session_state.tt_font
                                     proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
                                     
-                                    # データ保存用リスト作成
                                     data_export = []
-                                    # 開演前
                                     if st.session_state.tt_has_pre_goods:
                                         p = st.session_state.tt_pre_goods_settings
                                         data_export.append({
@@ -606,10 +565,9 @@ def render_timetable_page():
                                             "GOODS_START_MANUAL": p.get("GOODS_START_MANUAL"), 
                                             "GOODS_DURATION": p.get("GOODS_DURATION"), 
                                             "PLACE": p.get("PLACE"),
-                                            "IS_HIDDEN": p.get("IS_HIDDEN", False) # ★追加
+                                            "IS_HIDDEN": p.get("IS_HIDDEN", False)
                                         })
                                     
-                                    # 本編
                                     for i, name in enumerate(st.session_state.tt_artists_order):
                                         ad = st.session_state.tt_artist_settings.get(name, {"DURATION": 20})
                                         rd = st.session_state.tt_row_settings[i] if i < len(st.session_state.tt_row_settings) else {}
@@ -625,11 +583,10 @@ def render_timetable_page():
                                             "ADD_GOODS_DURATION": rd.get("ADD_GOODS_DURATION"),
                                             "ADD_GOODS_PLACE": rd.get("ADD_GOODS_PLACE"),
                                             "IS_POST_GOODS": rd.get("IS_POST_GOODS", False),
-                                            "IS_HIDDEN": rd.get("IS_HIDDEN", False) # ★追加
+                                            "IS_HIDDEN": rd.get("IS_HIDDEN", False)
                                         }
                                         data_export.append(item)
                                     
-                                    # 終演後
                                     has_post = any(r.get("IS_POST_GOODS") for r in st.session_state.tt_row_settings)
                                     if has_post:
                                         p = st.session_state.tt_post_goods_settings
@@ -638,16 +595,12 @@ def render_timetable_page():
                                             "GOODS_START_MANUAL": p.get("GOODS_START_MANUAL"), 
                                             "GOODS_DURATION": p.get("GOODS_DURATION"), 
                                             "PLACE": p.get("PLACE"),
-                                            "IS_HIDDEN": p.get("IS_HIDDEN", False) # ★追加
+                                            "IS_HIDDEN": p.get("IS_HIDDEN", False)
                                         })
 
-                                    # JSONにも一応保存 (互換性のため)
                                     proj_to_save.data_json = json.dumps(data_export, ensure_ascii=False)
-
-                                    # 3. DBへコミット (JSON保存分)
                                     save_current_project(db, selected_id)
                                     
-                                    # ★重要: 新しいテーブルにも確実に保存
                                     if save_timetable_rows(db, selected_id, data_export):
                                         st.toast("保存＆プレビュー更新完了！", icon="✅")
                                     else:
@@ -660,7 +613,6 @@ def render_timetable_page():
                     else:
                         st.warning("データがありません")
                 else:
-                    # ここに来るということは import_error_msg もなく、generate_timetable_image も None
                     st.error("ロジックエラー: 理由不明のロード失敗です。アプリを再起動してください。")
 
             is_outdated = False
