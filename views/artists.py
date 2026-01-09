@@ -154,19 +154,25 @@ def render_artists_page():
 
                         col_slide1, col_slide2 = st.columns(2)
                         with col_slide1:
-                            # ★変更: 最小値を0.1にして縮小可能に。ラベルも変更。
                             new_scale = st.slider("ズーム/縮小", 0.1, 3.0, float(current_scale), 0.1, key=f"sc_{a.id}")
                         with col_slide2:
                             if st.button("位置リセット", key=f"rst_{a.id}"):
-                                # 初期値に戻してリロード（未保存の変更は破棄されます）
+                                # 初期値に戻す
                                 a.crop_scale = 1.0
                                 a.crop_x = 0
                                 a.crop_y = 0
                                 db.commit()
+                                
+                                # ★重要: スライダーのセッション状態も強制的にリセット
+                                if f"sc_{a.id}" in st.session_state: st.session_state[f"sc_{a.id}"] = 1.0
+                                if f"sx_{a.id}" in st.session_state: st.session_state[f"sx_{a.id}"] = 0
+                                if f"sy_{a.id}" in st.session_state: st.session_state[f"sy_{a.id}"] = 0
+                                
                                 st.rerun()
 
-                        new_x = st.slider("左右 (X)", -200, 200, int(current_x), 5, key=f"sx_{a.id}")
-                        new_y = st.slider("上下 (Y)", -112, 112, int(current_y), 5, key=f"sy_{a.id}")
+                        # ★修正: step=1 にして 1ピクセル単位で動かせるように変更
+                        new_x = st.slider("左右 (X)", -200, 200, int(current_x), 1, key=f"sx_{a.id}")
+                        new_y = st.slider("上下 (Y)", -112, 112, int(current_y), 1, key=f"sy_{a.id}")
 
                         # プレビュー表示
                         preview_filename = a.image_filename
