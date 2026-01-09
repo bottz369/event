@@ -11,6 +11,8 @@ from views.workspace import render_workspace_page   # 統合ワークスペー�
 from views.projects import render_projects_page    # プロジェクト管理
 from views.assets import render_assets_page        # 素材アーカイブ（アセット管理）
 from views.artists import render_artists_page      # アーティスト管理
+# ★追加: テンプレート管理画面のインポート (ファイル名: views/template.py)
+from views.template import render_template_management_page
 
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
@@ -52,7 +54,8 @@ if "last_menu" not in st.session_state: st.session_state.last_menu = "ワーク�
 st.sidebar.title("メニュー")
 
 # メニュー構成の変更
-menu_items = ["ワークスペース", "プロジェクト管理", "アーティスト管理", "アセット管理"]
+# ★追加: 「テンプレート管理」を追加
+menu_items = ["ワークスペース", "プロジェクト管理", "テンプレート管理", "アーティスト管理", "アセット管理"]
 menu_selection = st.sidebar.radio("機能を選択", menu_items, key="sb_menu")
 
 # ==========================================
@@ -69,6 +72,10 @@ if current_page == "ワークスペース":
 
 elif current_page == "プロジェクト管理":
     render_projects_page()
+
+# ★追加: テンプレート管理画面への遷移
+elif current_page == "テンプレート管理":
+    render_template_management_page()
 
 elif current_page == "アーティスト管理":
     render_artists_page()
