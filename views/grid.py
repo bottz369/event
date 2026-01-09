@@ -23,25 +23,14 @@ except ImportError:
 
 # --- フォント確保関数 (URL対応版) ---
 def check_and_download_font(db, font_filename):
-    """
-    指定されたフォントファイルがローカルになければ、
-    1. Assetテーブル (Storage URL)
-    2. AssetFileテーブル (Binary)
-    の順で検索してダウンロードする
-    """
     if not font_filename: return
-
-    # パスズレ防止のため絶対パスを使用
     abs_font_dir = os.path.abspath(FONT_DIR)
     os.makedirs(abs_font_dir, exist_ok=True)
-    
     file_path = os.path.join(abs_font_dir, font_filename)
 
-    # すでに有効なファイルがあればOK
     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
         return
 
-    # 1. Assetテーブル (Storage URL) から取得を試みる
     try:
         asset = db.query(Asset).filter(Asset.image_filename == font_filename).first()
         if asset:
@@ -56,7 +45,6 @@ def check_and_download_font(db, font_filename):
     except Exception as e:
         print(f"URL Download Error: {e}")
 
-    # 2. AssetFileテーブル (Binary) から取得を試みる (予備)
     try:
         asset_file = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
         if asset_file and asset_file.file_data:
@@ -114,20 +102,30 @@ def render_grid_page():
                         
                         if rows:
                             # テーブルから取得できた場合
-                            tt_artists = [
-                                r.artist_name for r in rows
-                                if r.artist_name not in ["開演前物販", "終演後物販"]
-                                and not r.is_hidden # ★DBカラムを直接チェック
-                            ]
+                            tt_artists = []
+                            for r in rows:
+                                # 除外リストに含まれるかチェック
+                                if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]:
+                                    continue
+                                # 非表示フラグをチェック
+                                if r.is_hidden:
+                                    continue
+                                tt_artists.append(r.artist_name)
+
                             st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                        
                         elif proj.data_json:
                             # DBに行がない場合のバックアップ (旧仕様互換)
                             d = json.loads(proj.data_json)
-                            tt_artists = [
-                                i["ARTIST"] for i in d 
-                                if i["ARTIST"] not in ["開演前物販", "終演後物販"]
-                                and not i.get("IS_HIDDEN", False)
-                            ]
+                            tt_artists = []
+                            for i in d:
+                                name = i.get("ARTIST", "")
+                                if name in ["開演前物販", "終演後物販", "転換", "調整"]:
+                                    continue
+                                if i.get("IS_HIDDEN", False):
+                                    continue
+                                tt_artists.append(name)
+
                             st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                     except Exception as e:
                         print(f"Initial Load Error: {e}")
@@ -171,7 +169,7 @@ def render_grid_page():
                         tt_artists = []
                         for r in rows:
                             # 除外条件
-                            if r.artist_name in ["開演前物販", "終演後物販"]:
+                            if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]:
                                 continue
                             if r.is_hidden: # ★ここでDBの is_hidden カラムを確認
                                 continue
@@ -186,11 +184,15 @@ def render_grid_page():
                         # テーブルが空の場合のバックアップ (JSON利用)
                         proj_temp = temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first()
                         d = json.loads(proj_temp.data_json)
-                        tt_artists = [
-                            i["ARTIST"] for i in d 
-                            if i["ARTIST"] not in ["開演前物販", "終演後物販"]
-                            and not i.get("IS_HIDDEN", False)
-                        ]
+                        tt_artists = []
+                        for i in d:
+                            name = i.get("ARTIST", "")
+                            if name in ["開演前物販", "終演後物販", "転換", "調整"]:
+                                continue
+                            if i.get("IS_HIDDEN", False):
+                                continue
+                            tt_artists.append(name)
+                            
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         st.toast("JSONから構成を読み込みました", icon="🔄")
                     
