@@ -13,15 +13,24 @@ from utils import safe_int, safe_str, calculate_timetable_flow
 
 from logic_project import save_current_project, duplicate_project, load_timetable_rows
 
-# 画像生成ロジックの読み込み
+# --- 画像生成ロジックの読み込み ---
 try:
     from logic_timetable import generate_timetable_image
-except:
+except ImportError:
     generate_timetable_image = None
+
 try:
+    # グリッド生成関数の読み込み
     from views.grid import generate_grid_image_buffer 
-except:
+except ImportError:
     generate_grid_image_buffer = None
+
+try:
+    # ★追加: フライヤー生成関数の読み込み
+    # views/flyer.py に generate_flyer_image があると仮定しています
+    from views.flyer import generate_flyer_image
+except ImportError:
+    generate_flyer_image = None
 
 from views.overview import render_overview_page 
 from views.timetable import render_timetable_page 
@@ -191,6 +200,7 @@ def load_project_to_session(proj):
     st.session_state.tt_last_generated_params = None
     st.session_state.last_generated_grid_image = None
     st.session_state.grid_last_generated_params = None
+    st.session_state.last_generated_flyer_image = None # フライヤー用キャッシュもリセット
     st.session_state.overview_text_preview = None
 
 # --- フォント準備関数 (絶対パス対応) ---
@@ -252,9 +262,13 @@ def prepare_active_project_fonts(db):
 def ensure_generated_contents(db):
     """
     リロード時などに画像キャッシュがない場合、保存された設定とフォントを使って
-    タイムテーブル画像とグリッド画像を自動生成する。
+    タイムテーブル、グリッド、フライヤー画像を自動生成する。
     """
+    font_dir_abs = os.path.abspath(FONT_DIR)
+
+    # ---------------------------------------------------------
     # 1. タイムテーブル画像の自動生成
+    # ---------------------------------------------------------
     if st.session_state.get("last_generated_tt_image") is None:
         if generate_timetable_image and "tt_artists_order" in st.session_state:
             try:
@@ -335,13 +349,11 @@ def ensure_generated_contents(db):
                 
                 # 画像生成実行
                 if gen_list:
-                    font_dir_abs = os.path.abspath(FONT_DIR)
                     font_path = os.path.join(font_dir_abs, st.session_state.tt_font)
                     
                     img = generate_timetable_image(gen_list, font_path=font_path)
                     st.session_state.last_generated_tt_image = img
                     
-                    # ★追加: ここでパラメータを保存することで「変更あり」警告を防ぐ
                     st.session_state.tt_last_generated_params = {
                         "gen_list": gen_list,
                         "font": st.session_state.tt_font
@@ -350,8 +362,68 @@ def ensure_generated_contents(db):
             except Exception as e:
                 print(f"Auto-generate TT failed: {e}")
 
+    # ---------------------------------------------------------
     # 2. グリッド画像の自動生成
-    pass
+    # ---------------------------------------------------------
+    if st.session_state.get("last_generated_grid_image") is None:
+        if generate_grid_image_buffer and "grid_order" in st.session_state and st.session_state.grid_order:
+            try:
+                # アーティスト情報の取得
+                target_names = st.session_state.grid_order
+                artists_map = {}
+                artists = db.query(Artist).filter(Artist.name.in_(target_names)).all()
+                for a in artists:
+                    artists_map[a.name] = a
+                
+                # 並び順通りにArtistオブジェクトのリストを作成
+                ordered_artists = []
+                for name in target_names:
+                    if name in artists_map:
+                        ordered_artists.append(artists_map[name])
+                
+                if ordered_artists:
+                    font_path = os.path.join(font_dir_abs, st.session_state.get("grid_font", "keifont.ttf"))
+                    
+                    # グリッド生成実行 (generate_grid_image_bufferの引数は実際のviews/grid.pyの実装に依存します)
+                    # ここでは標準的な引数を想定しています。エラー時はcatchされます。
+                    img_buffer = generate_grid_image_buffer(
+                        artists=ordered_artists,
+                        cols=st.session_state.get("grid_cols", 5),
+                        rows=st.session_state.get("grid_rows", 5),
+                        font_path=font_path,
+                        alignment=st.session_state.get("grid_alignment", "中央揃え"),
+                        layout_mode=st.session_state.get("grid_layout_mode", "レンガ (サイズ統一)"),
+                        row_counts_str=st.session_state.get("grid_row_counts_str", "5,5,5,5,5")
+                    )
+                    
+                    if img_buffer:
+                        st.session_state.last_generated_grid_image = img_buffer
+                        st.session_state.grid_last_generated_params = {
+                            "order": target_names,
+                            "cols": st.session_state.get("grid_cols", 5)
+                        }
+            except Exception as e:
+                print(f"Auto-generate Grid failed: {e}")
+
+    # ---------------------------------------------------------
+    # 3. フライヤー画像の自動生成
+    # ---------------------------------------------------------
+    if st.session_state.get("last_generated_flyer_image") is None:
+        if generate_flyer_image:
+            try:
+                # generate_flyer_imageの実装に合わせて引数を渡す必要があります
+                # プロジェクトIDやセッションステートからデータを取得する形式を想定
+                project_id = st.session_state.get("tt_current_proj_id")
+                if project_id:
+                     # ここでは単純に generate_flyer_image() などを呼び出しています
+                     # 必要であれば generate_flyer_image(project_id) のように引数を調整してください
+                    img = generate_flyer_image(project_id) 
+                    
+                    if img:
+                        st.session_state.last_generated_flyer_image = img
+            except Exception as e:
+                print(f"Auto-generate Flyer failed: {e}")
+
 
 # --- メイン描画 ---
 def render_workspace_page():
@@ -461,6 +533,7 @@ def render_workspace_page():
         prepare_active_project_fonts(db)
         
         # 2. コンテンツ自動生成（絶対パス使用）
+        # ★ここでタイムテーブル、グリッド、フライヤーの3つを自動生成します
         ensure_generated_contents(db)
 
         proj_check = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
