@@ -260,12 +260,10 @@ def ensure_generated_contents(db):
             try:
                 # データの構築
                 rows = []
-                # ★追加: 非表示フラグを管理するリスト
                 hidden_flags = []
 
                 if st.session_state.get("tt_has_pre_goods"):
                     p = st.session_state.tt_pre_goods_settings
-                    # フラグ取得
                     is_h = bool(p.get("IS_HIDDEN", False))
                     hidden_flags.append(is_h)
                     rows.append({
@@ -285,7 +283,6 @@ def ensure_generated_contents(db):
                         rd = get_default_row_settings()
 
                     is_p = bool(rd.get("IS_POST_GOODS", False))
-                    # フラグ取得
                     is_h = bool(rd.get("IS_HIDDEN", False))
                     hidden_flags.append(is_h)
 
@@ -317,19 +314,17 @@ def ensure_generated_contents(db):
                 
                 # 生成リスト作成
                 gen_list = []
-                flag_idx = 0 # hidden_flags用インデックス
+                flag_idx = 0 
 
                 for _, row in calc_df.iterrows():
-                    # OPEN/START行はスキップ (画像生成には含めない、かつhidden_flagsとも対応しない)
                     if row["ARTIST"] == "OPEN / START": 
                         continue
                     
-                    # hidden_flagsを確認してスキップ判定
                     is_hidden = False
                     if flag_idx < len(hidden_flags):
                         is_hidden = hidden_flags[flag_idx]
                     
-                    flag_idx += 1 # 次の行へ
+                    flag_idx += 1 
 
                     if is_hidden:
                         continue
@@ -340,12 +335,17 @@ def ensure_generated_contents(db):
                 
                 # 画像生成実行
                 if gen_list:
-                    # ★重要: ここでも絶対パスを作成して渡す
                     font_dir_abs = os.path.abspath(FONT_DIR)
                     font_path = os.path.join(font_dir_abs, st.session_state.tt_font)
                     
                     img = generate_timetable_image(gen_list, font_path=font_path)
                     st.session_state.last_generated_tt_image = img
+                    
+                    # ★追加: ここでパラメータを保存することで「変更あり」警告を防ぐ
+                    st.session_state.tt_last_generated_params = {
+                        "gen_list": gen_list,
+                        "font": st.session_state.tt_font
+                    }
             
             except Exception as e:
                 print(f"Auto-generate TT failed: {e}")
