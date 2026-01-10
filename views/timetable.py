@@ -118,7 +118,7 @@ def render_timetable_page():
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                                         "PLACE": safe_str(item.get("PLACE")),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★復元
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
                                     }
                                     continue
                                 if name == "終演後物販":
@@ -126,7 +126,7 @@ def render_timetable_page():
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                                         "PLACE": safe_str(item.get("PLACE")),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★復元
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
                                     }
                                     continue
                                 
@@ -134,7 +134,6 @@ def render_timetable_page():
                                     new_order.append(name)
                                     new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
                                     
-                                    # ★修正: ここで IS_HIDDEN も読み込んで設定に反映させる
                                     new_row_settings.append({
                                         "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
@@ -144,7 +143,7 @@ def render_timetable_page():
                                         "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
                                         "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
                                         "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False)),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★ここが重要
+                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
                                     })
                             st.session_state.tt_artists_order = new_order
                             st.session_state.tt_artist_settings = new_artist_settings
@@ -257,8 +256,23 @@ def render_timetable_page():
         
         # 設定エリア
         col_p1, col_p2, col_p3 = st.columns(3)
-        with col_p1: st.selectbox("開場時間", TIME_OPTIONS, key="tt_open_time", on_change=mark_dirty)
-        with col_p2: st.selectbox("開演時間", TIME_OPTIONS, key="tt_start_time", on_change=mark_dirty)
+        
+        # 現在の値を取得
+        curr_open = st.session_state.get("tt_open_time", "10:00")
+        curr_start = st.session_state.get("tt_start_time", "10:30")
+        
+        # 選択肢リスト内でのインデックスを取得 (見つからなければ0)
+        try: idx_open = TIME_OPTIONS.index(curr_open)
+        except ValueError: idx_open = 0
+        
+        try: idx_start = TIME_OPTIONS.index(curr_start)
+        except ValueError: idx_start = 0
+
+        with col_p1: 
+            st.selectbox("開場時間", TIME_OPTIONS, index=idx_open, key="tt_open_time", on_change=mark_dirty)
+        with col_p2: 
+            st.selectbox("開演時間", TIME_OPTIONS, index=idx_start, key="tt_start_time", on_change=mark_dirty)
+        
         with col_p3: st.number_input("物販開始オフセット(分)", min_value=0, key="tt_goods_offset", on_change=mark_dirty)
         
         if st.button("🔄 時間を再計算して反映"):
