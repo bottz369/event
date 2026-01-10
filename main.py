@@ -1,11 +1,22 @@
 import streamlit as st
+import pandas as pd
 from datetime import date
 from database import init_db
 from constants import get_default_row_settings
+
+# --- 各ページ（ビュー）のインポート ---
+# views/workspace.py (メイン作業場: 概要/TT/グリッド/フライヤー)
+from views.workspace import render_workspace_page
+# views/projects.py (管理: 保存データ一覧/PDF出力/削除)
 from views.projects import render_projects_page
-from views.timetable import render_timetable_page
-from views.grid import render_grid_page
+# views/artists.py (マスタ: アーティスト登録/編集)
 from views.artists import render_artists_page
+# views/assets.py (マスタ: 素材・フォント管理)
+from views.assets import render_assets_page
+# views/manual.py (マニュアル: 使い方)
+from views.manual import render_manual_page
+# views/template.py (テンプレート管理)
+from views.template import render_template_management_page
 
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
@@ -32,22 +43,37 @@ if "tt_goods_offset" not in st.session_state: st.session_state.tt_goods_offset =
 if "request_calc" not in st.session_state: st.session_state.request_calc = False
 if "tt_current_proj_id" not in st.session_state: st.session_state.tt_current_proj_id = None
 if "tt_unsaved_changes" not in st.session_state: st.session_state.tt_unsaved_changes = False
-if "last_menu" not in st.session_state: st.session_state.last_menu = "プロジェクト"
+if "last_menu" not in st.session_state: st.session_state.last_menu = "プロジェクト・ワークスペース"
 
 # ==========================================
 # サイドバー & メニュー
 # ==========================================
 st.sidebar.title("メニュー")
-menu_selection = st.sidebar.radio("機能を選択", ["プロジェクト", "タイムテーブル作成", "アー写グリッド作成", "アーティスト管理"], key="sb_menu")
+
+# 機能構成の整理
+# Workspaceに「タイムテーブル」「グリッド」「フライヤー」が含まれるため統合
+menu_options = [
+    "プロジェクト・ワークスペース", # 新規作成・編集・画像生成 (Main)
+    "プロジェクト管理",            # 一覧・PDF出力・削除 (Projects)
+    "アーティスト管理",            # マスタ (Artists)
+    "素材・フォント管理",          # マスタ (Assets)
+    "テンプレート管理",            # マスタ (Templates)
+    "使い方マニュアル"             # Manual
+]
+
+menu_selection = st.sidebar.radio("機能を選択", menu_options, key="sb_menu")
 
 def revert_nav():
     st.session_state.sb_menu = st.session_state.last_menu
 
 current_page = menu_selection
 
-# 保存確認（タイムテーブル作成時のみ警告）
-if st.session_state.tt_unsaved_changes and menu_selection != st.session_state.last_menu:
-    st.warning("⚠️ タイムテーブル作成に未保存の変更があります！")
+# 保存確認（ワークスペース使用時、未保存があれば警告）
+# ※ 簡易実装として、ワークスペースから他へ移動するときのみチェック
+is_leaving_workspace = (st.session_state.last_menu == "プロジェクト・ワークスペース" and current_page != "プロジェクト・ワークスペース")
+
+if st.session_state.tt_unsaved_changes and is_leaving_workspace:
+    st.warning("⚠️ ワークスペースに未保存の変更があります！")
     col_nav1, col_nav2 = st.columns(2)
     with col_nav1:
         if st.button("変更を破棄して移動する"):
@@ -57,6 +83,7 @@ if st.session_state.tt_unsaved_changes and menu_selection != st.session_state.la
     with col_nav2:
         if st.button("キャンセル（元の画面に戻る）", on_click=revert_nav):
             st.rerun()
+    # キャンセルされた場合は移動しないように見せるため、描画対象を直前のものに戻す
     current_page = st.session_state.last_menu
 else:
     st.session_state.last_menu = menu_selection
@@ -65,11 +92,26 @@ else:
 # ==========================================
 # ルーティング
 # ==========================================
-if current_page == "プロジェクト":
+if current_page == "プロジェクト・ワークスペース":
+    # 統合された編集画面 (概要/TT/グリッド/フライヤー)
+    render_workspace_page()
+
+elif current_page == "プロジェクト管理":
+    # データ一覧、PDF出力、削除
     render_projects_page()
-elif current_page == "タイムテーブル作成":
-    render_timetable_page()
-elif current_page == "アー写グリッド作成":
-    render_grid_page()
+
 elif current_page == "アーティスト管理":
+    # 出演者登録、画像トリミング
     render_artists_page()
+
+elif current_page == "素材・フォント管理":
+    # ロゴ、背景、フォント登録
+    render_assets_page()
+
+elif current_page == "テンプレート管理":
+    # フライヤーテンプレートの管理
+    render_template_management_page()
+
+elif current_page == "使い方マニュアル":
+    # マニュアル表示
+    render_manual_page()
