@@ -28,7 +28,7 @@ from views.timetable import render_timetable_page
 from views.grid import render_grid_page
 from views.flyer import render_flyer_editor
 
-# --- プロジェクトデータのロード関数 (変更なし) ---
+# --- プロジェクトデータのロード関数 ---
 def load_project_to_session(proj):
     """DBから読み込んだプロジェクト情報をセッションステートに展開する"""
     st.session_state.tt_current_proj_id = proj.id
@@ -73,6 +73,7 @@ def load_project_to_session(proj):
                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                         "PLACE": safe_str(item.get("PLACE")),
+                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加: 非表示フラグ復元
                     }
                     continue
                 if name == "終演後物販":
@@ -80,6 +81,7 @@ def load_project_to_session(proj):
                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                         "PLACE": safe_str(item.get("PLACE")),
+                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加: 非表示フラグ復元
                     }
                     continue
                 if name:
@@ -93,7 +95,8 @@ def load_project_to_session(proj):
                         "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
                         "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
                         "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
-                        "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False))
+                        "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False)),
+                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加: 非表示フラグ復元
                     })
             st.session_state.tt_artists_order = new_order
             st.session_state.tt_artist_settings = new_artist_settings
