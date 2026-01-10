@@ -257,11 +257,11 @@ def render_timetable_page():
         # 設定エリア
         col_p1, col_p2, col_p3 = st.columns(3)
         
-        # 現在の値を取得
+        # --- ★修正: indexを指定して状態を固定 ---
         curr_open = st.session_state.get("tt_open_time", "10:00")
         curr_start = st.session_state.get("tt_start_time", "10:30")
         
-        # 選択肢リスト内でのインデックスを取得 (見つからなければ0)
+        # TIME_OPTIONS内のインデックスを取得
         try: idx_open = TIME_OPTIONS.index(curr_open)
         except ValueError: idx_open = 0
         
