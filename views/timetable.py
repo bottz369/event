@@ -88,9 +88,14 @@ def render_timetable_page():
                 try: st.session_state.tt_event_date = datetime.strptime(proj.event_date, "%Y-%m-%d").date() if proj.event_date else date.today()
                 except: st.session_state.tt_event_date = date.today()
                 st.session_state.tt_venue = proj.venue_name
-                st.session_state.tt_open_time = proj.open_time or "10:00"
-                st.session_state.tt_start_time = proj.start_time or "10:30"
-                st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
+                
+                # ★修正: デフォルト値の初期化のみ行い、ウィジェットでの上書き警告を防ぐ
+                if "tt_open_time" not in st.session_state:
+                     st.session_state.tt_open_time = proj.open_time or "10:00"
+                if "tt_start_time" not in st.session_state:
+                     st.session_state.tt_start_time = proj.start_time or "10:30"
+                if "tt_goods_offset" not in st.session_state:
+                     st.session_state.tt_goods_offset = proj.goods_start_offset if proj.goods_start_offset is not None else 5
                 
                 if "tt_font" not in st.session_state:
                     st.session_state.tt_font = "keifont.ttf"
@@ -257,21 +262,11 @@ def render_timetable_page():
         # 設定エリア
         col_p1, col_p2, col_p3 = st.columns(3)
         
-        # --- ★修正: indexを指定して状態を固定 ---
-        curr_open = st.session_state.get("tt_open_time", "10:00")
-        curr_start = st.session_state.get("tt_start_time", "10:30")
-        
-        # TIME_OPTIONS内のインデックスを取得
-        try: idx_open = TIME_OPTIONS.index(curr_open)
-        except ValueError: idx_open = 0
-        
-        try: idx_start = TIME_OPTIONS.index(curr_start)
-        except ValueError: idx_start = 0
-
+        # --- ★修正: index引数を削除し、keyによるSession State連携のみにする ---
         with col_p1: 
-            st.selectbox("開場時間", TIME_OPTIONS, index=idx_open, key="tt_open_time", on_change=mark_dirty)
+            st.selectbox("開場時間", TIME_OPTIONS, key="tt_open_time", on_change=mark_dirty)
         with col_p2: 
-            st.selectbox("開演時間", TIME_OPTIONS, index=idx_start, key="tt_start_time", on_change=mark_dirty)
+            st.selectbox("開演時間", TIME_OPTIONS, key="tt_start_time", on_change=mark_dirty)
         
         with col_p3: st.number_input("物販開始オフセット(分)", min_value=0, key="tt_goods_offset", on_change=mark_dirty)
         
