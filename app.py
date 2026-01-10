@@ -11,8 +11,9 @@ from views.workspace import render_workspace_page   # 統合ワークスペー�
 from views.projects import render_projects_page    # プロジェクト管理
 from views.assets import render_assets_page        # 素材アーカイブ（アセット管理）
 from views.artists import render_artists_page      # アーティスト管理
-# ★追加: テンプレート管理画面のインポート (ファイル名: views/template.py)
-from views.template import render_template_management_page
+from views.template import render_template_management_page # テンプレート管理
+# ★追加: マニュアル画面のインポート
+from views.manual import render_manual_page
 
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
@@ -53,16 +54,49 @@ if "last_menu" not in st.session_state: st.session_state.last_menu = "ワーク�
 # ==========================================
 st.sidebar.title("メニュー")
 
-# メニュー構成の変更
-# ★追加: 「テンプレート管理」を追加
-menu_items = ["ワークスペース", "プロジェクト管理", "テンプレート管理", "アーティスト管理", "アセット管理"]
+# メニュー構成
+# ★追加: 「使い方マニュアル」をリストに追加
+menu_items = [
+    "ワークスペース", 
+    "プロジェクト管理", 
+    "テンプレート管理", 
+    "アーティスト管理", 
+    "アセット管理", 
+    "使い方マニュアル"
+]
 menu_selection = st.sidebar.radio("機能を選択", menu_items, key="sb_menu")
 
 # ==========================================
-# ページ遷移
+# ページ遷移制御 (保存確認ロジック)
 # ==========================================
-st.session_state.last_menu = menu_selection
+def revert_nav():
+    """ナビゲーションを元に戻すコールバック"""
+    st.session_state.sb_menu = st.session_state.last_menu
+
 current_page = menu_selection
+
+# ワークスペースから他へ移動する際、未保存の変更があれば警告を出す
+# (last_menuがワークスペースで、今回がそれ以外の場合に発動)
+is_leaving_workspace = (st.session_state.last_menu == "ワークスペース" and current_page != "ワークスペース")
+
+if st.session_state.tt_unsaved_changes and is_leaving_workspace:
+    st.warning("⚠️ ワークスペースに未保存の変更があります！")
+    col_nav1, col_nav2 = st.columns(2)
+    with col_nav1:
+        if st.button("変更を破棄して移動する"):
+            st.session_state.tt_unsaved_changes = False
+            st.session_state.last_menu = menu_selection
+            st.rerun()
+    with col_nav2:
+        if st.button("キャンセル（元の画面に戻る）", on_click=revert_nav):
+            st.rerun()
+    
+    # ユーザーが選択するまでは画面遷移させない
+    current_page = st.session_state.last_menu
+else:
+    # 移動承認、または警告不要な場合
+    st.session_state.last_menu = menu_selection
+    current_page = menu_selection
 
 # ==========================================
 # ルーティング
@@ -73,7 +107,6 @@ if current_page == "ワークスペース":
 elif current_page == "プロジェクト管理":
     render_projects_page()
 
-# ★追加: テンプレート管理画面への遷移
 elif current_page == "テンプレート管理":
     render_template_management_page()
 
@@ -81,5 +114,7 @@ elif current_page == "アーティスト管理":
     render_artists_page()
 
 elif current_page == "アセット管理":
-    # 以前の「素材アーカイブ」を表示
     render_assets_page()
+
+elif current_page == "使い方マニュアル":
+    render_manual_page()
