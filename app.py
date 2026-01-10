@@ -57,7 +57,6 @@ if "last_menu" not in st.session_state: st.session_state.last_menu = "ワーク�
 st.sidebar.title("メニュー")
 
 # メニュー構成
-# ★追加: 「AIコンテキスト出力」を追加
 menu_items = [
     "ワークスペース", 
     "プロジェクト管理", 
@@ -71,35 +70,11 @@ menu_items = [
 menu_selection = st.sidebar.radio("機能を選択", menu_items, key="sb_menu")
 
 # ==========================================
-# ページ遷移制御 (保存確認ロジック)
+# ページ遷移制御
 # ==========================================
-def revert_nav():
-    """ナビゲーションを元に戻すコールバック"""
-    st.session_state.sb_menu = st.session_state.last_menu
-
+# 警告ロジックを削除し、選択されたメニューへ即座に移動するように修正
+st.session_state.last_menu = menu_selection
 current_page = menu_selection
-
-# ワークスペースから他へ移動する際、未保存の変更があれば警告を出す
-is_leaving_workspace = (st.session_state.last_menu == "ワークスペース" and current_page != "ワークスペース")
-
-if st.session_state.tt_unsaved_changes and is_leaving_workspace:
-    st.warning("⚠️ ワークスペースに未保存の変更があります！")
-    col_nav1, col_nav2 = st.columns(2)
-    with col_nav1:
-        if st.button("変更を破棄して移動する"):
-            st.session_state.tt_unsaved_changes = False
-            st.session_state.last_menu = menu_selection
-            st.rerun()
-    with col_nav2:
-        if st.button("キャンセル（元の画面に戻る）", on_click=revert_nav):
-            st.rerun()
-    
-    # ユーザーが選択するまでは画面遷移させない
-    current_page = st.session_state.last_menu
-else:
-    # 移動承認、または警告不要な場合
-    st.session_state.last_menu = menu_selection
-    current_page = menu_selection
 
 # ==========================================
 # ルーティング
