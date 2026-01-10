@@ -12,8 +12,9 @@ from views.projects import render_projects_page    # プロジェクト管理
 from views.assets import render_assets_page        # 素材アーカイブ（アセット管理）
 from views.artists import render_artists_page      # アーティスト管理
 from views.template import render_template_management_page # テンプレート管理
-# ★追加: マニュアル画面のインポート
-from views.manual import render_manual_page
+from views.manual import render_manual_page        # ユーザーマニュアル
+# ★追加: 開発者ドキュメント
+from views.developer_docs import render_developer_docs_page
 
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
@@ -40,7 +41,7 @@ if "tt_goods_offset" not in st.session_state: st.session_state.tt_goods_offset =
 if "request_calc" not in st.session_state: st.session_state.request_calc = False
 if "tt_current_proj_id" not in st.session_state: st.session_state.tt_current_proj_id = None
 
-# チケット関連の安全策（初期化漏れ防止）
+# チケット関連の安全策
 if "tt_tickets" not in st.session_state: st.session_state.tt_tickets = []
 if "tt_ticket_notes" not in st.session_state: st.session_state.tt_ticket_notes = []
 
@@ -55,14 +56,15 @@ if "last_menu" not in st.session_state: st.session_state.last_menu = "ワーク�
 st.sidebar.title("メニュー")
 
 # メニュー構成
-# ★追加: 「使い方マニュアル」をリストに追加
+# ★追加: 「開発者向けドキュメント」を追加
 menu_items = [
     "ワークスペース", 
     "プロジェクト管理", 
     "テンプレート管理", 
     "アーティスト管理", 
     "アセット管理", 
-    "使い方マニュアル"
+    "使い方マニュアル",
+    "開発者向けドキュメント"
 ]
 menu_selection = st.sidebar.radio("機能を選択", menu_items, key="sb_menu")
 
@@ -76,7 +78,6 @@ def revert_nav():
 current_page = menu_selection
 
 # ワークスペースから他へ移動する際、未保存の変更があれば警告を出す
-# (last_menuがワークスペースで、今回がそれ以外の場合に発動)
 is_leaving_workspace = (st.session_state.last_menu == "ワークスペース" and current_page != "ワークスペース")
 
 if st.session_state.tt_unsaved_changes and is_leaving_workspace:
@@ -118,3 +119,6 @@ elif current_page == "アセット管理":
 
 elif current_page == "使い方マニュアル":
     render_manual_page()
+
+elif current_page == "開発者向けドキュメント":
+    render_developer_docs_page()
