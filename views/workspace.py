@@ -73,7 +73,7 @@ def load_project_to_session(proj):
                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                         "PLACE": safe_str(item.get("PLACE")),
-                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加: 非表示フラグ復元
+                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
                     }
                     continue
                 if name == "終演後物販":
@@ -81,7 +81,7 @@ def load_project_to_session(proj):
                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
                         "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
                         "PLACE": safe_str(item.get("PLACE")),
-                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加: 非表示フラグ復元
+                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
                     }
                     continue
                 if name:
@@ -96,7 +96,7 @@ def load_project_to_session(proj):
                         "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
                         "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
                         "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False)),
-                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False)) # ★追加: 非表示フラグ復元
+                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
                     })
             st.session_state.tt_artists_order = new_order
             st.session_state.tt_artist_settings = new_artist_settings
@@ -260,11 +260,20 @@ def ensure_generated_contents(db):
             try:
                 # データの構築
                 rows = []
+                # ★追加: 非表示フラグを管理するリスト
+                hidden_flags = []
+
                 if st.session_state.get("tt_has_pre_goods"):
                     p = st.session_state.tt_pre_goods_settings
-                    rows.append({"ARTIST": "開演前物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False, 
-                                 "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "", 
-                                 "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":""})
+                    # フラグ取得
+                    is_h = bool(p.get("IS_HIDDEN", False))
+                    hidden_flags.append(is_h)
+                    rows.append({
+                        "ARTIST": "開演前物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False, 
+                        "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "", 
+                        "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":"",
+                        "IS_HIDDEN": is_h
+                    })
                 
                 has_post = False
                 for i, name in enumerate(st.session_state.tt_artists_order):
@@ -276,21 +285,31 @@ def ensure_generated_contents(db):
                         rd = get_default_row_settings()
 
                     is_p = bool(rd.get("IS_POST_GOODS", False))
+                    # フラグ取得
+                    is_h = bool(rd.get("IS_HIDDEN", False))
+                    hidden_flags.append(is_h)
+
                     if is_p: has_post = True
                     rows.append({
                         "ARTIST": name, "DURATION": safe_int(ad.get("DURATION"), 20), "IS_POST_GOODS": is_p,
                         "ADJUSTMENT": safe_int(rd.get("ADJUSTMENT"), 0),
                         "GOODS_START_MANUAL": safe_str(rd.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(rd.get("GOODS_DURATION"), 60), "PLACE": safe_str(rd.get("PLACE")),
-                        "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE"))
+                        "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE")),
+                        "IS_HIDDEN": is_h
                     })
                 
                 if has_post:
                     p = st.session_state.tt_post_goods_settings
-                    rows.append({"ARTIST": "終演後物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False,
-                                 "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
-                                 "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":""})
+                    is_h = bool(p.get("IS_HIDDEN", False))
+                    hidden_flags.append(is_h)
+                    rows.append({
+                        "ARTIST": "終演後物販", "DURATION":0, "ADJUSTMENT":0, "IS_POST_GOODS":False,
+                        "GOODS_START_MANUAL": safe_str(p.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(p.get("GOODS_DURATION"), 60), "PLACE": "",
+                        "ADD_GOODS_START":"", "ADD_GOODS_DURATION":None, "ADD_GOODS_PLACE":"",
+                        "IS_HIDDEN": is_h
+                    })
 
-                column_order = ["ARTIST", "DURATION", "IS_POST_GOODS", "ADJUSTMENT", "GOODS_START_MANUAL", "GOODS_DURATION", "PLACE", "ADD_GOODS_START", "ADD_GOODS_DURATION", "ADD_GOODS_PLACE"]
+                column_order = ["ARTIST", "DURATION", "IS_POST_GOODS", "ADJUSTMENT", "GOODS_START_MANUAL", "GOODS_DURATION", "PLACE", "ADD_GOODS_START", "ADD_GOODS_DURATION", "ADD_GOODS_PLACE", "IS_HIDDEN"]
                 df_for_calc = pd.DataFrame(rows, columns=column_order)
                 
                 # 時間計算
@@ -298,8 +317,23 @@ def ensure_generated_contents(db):
                 
                 # 生成リスト作成
                 gen_list = []
+                flag_idx = 0 # hidden_flags用インデックス
+
                 for _, row in calc_df.iterrows():
-                    if row["ARTIST"] == "OPEN / START": continue
+                    # OPEN/START行はスキップ (画像生成には含めない、かつhidden_flagsとも対応しない)
+                    if row["ARTIST"] == "OPEN / START": 
+                        continue
+                    
+                    # hidden_flagsを確認してスキップ判定
+                    is_hidden = False
+                    if flag_idx < len(hidden_flags):
+                        is_hidden = hidden_flags[flag_idx]
+                    
+                    flag_idx += 1 # 次の行へ
+
+                    if is_hidden:
+                        continue
+
                     gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
                 
                 st.session_state.tt_gen_list = gen_list
