@@ -215,11 +215,7 @@ def render_overview_page():
 
     st.divider()
 
-    # --- 変更検知 ---
-    if "ov_tt_open_time" in st.session_state:
-        st.session_state.tt_open_time = st.session_state.ov_tt_open_time
-    if "ov_tt_start_time" in st.session_state:
-        st.session_state.tt_start_time = st.session_state.ov_tt_start_time
+    # --- (削除: 強制同期ロジック) ---
 
     current_params = {
         "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
@@ -288,9 +284,7 @@ def render_overview_page():
             st.error("プロジェクトIDが不明です")
 
     # ==========================================
-    # ★修正: リスト生成ロジックの刷新
-    # 1. アー写グリッドの設定順 (grid_order) を最優先
-    # 2. タイムテーブルの設定 (is_hidden) と突き合わせて非表示を除外
+    # ★リスト生成ロジック (非表示対応済)
     # ==========================================
     
     artists_list = []
@@ -298,20 +292,15 @@ def render_overview_page():
     if project_id:
         db = next(get_db())
         try:
-            # 1. DBからタイムテーブル情報を全取得（非表示設定の辞書を作るため）
             rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).all()
             
-            # アーティスト名 -> 非表示フラグ のマップを作成
             hidden_map = {}
             for r in rows:
                 if r.artist_name:
                     hidden_map[r.artist_name] = r.is_hidden
 
-            # 2. 順序情報の取得（アー写グリッド設定を優先）
-            # まずは現在編集中のセッションステートを確認
             raw_order = st.session_state.get("grid_order", [])
             
-            # セッションになければDBの grid_order_json から取得
             if not raw_order:
                 proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
                 if proj and proj.grid_order_json:
@@ -324,21 +313,15 @@ def render_overview_page():
                     except:
                         pass
             
-            # それでもなければタイムテーブル順（rowsのsort_order順）をバックアップとして使う
             if not raw_order and rows:
                 sorted_rows = sorted(rows, key=lambda x: x.sort_order)
                 raw_order = [r.artist_name for r in sorted_rows]
 
-            # 3. リストの構築とフィルタリング (ここが重要)
             final_artists = []
             for name in raw_order:
-                # 特殊行は除外
                 if name in ["開演前物販", "終演後物販"]:
                     continue
                 
-                # hidden_map に問い合わせる。
-                # マップに存在し、かつ True なら非表示なのでスキップ。
-                # マップにない場合（新しく追加されたが未保存など）は一応表示する扱いに。
                 is_hidden = hidden_map.get(name, False)
                 
                 if not is_hidden:
@@ -362,7 +345,7 @@ def render_overview_page():
         start_time=st.session_state.get("tt_start_time", "※調整中"),
         tickets=st.session_state.get("proj_tickets", []),
         ticket_notes=st.session_state.get("proj_ticket_notes", []),
-        artists=artists_list, # ★修正済みのリストを使用
+        artists=artists_list,
         free_texts=st.session_state.get("proj_free_text", [])
     )
 
