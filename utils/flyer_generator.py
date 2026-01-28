@@ -81,6 +81,13 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     current_size = int(font_size_px)
     min_size = 10
     
+    # ▼▼▼【修正箇所】None対策として強制的に数値変換します ▼▼▼
+    shadow_blur = int(shadow_blur or 0)
+    shadow_off_x = int(shadow_off_x or 0)
+    shadow_off_y = int(shadow_off_y or 0)
+    shadow_spread = int(shadow_spread or 0)
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+    
     def load_fonts(size):
         try:
             p_font = ImageFont.truetype(font_path, size) if font_path and os.path.exists(font_path) else ImageFont.load_default()
@@ -187,6 +194,13 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
                           tri_visible=True, tri_scale=1.0, tri_color=None,
                           alignment="center", fixed_label_w=0, measure_only=False):
     
+    # ▼▼▼【修正箇所】ここにも念のため追加します ▼▼▼
+    shadow_blur = int(shadow_blur or 0)
+    shadow_off_x = int(shadow_off_x or 0)
+    shadow_off_y = int(shadow_off_y or 0)
+    shadow_spread = int(shadow_spread or 0)
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
     try: primary_font = font
     except: primary_font = ImageFont.load_default()
     fallback_font = primary_font
