@@ -70,23 +70,33 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
         
     return total_w, max_h
 
+# ★安全に数値を変換する内部関数
+def safe_val(val):
+    try:
+        if val is None: return 0
+        return int(float(val))
+    except (ValueError, TypeError):
+        return 0
+
 def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_width, fill_color, 
                           anchor="ma", 
                           shadow_on=False, shadow_color="#000000", 
                           shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
-                          shadow_opacity=255, shadow_spread=0, # ★追加パラメータ
+                          shadow_opacity=255, shadow_spread=0,
                           fallback_font_path=None, measure_only=False):
     if not text: return 0
     text_str = str(text)
-    current_size = int(font_size_px)
+    
+    # 数値の安全確保
+    current_size = safe_val(font_size_px)
+    if current_size <= 0: current_size = 20
     min_size = 10
     
-    # ▼▼▼【修正箇所】None対策として強制的に数値変換します ▼▼▼
-    shadow_blur = int(shadow_blur or 0)
-    shadow_off_x = int(shadow_off_x or 0)
-    shadow_off_y = int(shadow_off_y or 0)
-    shadow_spread = int(shadow_spread or 0)
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+    shadow_blur = safe_val(shadow_blur)
+    shadow_off_x = safe_val(shadow_off_x)
+    shadow_off_y = safe_val(shadow_off_y)
+    shadow_spread = safe_val(shadow_spread)
+    shadow_opacity = safe_val(shadow_opacity)
     
     def load_fonts(size):
         try:
@@ -105,7 +115,6 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     can_resize = True
     while can_resize and current_size > min_size:
         w, h = draw_text_mixed(dummy_draw, (0, 0), text_str, primary_font, fallback_font, fill_color)
-        # 余白計算にspreadも含める
         margin_est = max(shadow_blur * 3, abs(shadow_off_x), abs(shadow_off_y)) + 10 + shadow_spread
         if w + (margin_est * 2) <= max_width: break
         current_size -= 2
@@ -127,35 +136,24 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     
-    # ★修正: 影の描画ロジック強化 (不透明度・太さ対応)
     if shadow_on:
-        # 影の色作成 (RGB + Alpha)
         try: s_rgb = ImageColor.getrgb(shadow_color)
         except: s_rgb = (0, 0, 0)
         s_color_with_alpha = s_rgb + (int(shadow_opacity),)
         
-        # 影用のレイヤー作成
         shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
         shadow_draw = ImageDraw.Draw(shadow_layer)
         
-        # テキストを描画 (これが影のベースになる)
         draw_text_mixed(shadow_draw, (draw_x + shadow_off_x, draw_y + shadow_off_y), 
                         text_str, primary_font, fallback_font, s_color_with_alpha)
         
-        # 太さ (Spread) の適用: アルファチャンネルを膨張させる
         if shadow_spread > 0:
-            # アルファチャンネルを取り出し、MaxFilterで膨張
             r, g, b, a = shadow_layer.split()
-            # フィルターサイズは奇数 (1 + 2*spread)
             a_dilated = a.filter(ImageFilter.MaxFilter(1 + shadow_spread * 2))
-            
-            # 膨張したアルファチャンネルを使って、単色画像を作成
-            # (元のRGB値を維持しつつアルファだけ拡張)
             shadow_expanded = Image.new("RGBA", shadow_layer.size, s_color_with_alpha)
             shadow_expanded.putalpha(a_dilated)
             shadow_layer = shadow_expanded
 
-        # ぼかし適用
         if shadow_blur > 0:
             shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow_blur))
             
@@ -190,17 +188,17 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
 
 def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
                           shadow_on, shadow_color, shadow_blur, shadow_off_x, shadow_off_y, fallback_font_path,
-                          shadow_opacity=255, shadow_spread=0, # ★追加
+                          shadow_opacity=255, shadow_spread=0, 
                           tri_visible=True, tri_scale=1.0, tri_color=None,
                           alignment="center", fixed_label_w=0, measure_only=False):
     
-    # ▼▼▼【修正箇所】ここにも念のため追加します ▼▼▼
-    shadow_blur = int(shadow_blur or 0)
-    shadow_off_x = int(shadow_off_x or 0)
-    shadow_off_y = int(shadow_off_y or 0)
-    shadow_spread = int(shadow_spread or 0)
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-
+    # 数値の安全確保
+    shadow_blur = safe_val(shadow_blur)
+    shadow_off_x = safe_val(shadow_off_x)
+    shadow_off_y = safe_val(shadow_off_y)
+    shadow_spread = safe_val(shadow_spread)
+    shadow_opacity = safe_val(shadow_opacity)
+    
     try: primary_font = font
     except: primary_font = ImageFont.load_default()
     fallback_font = primary_font
@@ -252,17 +250,14 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     
     final_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
     
-    # ★修正: 時間行の影描画ロジック強化
     if shadow_on:
         try: s_rgb = ImageColor.getrgb(shadow_color)
         except: s_rgb = (0,0,0)
         s_color_with_alpha = s_rgb + (int(shadow_opacity),)
         
-        # 影用のレイヤー
         shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
         shadow_draw = ImageDraw.Draw(shadow_layer)
         
-        # 影として同じ内容を描画
         s_cur_x = margin 
         if alignment == "triangle":
             s_cur_x += (fixed_label_w - w_label)
@@ -280,7 +275,6 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
         
         draw_text_mixed(shadow_draw, (s_cur_x, draw_y), time_str, primary_font, fallback_font, s_color_with_alpha)
         
-        # Spread適用
         if shadow_spread > 0:
             r, g, b, a = shadow_layer.split()
             a = a.filter(ImageFilter.MaxFilter(1 + shadow_spread * 2))
@@ -288,7 +282,6 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
             shadow_expanded.putalpha(a)
             shadow_layer = shadow_expanded
 
-        # Blur適用
         if shadow_blur > 0:
             shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow_blur))
             
@@ -379,7 +372,6 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         # ★追加: ロゴの影描画
         if styles.get("logo_shadow_on", False):
             try:
-                # 影の色と濃さ
                 ls_rgb = ImageColor.getrgb(styles.get("logo_shadow_color", "#000000"))
                 ls_opacity = int(styles.get("logo_shadow_opacity", 128))
                 ls_spread = int(styles.get("logo_shadow_spread", 0))
@@ -387,14 +379,10 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
                 ls_off_x = int(styles.get("logo_shadow_off_x", 5))
                 ls_off_y = int(styles.get("logo_shadow_off_y", 5))
                 
-                # ロゴのアルファチャンネル（形状）を取得
                 l_alpha = logo_resized.getchannel("A")
-                
-                # 影レイヤー作成 (単色塗りつぶし)
                 shadow_base = Image.new("RGBA", logo_resized.size, ls_rgb + (ls_opacity,))
                 shadow_base.putalpha(l_alpha)
                 
-                # Spread (形状拡張)
                 if ls_spread > 0:
                     mask = shadow_base.getchannel("A")
                     mask = mask.filter(ImageFilter.MaxFilter(1 + ls_spread * 2))
@@ -402,13 +390,10 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
                     shadow_expanded.putalpha(mask)
                     shadow_base = shadow_expanded
                 
-                # Blur (ぼかし)
                 if ls_blur > 0:
                     shadow_base = shadow_base.filter(ImageFilter.GaussianBlur(ls_blur))
                 
-                # 配置 (ロゴの下に描画)
                 canvas.paste(shadow_base, (final_x + ls_off_x, final_y + ls_off_y), shadow_base)
-            
             except Exception as e:
                 print(f"Logo shadow error: {e}")
 
