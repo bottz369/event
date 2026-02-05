@@ -5,6 +5,7 @@ import io
 import os
 import requests
 from datetime import datetime, date, timedelta
+from sqlalchemy import text # SQL実行用
 
 from database import get_db, SessionLocal, Artist, TimetableProject, AssetFile, Asset, get_image_url
 from constants import (
@@ -12,7 +13,8 @@ from constants import (
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
-from logic_project import save_current_project, save_timetable_rows
+# ★修正: load_timetable_rows を追加インポート
+from logic_project import save_current_project, save_timetable_rows, load_timetable_rows
 
 try:
     from streamlit_sortables import sort_items
@@ -25,6 +27,38 @@ try:
 except Exception as e:
     import_error_msg = str(e)
     generate_timetable_image = None
+
+# --- DBマイグレーション（列追加）関数 ---
+def check_and_migrate_add_goods_columns(db):
+    """
+    timetable_rows テーブルに追加物販用のカラムが存在するか確認し、
+    なければ追加する（自動修復）
+    """
+    try:
+        # SQLiteとPostgreSQL(Supabase)で挙動が違うため、安全策として try-except で列追加を試みる
+        # PostgreSQLは ALTER TABLE ... ADD COLUMN IF NOT EXISTS が使えるが、
+        # SQLAlchemyのバージョン依存を避けるため個別に実行
+        columns_to_add = [
+            ("add_goods_start_time", "TEXT"),
+            ("add_goods_duration", "INTEGER"),
+            ("add_goods_place", "TEXT")
+        ]
+        
+        # 現在のテーブル情報を確認できればベストだが、
+        # 簡易的に「列追加コマンドを投げて、既に存在するエラーなら無視する」方式をとる
+        for col_name, col_type in columns_to_add:
+            try:
+                # PostgreSQL / SQLite 共通構文
+                db.execute(text(f"ALTER TABLE timetable_rows ADD COLUMN {col_name} {col_type}"))
+                db.commit()
+                # print(f"Added column: {col_name}")
+            except Exception:
+                # 列が既に存在する場合はエラーになるのでロールバックして無視
+                db.rollback()
+                pass
+                
+    except Exception as e:
+        print(f"Migration check error: {e}")
 
 # --- フォント確保関数 ---
 def ensure_font_exists(db, font_filename):
@@ -68,6 +102,9 @@ def render_timetable_page():
     
     db = next(get_db())
     
+    # ★ページ読み込み時にDBカラムチェックを実行
+    check_and_migrate_add_goods_columns(db)
+    
     selected_id = None
     if "ws_active_project_id" in st.session_state and st.session_state.ws_active_project_id:
         selected_id = st.session_state.ws_active_project_id
@@ -89,7 +126,7 @@ def render_timetable_page():
                 except: st.session_state.tt_event_date = date.today()
                 st.session_state.tt_venue = proj.venue_name
                 
-                # ★修正: デフォルト値の初期化のみ行い、ウィジェットでの上書き警告を防ぐ
+                # デフォルト値の初期化
                 if "tt_open_time" not in st.session_state:
                      st.session_state.tt_open_time = proj.open_time or "10:00"
                 if "tt_start_time" not in st.session_state:
@@ -108,14 +145,26 @@ def render_timetable_page():
                     except: pass
 
                 if "tt_artists_order" not in st.session_state or not st.session_state.tt_artists_order:
-                    if proj.data_json:
+                    # ★修正: まずDB(TimetableRow)から読み込みを試みる
+                    loaded_rows = load_timetable_rows(db, selected_id)
+                    data_source = []
+                    
+                    if loaded_rows:
+                        data_source = loaded_rows # DB優先
+                    elif proj.data_json:
                         try:
-                            data = json.loads(proj.data_json)
+                            data_source = json.loads(proj.data_json) # JSONバックアップ
+                        except:
+                            data_source = []
+
+                    if data_source:
+                        try:
                             new_order = []
                             new_artist_settings = {}
                             new_row_settings = []
                             st.session_state.tt_has_pre_goods = False
-                            for item in data:
+                            
+                            for item in data_source:
                                 name = item.get("ARTIST", "")
                                 if name == "開演前物販":
                                     st.session_state.tt_has_pre_goods = True
@@ -139,6 +188,7 @@ def render_timetable_page():
                                     new_order.append(name)
                                     new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
                                     
+                                    # ★重要: ここで追加物販の情報を確実にロードする
                                     new_row_settings.append({
                                         "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
@@ -150,6 +200,7 @@ def render_timetable_page():
                                         "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False)),
                                         "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
                                     })
+                            
                             st.session_state.tt_artists_order = new_order
                             st.session_state.tt_artist_settings = new_artist_settings
                             st.session_state.tt_row_settings = new_row_settings
@@ -262,7 +313,6 @@ def render_timetable_page():
         # 設定エリア
         col_p1, col_p2, col_p3 = st.columns(3)
         
-        # --- ★修正: index引数を削除し、keyによるSession State連携のみにする ---
         with col_p1: 
             st.selectbox("開場時間", TIME_OPTIONS, key="tt_open_time", on_change=mark_dirty)
         with col_p2: 
