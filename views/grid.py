@@ -110,7 +110,11 @@ def render_grid_page():
                                 # 非表示フラグをチェック
                                 if r.is_hidden:
                                     continue
-                                tt_artists.append(r.artist_name)
+                                
+                                # ★修正: ここで strip() を追加してスペースを除去！
+                                clean_name = r.artist_name.strip() if r.artist_name else ""
+                                if clean_name:
+                                    tt_artists.append(clean_name)
 
                             st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         
@@ -124,7 +128,11 @@ def render_grid_page():
                                     continue
                                 if i.get("IS_HIDDEN", False):
                                     continue
-                                tt_artists.append(name)
+                                
+                                # ★修正: JSONの場合も strip() を追加！
+                                clean_name = name.strip() if name else ""
+                                if clean_name:
+                                    tt_artists.append(clean_name)
 
                             st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                     except Exception as e:
@@ -170,10 +178,13 @@ def render_grid_page():
                             if r.is_hidden:
                                 continue
                             
-                            tt_artists.append(r.artist_name)
+                            # ★修正: ここにも strip() を入れる
+                            clean_name = r.artist_name.strip() if r.artist_name else ""
+                            if clean_name:
+                                tt_artists.append(clean_name)
                         
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                        st.toast("タイムテーブルから最新の構成を読み込みました（非表示行は除外）", icon="🔄")
+                        st.toast("タイムテーブルから最新の構成を読み込みました（非表示行は除外・スペース除去）", icon="🔄")
                     
                     elif temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first().data_json:
                         proj_temp = temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first()
@@ -185,10 +196,14 @@ def render_grid_page():
                                 continue
                             if i.get("IS_HIDDEN", False):
                                 continue
-                            tt_artists.append(name)
+                            
+                            # ★修正: JSON処理にも strip()
+                            clean_name = name.strip() if name else ""
+                            if clean_name:
+                                tt_artists.append(clean_name)
                             
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                        st.toast("JSONから構成を読み込みました", icon="🔄")
+                        st.toast("JSONから構成を読み込みました（スペース除去）", icon="🔄")
                     
                     st.session_state.grid_rows = 5
                     st.session_state.grid_row_counts_str = "5,5,5,5,5"
