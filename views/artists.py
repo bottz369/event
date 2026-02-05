@@ -3,7 +3,8 @@ import uuid
 import os
 import time
 from PIL import Image
-from database import get_db, Artist, upload_image_to_supabase, get_image_url
+# ★修正: TimetableRow を追加インポート
+from database import get_db, Artist, TimetableRow, upload_image_to_supabase, get_image_url
 
 # 画像処理ロジックの読み込み
 try:
@@ -237,5 +238,61 @@ def render_artists_page():
                             if st.button("削除", key=f"dl_{a.id}"):
                                 a.is_deleted = True; a.name = f"{a.name}_del_{int(time.time())}"
                                 db.commit(); st.rerun()
+        
+        st.divider()
+
+        # ==================================================
+        # ★追加: アーティスト統合 (名寄せ) 機能
+        # ==================================================
+        with st.expander("🔄 アーティストデータの統合 (名寄せ)"):
+            st.info("""
+            **重複して登録されたアーティストを統合します。**
+            1. 「残す方」と「統合・削除する方」を選んでください。
+            2. 過去のタイムテーブルデータで使用されている名前も自動的に「残す方」の名前に書き換わります。
+            3. 「統合・削除する方」は削除されます。この操作は取り消せません。
+            """)
+
+            # 選択肢の作成 (ID付きで重複名も区別可能に)
+            artist_options = {f"{ar.name} (ID: {ar.id})": ar.id for ar in artists}
+            
+            c_merge1, c_merge2 = st.columns(2)
+            with c_merge1:
+                winner_id = st.selectbox("✅ 残すアーティスト (正)", options=list(artist_options.values()), format_func=lambda x: [k for k, v in artist_options.items() if v == x][0], key="merge_winner")
+            
+            with c_merge2:
+                # デフォルトでwinnerと違うものを選んでおく
+                default_loser = list(artist_options.values())[1] if len(artist_options) > 1 else list(artist_options.values())[0]
+                loser_id = st.selectbox("🗑️ 統合・削除するアーティスト (誤)", options=list(artist_options.values()), format_func=lambda x: [k for k, v in artist_options.items() if v == x][0], index=1 if len(artist_options) > 1 else 0, key="merge_loser")
+
+            if st.button("⚠️ 統合を実行する", type="primary", use_container_width=True):
+                if winner_id == loser_id:
+                    st.error("同じアーティスト同士は統合できません。")
+                else:
+                    winner_obj = db.query(Artist).get(winner_id)
+                    loser_obj = db.query(Artist).get(loser_id)
+                    
+                    if winner_obj and loser_obj:
+                        try:
+                            # 1. TimetableRowテーブルの名前を書き換え
+                            rows_to_update = db.query(TimetableRow).filter(TimetableRow.artist_name == loser_obj.name).all()
+                            count = len(rows_to_update)
+                            
+                            for r in rows_to_update:
+                                r.artist_name = winner_obj.name
+                            
+                            # 2. 敗者を削除 (名前も変更して衝突回避)
+                            loser_obj.is_deleted = True
+                            loser_obj.name = f"{loser_obj.name}_merged_{int(time.time())}"
+                            
+                            db.commit()
+                            st.toast(f"統合完了！ 過去データの {count} 箇所を修正しました。", icon="✅")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"統合エラー: {e}")
+                            db.rollback()
+                    else:
+                        st.error("データが見つかりません。")
+
     finally:
         db.close()
