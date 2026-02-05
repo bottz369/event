@@ -82,6 +82,16 @@ def render_grid_page():
         if "grid_order" not in st.session_state: st.session_state.grid_order = []
         if "grid_rows" not in st.session_state: st.session_state.grid_rows = 5
         
+        # ★★★ 自動クリーニング処理 (ここを追加) ★★★
+        # セッション内のリストにスペースが含まれていたら、強制的に削除して上書きする
+        if st.session_state.grid_order:
+            cleaned_order = [name.strip() for name in st.session_state.grid_order if name]
+            # 変更があれば反映
+            if st.session_state.grid_order != cleaned_order:
+                st.session_state.grid_order = cleaned_order
+                st.toast("リスト内の不要なスペースを自動削除しました 🧹", icon="✨")
+        # ★★★★★★★★★★★★★★★★★★★★★★★★★
+
         if "grid_row_counts_str" not in st.session_state: st.session_state.grid_row_counts_str = "5,5,5,5,5"
         if "grid_alignment" not in st.session_state: st.session_state.grid_alignment = "中央揃え"
         if "grid_layout_mode" not in st.session_state: st.session_state.grid_layout_mode = "レンガ (サイズ統一)"
@@ -101,38 +111,24 @@ def render_grid_page():
                         rows = db.query(TimetableRow).filter(TimetableRow.project_id == selected_id).order_by(TimetableRow.sort_order).all()
                         
                         if rows:
-                            # テーブルから取得できた場合
                             tt_artists = []
                             for r in rows:
-                                # 除外リストに含まれるかチェック
-                                if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]:
-                                    continue
-                                # 非表示フラグをチェック
-                                if r.is_hidden:
-                                    continue
-                                
-                                # ★修正: ここで strip() を追加してスペースを除去！
+                                if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
+                                if r.is_hidden: continue
                                 clean_name = r.artist_name.strip() if r.artist_name else ""
-                                if clean_name:
-                                    tt_artists.append(clean_name)
+                                if clean_name: tt_artists.append(clean_name)
 
                             st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         
                         elif proj.data_json:
-                            # DBに行がない場合のバックアップ (旧仕様互換)
                             d = json.loads(proj.data_json)
                             tt_artists = []
                             for i in d:
                                 name = i.get("ARTIST", "")
-                                if name in ["開演前物販", "終演後物販", "転換", "調整"]:
-                                    continue
-                                if i.get("IS_HIDDEN", False):
-                                    continue
-                                
-                                # ★修正: JSONの場合も strip() を追加！
+                                if name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
+                                if i.get("IS_HIDDEN", False): continue
                                 clean_name = name.strip() if name else ""
-                                if clean_name:
-                                    tt_artists.append(clean_name)
+                                if clean_name: tt_artists.append(clean_name)
 
                             st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                     except Exception as e:
@@ -145,7 +141,7 @@ def render_grid_page():
                             settings = json.loads(proj.settings_json)
                             grid_conf = settings.get("grid_settings", {})
                             if grid_conf:
-                                st.session_state.grid_order = grid_conf.get("order", st.session_state.grid_order)
+                                st.session_state.grid_order = [n.strip() for n in grid_conf.get("order", st.session_state.grid_order)] # ここでも念のためstrip
                                 st.session_state.grid_rows = grid_conf.get("rows", 5)
                                 st.session_state.grid_row_counts_str = grid_conf.get("row_counts", "5,5,5,5,5")
                                 st.session_state.grid_layout_mode = grid_conf.get("layout_mode", "レンガ (サイズ統一)")
@@ -163,8 +159,7 @@ def render_grid_page():
             # --- 設定エリア ---
             def reset_grid_settings():
                 current_id_in_cb = st.session_state.get("ws_active_project_id")
-                if not current_id_in_cb:
-                    return
+                if not current_id_in_cb: return
 
                 temp_db = next(get_db())
                 try:
@@ -173,15 +168,10 @@ def render_grid_page():
                     if rows:
                         tt_artists = []
                         for r in rows:
-                            if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]:
-                                continue
-                            if r.is_hidden:
-                                continue
-                            
-                            # ★修正: ここにも strip() を入れる
+                            if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
+                            if r.is_hidden: continue
                             clean_name = r.artist_name.strip() if r.artist_name else ""
-                            if clean_name:
-                                tt_artists.append(clean_name)
+                            if clean_name: tt_artists.append(clean_name)
                         
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         st.toast("タイムテーブルから最新の構成を読み込みました（非表示行は除外・スペース除去）", icon="🔄")
@@ -192,15 +182,10 @@ def render_grid_page():
                         tt_artists = []
                         for i in d:
                             name = i.get("ARTIST", "")
-                            if name in ["開演前物販", "終演後物販", "転換", "調整"]:
-                                continue
-                            if i.get("IS_HIDDEN", False):
-                                continue
-                            
-                            # ★修正: JSON処理にも strip()
+                            if name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
+                            if i.get("IS_HIDDEN", False): continue
                             clean_name = name.strip() if name else ""
-                            if clean_name:
-                                tt_artists.append(clean_name)
+                            if clean_name: tt_artists.append(clean_name)
                             
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         st.toast("JSONから構成を読み込みました（スペース除去）", icon="🔄")
@@ -308,44 +293,41 @@ def render_grid_page():
                     artist_db = db.query(Artist).filter(Artist.name == debug_target_name).first()
                     if artist_db:
                         st.write(f"- DB登録: **✅ YES** (ID: {artist_db.id})")
-                        st.write(f"  - 削除フラグ: `{artist_db.is_deleted}`")
-                        st.write(f"  - ファイル名: `{artist_db.image_filename}`")
-                        
-                        # 3. URL生成テスト
                         if artist_db.image_filename:
                             url = get_image_url(artist_db.image_filename)
-                            st.write(f"  - 生成URL: `{url}`")
-                            
-                            # 4. 画像ダウンロードテスト
-                            if url:
-                                try:
-                                    img_test = load_image_from_url(url)
-                                    if img_test:
-                                        st.success("  - ✅ 画像読み込み成功")
-                                        st.image(img_test, width=150)
-                                        st.write(f"    - サイズ: {img_test.size}")
-                                    else:
-                                        st.error("  - ❌ 画像読み込み失敗 (結果がNone)")
-                                except Exception as e:
-                                    st.error(f"  - ❌ 読み込みエラー: {e}")
-                            else:
-                                st.error("  - ❌ URLが空です")
+                            st.write(f"  - 画像URL: `{url}`")
+                            st.image(url, width=100)
                         else:
-                            st.error("  - ❌ ファイル名がDBに登録されていません")
-                            
-                        # 5. トリミング設定
-                        st.markdown("**トリミング設定値**")
-                        st.code(f"Scale: {getattr(artist_db, 'crop_scale', 'N/A')}\nX: {getattr(artist_db, 'crop_x', 'N/A')}\nY: {getattr(artist_db, 'crop_y', 'N/A')}")
-                        
-                        if getattr(artist_db, 'crop_x', 0) > 1000 or getattr(artist_db, 'crop_y', 0) > 1000:
-                            st.error("⚠️ 座標が極端に大きいです。画像が画面外に飛んでいる可能性があります。アーティスト管理画面で「位置リセット」をしてください。")
-                            
+                            st.error("  - ❌ 画像未登録")
                     else:
-                        st.error("- ❌ DBに見つかりません (名前のスペース等を確認してください)")
+                        st.error("- ❌ DBに見つかりません (完全一致が必要です)")
                         
-                    # 6. リスト全容確認
-                    with st.expander("📋 全リスト内訳を確認"):
-                        st.write(st.session_state.grid_order)
+                    # 6. 強制修復ボタン
+                    if st.button("🧹 リスト内のスペースを強制削除して保存", type="primary"):
+                        cleaned = [n.strip() for n in st.session_state.grid_order if n]
+                        st.session_state.grid_order = cleaned
+                        
+                        # DBにも保存
+                        proj_to_save = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
+                        if proj_to_save:
+                            settings = {}
+                            if proj_to_save.settings_json:
+                                try: settings = json.loads(proj_to_save.settings_json)
+                                except: pass
+                            
+                            current_params = {
+                                "order": st.session_state.grid_order,
+                                "row_counts": st.session_state.grid_row_counts_str,
+                                "layout_mode": st.session_state.grid_layout_mode,
+                                "alignment": st.session_state.grid_alignment,
+                                "font": st.session_state.grid_font,
+                                "rows": st.session_state.grid_rows
+                            }
+                            settings["grid_settings"] = current_params
+                            proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
+                            db.commit()
+                            st.success("修復して保存しました！")
+                            st.rerun()
 
             st.divider()
 
