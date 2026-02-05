@@ -163,10 +163,11 @@ def render_artists_page():
                                 a.crop_y = 0
                                 db.commit()
                                 
-                                # ★重要: スライダーのセッション状態も強制的にリセット
-                                if f"sc_{a.id}" in st.session_state: st.session_state[f"sc_{a.id}"] = 1.0
-                                if f"sx_{a.id}" in st.session_state: st.session_state[f"sx_{a.id}"] = 0
-                                if f"sy_{a.id}" in st.session_state: st.session_state[f"sy_{a.id}"] = 0
+                                # ★修正: 値を代入せず、キーを削除してリセットする
+                                target_keys = [f"sc_{a.id}", f"sx_{a.id}", f"sy_{a.id}"]
+                                for k in target_keys:
+                                    if k in st.session_state:
+                                        del st.session_state[k]
                                 
                                 st.rerun()
 
