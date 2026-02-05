@@ -3,9 +3,9 @@ import os
 import json
 import io
 import requests # URLダウンロード用
+import pandas as pd # デバッグ表示用
 
 # Asset, AssetFile, get_image_url をインポート
-# ★修正: TimetableRow を追加インポート
 from database import get_db, TimetableProject, TimetableRow, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
 from constants import FONT_DIR
 from logic_project import save_current_project
@@ -17,9 +17,10 @@ except ImportError:
     sort_items = None
 
 try:
-    from logic_grid import generate_grid_image
+    from logic_grid import generate_grid_image, load_image_from_url
 except ImportError:
     generate_grid_image = None
+    load_image_from_url = None
 
 # --- フォント確保関数 (URL対応版) ---
 def check_and_download_font(db, font_filename):
@@ -96,7 +97,6 @@ def render_grid_page():
             if proj:
                 # 1. アーティストリストの初期化
                 if not st.session_state.grid_order:
-                    # ★修正: JSONではなく TimetableRow テーブルから直接読み込む
                     try:
                         rows = db.query(TimetableRow).filter(TimetableRow.project_id == selected_id).order_by(TimetableRow.sort_order).all()
                         
@@ -153,35 +153,29 @@ def render_grid_page():
             st.divider()
             
             # --- 設定エリア ---
-            # ★修正: リセットボタンが押されたときの処理関数 (ここもテーブル参照に変更)
             def reset_grid_settings():
                 current_id_in_cb = st.session_state.get("ws_active_project_id")
                 if not current_id_in_cb:
                     return
 
-                # 一時的なDBセッションを作成
                 temp_db = next(get_db())
                 try:
-                    # JSONではなく、TimetableRowテーブルから最新状態を取得する
                     rows = temp_db.query(TimetableRow).filter(TimetableRow.project_id == current_id_in_cb).order_by(TimetableRow.sort_order).all()
                     
                     if rows:
                         tt_artists = []
                         for r in rows:
-                            # 除外条件
                             if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]:
                                 continue
-                            if r.is_hidden: # ★ここでDBの is_hidden カラムを確認
+                            if r.is_hidden:
                                 continue
                             
                             tt_artists.append(r.artist_name)
                         
-                        # リストを更新
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         st.toast("タイムテーブルから最新の構成を読み込みました（非表示行は除外）", icon="🔄")
                     
                     elif temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first().data_json:
-                        # テーブルが空の場合のバックアップ (JSON利用)
                         proj_temp = temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first()
                         d = json.loads(proj_temp.data_json)
                         tt_artists = []
@@ -196,7 +190,6 @@ def render_grid_page():
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         st.toast("JSONから構成を読み込みました", icon="🔄")
                     
-                    # レイアウト設定もリセット
                     st.session_state.grid_rows = 5
                     st.session_state.grid_row_counts_str = "5,5,5,5,5"
                     st.session_state.grid_font = "keifont.ttf"
@@ -211,7 +204,6 @@ def render_grid_page():
             with c_set1: 
                 new_rows = st.number_input("行数", min_value=1, key="grid_rows")
             with c_set2:
-                # ボタンクリック時に上の reset_grid_settings 関数を実行
                 st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset", on_click=reset_grid_settings)
 
             # --- 行ごとの枚数設定 ---
@@ -226,7 +218,6 @@ def render_grid_page():
             elif len(current_counts) > new_rows:
                 current_counts = current_counts[:new_rows]
             
-            # 入力欄とセッション変数の同期
             st.session_state.grid_row_counts_str = ",".join(map(str, current_counts))
 
             row_counts_input = st.text_input(
@@ -235,7 +226,6 @@ def render_grid_page():
                 help="例: 3,4,6 と入力すると、1行目3枚、2行目4枚、3行目6枚になります。",
                 key="grid_row_counts_input_widget"
             )
-            # 入力値をセッションに反映
             st.session_state.grid_row_counts_str = row_counts_input
             
             try:
@@ -283,6 +273,67 @@ def render_grid_page():
 
             st.divider()
             
+            # --- ★★★ デバッグ・診断モード ★★★ ---
+            with st.expander("🛠️ デバッグモード (トラブルシューティング)", expanded=True):
+                st.warning("現在、詳細デバッグモードが有効です。特定のアーティストが表示されない場合、以下を確認してください。")
+                
+                debug_target_name = st.text_input("調査するアーティスト名 (完全一致)", value="LOVE PANIC!")
+                
+                if debug_target_name:
+                    st.markdown(f"#### 🔎 調査対象: `{debug_target_name}`")
+                    
+                    # 1. リストに含まれているか
+                    in_list = debug_target_name in st.session_state.grid_order
+                    st.write(f"- グリッド表示リストに含まれている: **{'✅ YES' if in_list else '❌ NO'}**")
+                    if in_list:
+                        idx = st.session_state.grid_order.index(debug_target_name)
+                        st.write(f"  - リスト内のインデックス: `{idx}` (0始まり)")
+                    
+                    # 2. DB検索
+                    artist_db = db.query(Artist).filter(Artist.name == debug_target_name).first()
+                    if artist_db:
+                        st.write(f"- DB登録: **✅ YES** (ID: {artist_db.id})")
+                        st.write(f"  - 削除フラグ: `{artist_db.is_deleted}`")
+                        st.write(f"  - ファイル名: `{artist_db.image_filename}`")
+                        
+                        # 3. URL生成テスト
+                        if artist_db.image_filename:
+                            url = get_image_url(artist_db.image_filename)
+                            st.write(f"  - 生成URL: `{url}`")
+                            
+                            # 4. 画像ダウンロードテスト
+                            if url:
+                                try:
+                                    img_test = load_image_from_url(url)
+                                    if img_test:
+                                        st.success("  - ✅ 画像読み込み成功")
+                                        st.image(img_test, width=150)
+                                        st.write(f"    - サイズ: {img_test.size}")
+                                    else:
+                                        st.error("  - ❌ 画像読み込み失敗 (結果がNone)")
+                                except Exception as e:
+                                    st.error(f"  - ❌ 読み込みエラー: {e}")
+                            else:
+                                st.error("  - ❌ URLが空です")
+                        else:
+                            st.error("  - ❌ ファイル名がDBに登録されていません")
+                            
+                        # 5. トリミング設定
+                        st.markdown("**トリミング設定値**")
+                        st.code(f"Scale: {getattr(artist_db, 'crop_scale', 'N/A')}\nX: {getattr(artist_db, 'crop_x', 'N/A')}\nY: {getattr(artist_db, 'crop_y', 'N/A')}")
+                        
+                        if getattr(artist_db, 'crop_x', 0) > 1000 or getattr(artist_db, 'crop_y', 0) > 1000:
+                            st.error("⚠️ 座標が極端に大きいです。画像が画面外に飛んでいる可能性があります。アーティスト管理画面で「位置リセット」をしてください。")
+                            
+                    else:
+                        st.error("- ❌ DBに見つかりません (名前のスペース等を確認してください)")
+                        
+                    # 6. リスト全容確認
+                    with st.expander("📋 全リスト内訳を確認"):
+                        st.write(st.session_state.grid_order)
+
+            st.divider()
+
             # --- 画像生成・プレビューエリア ---
             sorted_fonts = get_sorted_font_list(db)
             font_file_list = [item["filename"] for item in sorted_fonts]
@@ -427,3 +478,33 @@ def render_grid_page():
         st.error(f"予期せぬエラー: {main_e}")
     finally:
         db.close()
+
+# ★重要: 他のファイルからimportされる関数を定義
+def generate_grid_image_buffer(artists, cols, rows, font_path, alignment, layout_mode, row_counts_str):
+    """
+    外部呼び出し用: アーティストリストと設定を受け取り、画像のBytesIOを返す
+    """
+    if not generate_grid_image: return None
+    try:
+        try:
+            parsed_counts = [int(x.strip()) for x in row_counts_str.split(",") if x.strip()]
+        except:
+            parsed_counts = [5] * rows
+
+        is_brick = (layout_mode == "レンガ (サイズ統一)")
+        align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
+        align_val = align_map.get(alignment, "center")
+
+        img = generate_grid_image(
+            artists, IMAGE_DIR, 
+            font_path=font_path, 
+            row_counts=parsed_counts, is_brick_mode=is_brick, alignment=align_val
+        )
+        if img:
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            buf.seek(0)
+            return img # BytesIOではなくImageオブジェクトを返す仕様に変更（flyer側でsaveするため）
+    except Exception as e:
+        print(f"Background generation error: {e}")
+    return None
