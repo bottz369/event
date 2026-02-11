@@ -38,6 +38,7 @@ def save_timetable_rows(db, project_id, rows_data):
     タイムテーブルの行データをDBテーブル(timetable_rows)に保存する。
     ★修正: 数値データに safe_int を適用して nan エラーを防止
     ★修正: is_hidden (非表示フラグ) の保存を追加
+    ★修正: 追加物販時間(ADD_GOODS_DURATION)のデフォルトを60ではなくNoneに変更
     """
     try:
         # 1. 既存行の削除
@@ -50,7 +51,8 @@ def save_timetable_rows(db, project_id, rows_data):
             duration_val = safe_int(item.get("DURATION"), 0)
             adjustment_val = safe_int(item.get("ADJUSTMENT"), 0)
             goods_duration_val = safe_int(item.get("GOODS_DURATION"), 60)
-            add_goods_duration_val = safe_int(item.get("ADD_GOODS_DURATION"), 60) # デフォルト60または0
+            # ★修正: デフォルトを60からNoneに変更
+            add_goods_duration_val = safe_int(item.get("ADD_GOODS_DURATION"), None) 
 
             row = TimetableRow(
                 project_id=project_id,
