@@ -117,6 +117,21 @@ def render_timetable_page():
         if selected_label != "(選択してください)": selected_id = proj_map[selected_label]
 
     if selected_id:
+        # ★追加: 時間情報が他タブで変更されたかどうかをチェックし、リビルドを強制する
+        # これにより、概要タブで時間を変えた後に編集ができなくなる問題を解消
+        current_open = st.session_state.get("tt_open_time")
+        current_start = st.session_state.get("tt_start_time")
+        
+        last_check_key = f"tt_last_check_times_{selected_id}"
+        if last_check_key not in st.session_state:
+            st.session_state[last_check_key] = (current_open, current_start)
+        else:
+            last_open, last_start = st.session_state[last_check_key]
+            if last_open != current_open or last_start != current_start:
+                st.session_state.rebuild_table_flag = True
+                st.session_state[last_check_key] = (current_open, current_start)
+                # st.toast("時間が変更されたため、テーブルを再構築しました", icon="🔄")
+
         # --- プロジェクトデータの読み込み ---
         if st.session_state.get("tt_current_proj_id") != selected_id:
             proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
@@ -401,6 +416,7 @@ def render_timetable_page():
                         "ARTIST": name, "DURATION": safe_int(ad.get("DURATION"), 20), "IS_POST_GOODS": is_p,
                         "ADJUSTMENT": safe_int(rd.get("ADJUSTMENT"), 0),
                         "GOODS_START_MANUAL": safe_str(rd.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(rd.get("GOODS_DURATION"), 60), "PLACE": safe_str(rd.get("PLACE")),
+                        # ★修正: ここでNoneを許容する
                         "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE")),
                         "IS_HIDDEN": bool(rd.get("IS_HIDDEN", False))
                     })
@@ -473,6 +489,7 @@ def render_timetable_page():
                 g_start = safe_str(row["GOODS_START_MANUAL"])
                 g_dur = safe_int(row["GOODS_DURATION"], 60)
                 add_start = safe_str(row["ADD_GOODS_START"])
+                # ★修正: None許容
                 add_dur = safe_int(row["ADD_GOODS_DURATION"], None)
                 add_place = safe_str(row["ADD_GOODS_PLACE"])
                 if is_post:
