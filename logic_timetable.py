@@ -83,16 +83,34 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     draw.multiline_text((final_x+2, final_y+2), text, fill=(0,0,0,200), font=font, spacing=4, align=align)
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
-def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
+def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, columns=2):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
+
+    # ★列数に応じたスケール計算（1列の時は横幅いっぱいになり、高さも自動で大きくなります）
+    if columns == 1:
+        scale = WIDTH / SINGLE_COL_WIDTH
+    else:
+        scale = 1.0
+
+    row_width = int(SINGLE_COL_WIDTH * scale)
+    row_height = int(ROW_HEIGHT * scale)
+    time_x = int(AREA_TIME_X * scale)
+    time_w = int(AREA_TIME_W * scale)
+    artist_x = int(AREA_ARTIST_X * scale)
+    artist_w = int(AREA_ARTIST_W * scale)
+    goods_x = int(AREA_GOODS_X * scale)
+    goods_w = int(AREA_GOODS_W * scale)
+    font_size_time = int(FONT_SIZE_TIME * scale)
+    font_size_artist = int(FONT_SIZE_ARTIST * scale)
+    font_size_goods = int(FONT_SIZE_GOODS * scale)
 
     # ---------------------------------------------------------
     # 1. 画像処理 & 透過黒フィルター合成
     # ---------------------------------------------------------
     
     # ベースとなる透明な行画像を作成
-    row_img = Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), (0, 0, 0, 0))
+    row_img = Image.new('RGBA', (row_width, row_height), (0, 0, 0, 0))
     has_image = False
 
     # 特殊行以外は画像を検索して貼り付け
@@ -109,7 +127,7 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
                 if url:
                     img = load_image(url)
                     if img:
-                        img_fitted = ImageOps.fit(img, (SINGLE_COL_WIDTH, ROW_HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+                        img_fitted = ImageOps.fit(img, (row_width, row_height), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
                         row_img.paste(img_fitted, (0, 0))
                         has_image = True
         except Exception: pass
@@ -120,10 +138,9 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
         overlay_color = (0, 0, 0, OVERLAY_OPACITY)
     else:
         # 画像がない場合: 背景を少し濃いグレーにする（デフォルト背景）
-        # ※ここはお好みですが、画像なしの行も統一感を出すために設定
         overlay_color = (40, 40, 40, 230)
 
-    overlay = Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), overlay_color)
+    overlay = Image.new('RGBA', (row_width, row_height), overlay_color)
     
     # 画像とフィルターを合成
     row_composite = Image.alpha_composite(row_img, overlay)
@@ -134,8 +151,8 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
     # ---------------------------------------------------------
     # 2. テキスト描画
     # ---------------------------------------------------------
-    draw_centered_text(draw, time_str, base_x + AREA_TIME_X, base_y, AREA_TIME_W, ROW_HEIGHT, font_path, FONT_SIZE_TIME, align="left")
-    draw_centered_text(draw, name_str, base_x + AREA_ARTIST_X, base_y, AREA_ARTIST_W, ROW_HEIGHT, font_path, FONT_SIZE_ARTIST, align="center")
+    draw_centered_text(draw, time_str, base_x + time_x, base_y, time_w, row_height, font_path, font_size_time, align="left")
+    draw_centered_text(draw, name_str, base_x + artist_x, base_y, artist_w, row_height, font_path, font_size_artist, align="center")
     
     goods_info = "-"
     if goods_time:
@@ -149,10 +166,10 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
             goods_info = "\n".join(fmt)
         else:
             goods_info = f"{goods_time} ({goods_place})" if goods_place else goods_time
-    draw_centered_text(draw, goods_info, base_x + AREA_GOODS_X, base_y, AREA_GOODS_W, ROW_HEIGHT, font_path, FONT_SIZE_GOODS, align="left")
+    draw_centered_text(draw, goods_info, base_x + goods_x, base_y, goods_w, row_height, font_path, font_size_goods, align="left")
 
 def generate_timetable_image(timetable_data, font_path=None, columns=2):
-    if not timetable_data: return Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), (0,0,0,255))
+    if not timetable_data: return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (0,0,0,255))
     
     # 完了メッセージだけシンプルに表示
     st.toast("画像生成完了！", icon="✅")
@@ -161,20 +178,25 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
     db = SessionLocal()
 
     try:
-        # ★追加: 列数に応じたデータと幅の計算
+        # ★追加: 列数に応じたデータと幅・高さの計算
         if columns == 1:
             left_data = timetable_data
             right_data = []
-            canvas_width = SINGLE_COL_WIDTH
+            canvas_width = WIDTH
+            scale = WIDTH / SINGLE_COL_WIDTH
+            current_row_height = int(ROW_HEIGHT * scale)
+            current_row_margin = int(ROW_MARGIN * scale)
         else:
             half_idx = math.ceil(len(timetable_data) / 2)
             left_data = timetable_data[:half_idx]
             right_data = timetable_data[half_idx:]
-            canvas_width = (SINGLE_COL_WIDTH * 2) + COLUMN_GAP
+            canvas_width = WIDTH
+            current_row_height = ROW_HEIGHT
+            current_row_margin = ROW_MARGIN
             
         rows_in_column = max(len(left_data), len(right_data))
         if rows_in_column == 0: rows_in_column = 1
-        total_height = rows_in_column * (ROW_HEIGHT + ROW_MARGIN)
+        total_height = rows_in_column * (current_row_height + current_row_margin)
         
         # 動的に計算したキャンバス幅を使用
         canvas = Image.new('RGBA', (canvas_width, total_height), COLOR_BG_ALL)
@@ -182,22 +204,21 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
 
         y = 0
         for row in left_data:
-            draw_one_row(draw, canvas, 0, y, row, font_path, db)
-            y += (ROW_HEIGHT + ROW_MARGIN)
+            draw_one_row(draw, canvas, 0, y, row, font_path, db, columns=columns)
+            y += (current_row_height + current_row_margin)
 
         # 2列指定の時のみ右列を描画
         if columns == 2:
             right_col_start_x = SINGLE_COL_WIDTH + COLUMN_GAP
             y = 0 
             for row in right_data:
-                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db)
-                y += (ROW_HEIGHT + ROW_MARGIN)
+                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db, columns=columns)
+                y += (current_row_height + current_row_margin)
             
         return canvas
 
     except Exception as e:
         st.error(f"エラー: {e}")
-        error_w = SINGLE_COL_WIDTH if columns == 1 else ((SINGLE_COL_WIDTH * 2) + COLUMN_GAP)
-        return Image.new('RGBA', (error_w, ROW_HEIGHT), (255,0,0,255))
+        return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (255,0,0,255))
     finally:
         db.close()
