@@ -157,7 +157,14 @@ def render_timetable_page():
                         settings = json.loads(proj.settings_json)
                         if "tt_font" in settings:
                             st.session_state.tt_font = settings["tt_font"]
+                        # ★追加: 列数設定の読み込み
+                        if "tt_columns" in settings:
+                            st.session_state.tt_columns = settings["tt_columns"]
                     except: pass
+                
+                # ★追加: 列数設定のデフォルト
+                if "tt_columns" not in st.session_state:
+                    st.session_state.tt_columns = 2
 
                 if "tt_artists_order" not in st.session_state or not st.session_state.tt_artists_order:
                     # ★修正: まずDB(TimetableRow)から読み込みを試みる
@@ -219,7 +226,7 @@ def render_timetable_page():
                             st.session_state.tt_artists_order = new_order
                             st.session_state.tt_artist_settings = new_artist_settings
                             st.session_state.tt_row_settings = new_row_settings
-                            st.session_state.rebuild_table_flag = True
+                            st.session_state.rebuild_table_flag = True 
                         except Exception as e:
                             st.error(f"データ展開エラー: {e}")
                 
@@ -580,16 +587,28 @@ def render_timetable_page():
                     if specimen_img: st.image(specimen_img, use_container_width=True)
                     else: st.info("フォントが見つかりません")
 
-            st.selectbox(
-                "プレビュー用フォント", 
-                font_file_list,
-                format_func=lambda x: font_display_map.get(x, x),
-                key="tt_font" 
-            )
+            # ★2カラムにしてフォントと列数を並べる
+            c_font, c_col = st.columns([2, 1])
+            with c_font:
+                st.selectbox(
+                    "プレビュー用フォント", 
+                    font_file_list,
+                    format_func=lambda x: font_display_map.get(x, x),
+                    key="tt_font" 
+                )
+            with c_col:
+                st.radio(
+                    "画像生成の列数",
+                    options=[1, 2],
+                    format_func=lambda x: f"{x}列",
+                    horizontal=True,
+                    key="tt_columns"
+                )
             
             current_tt_params = {
                 "gen_list": gen_list,
-                "font": st.session_state.tt_font
+                "font": st.session_state.tt_font,
+                "columns": st.session_state.tt_columns # ★追加
             }
             if "tt_last_generated_params" not in st.session_state: st.session_state.tt_last_generated_params = None
 
@@ -598,7 +617,8 @@ def render_timetable_page():
                     try:
                         ensure_font_exists(db, st.session_state.tt_font)
                         font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
-                        auto_img = generate_timetable_image(gen_list, font_path=font_path)
+                        # ★引数 columns を追加
+                        auto_img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
                         st.session_state.last_generated_tt_image = auto_img
                         st.session_state.tt_last_generated_params = current_tt_params
                     except Exception as e: pass
@@ -614,8 +634,8 @@ def render_timetable_page():
                             try:
                                 font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
 
-                                # 1. 画像生成
-                                img = generate_timetable_image(gen_list, font_path=font_path)
+                                # 1. 画像生成 (★引数 columns を追加)
+                                img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
                                 st.session_state.last_generated_tt_image = img
                                 st.session_state.tt_last_generated_params = current_tt_params
                                 
@@ -631,6 +651,7 @@ def render_timetable_page():
                                         try: settings = json.loads(proj_to_save.settings_json)
                                         except: pass
                                     settings["tt_font"] = st.session_state.tt_font
+                                    settings["tt_columns"] = st.session_state.tt_columns # ★追加
                                     proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
                                     
                                     data_export = []
