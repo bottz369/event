@@ -25,7 +25,6 @@ OVERLAY_OPACITY = 170
 
 COLOR_TEXT = (255, 255, 255, 255)   
 
-# 2列用の基本配置設定
 AREA_TIME_X = 20
 AREA_TIME_W = 320 
 AREA_ARTIST_X = 350
@@ -89,18 +88,23 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, columns=
     goods_time, goods_place = row_data[2], row_data[3]
 
     if columns == 1:
-        # ★ 1列モード用のワイドな配置設定（横幅に対して高さを抑え、横に広げる）
-        row_width = WIDTH # 2980
-        row_height = int(ROW_HEIGHT * 1.4) # 行の高さは1.4倍に抑える
-        time_x = 60
-        time_w = 600
-        artist_x = 700
-        artist_w = 1500
-        goods_x = 2240
-        goods_w = 700
-        font_size_time = int(FONT_SIZE_TIME * 1.4)
-        font_size_artist = int(FONT_SIZE_ARTIST * 1.4)
-        font_size_goods = int(FONT_SIZE_GOODS * 1.4)
+        # ★ 1列モード: 行の高さ・文字サイズはそのまま、横幅だけを2倍に広げる
+        row_width = WIDTH # キャンバス幅最大 (2980px)
+        row_height = ROW_HEIGHT
+        
+        # 配置を横長に調整（余白を多めにとる）
+        time_x = 40
+        time_w = 500
+        
+        artist_x = 560
+        artist_w = 1800
+        
+        goods_w = 500
+        goods_x = WIDTH - goods_w - 40
+        
+        font_size_time = FONT_SIZE_TIME
+        font_size_artist = FONT_SIZE_ARTIST
+        font_size_goods = FONT_SIZE_GOODS
     else:
         # 2列モードの通常配置
         row_width = SINGLE_COL_WIDTH
@@ -115,6 +119,10 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, columns=
         font_size_artist = FONT_SIZE_ARTIST
         font_size_goods = FONT_SIZE_GOODS
 
+    # ---------------------------------------------------------
+    # 1. 画像処理 & 透過黒フィルター合成
+    # ---------------------------------------------------------
+    
     # ベースとなる透明な行画像を作成
     row_img = Image.new('RGBA', (row_width, row_height), (0, 0, 0, 0))
     has_image = False
@@ -187,8 +195,8 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
             left_data = timetable_data
             right_data = []
             canvas_width = WIDTH # 横幅を最大に使用
-            current_row_height = int(ROW_HEIGHT * 1.4)
-            current_row_margin = int(ROW_MARGIN * 1.4)
+            current_row_height = ROW_HEIGHT # 高さはそのまま
+            current_row_margin = ROW_MARGIN # マージンもそのまま
         else:
             half_idx = math.ceil(len(timetable_data) / 2)
             left_data = timetable_data[:half_idx]
