@@ -119,6 +119,7 @@ def load_project_to_session(proj):
         try: settings = json.loads(proj.settings_json)
         except: pass
     st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
+    st.session_state.tt_columns = settings.get("tt_columns", 2)  # ★追加: 列数設定の読み込み
     st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
     
     tickets_data = []
@@ -350,13 +351,16 @@ def ensure_generated_contents(db):
                 # 画像生成実行
                 if gen_list:
                     font_path = os.path.join(font_dir_abs, st.session_state.tt_font)
+                    tt_cols = st.session_state.get("tt_columns", 2) # ★追加: 列数を取得
                     
-                    img = generate_timetable_image(gen_list, font_path=font_path)
+                    # ★追加: columns 引数を追加
+                    img = generate_timetable_image(gen_list, font_path=font_path, columns=tt_cols)
                     st.session_state.last_generated_tt_image = img
                     
                     st.session_state.tt_last_generated_params = {
                         "gen_list": gen_list,
-                        "font": st.session_state.tt_font
+                        "font": st.session_state.tt_font,
+                        "columns": tt_cols # ★追加: パラメータに列数を保持
                     }
             
             except Exception as e:
