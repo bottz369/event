@@ -8,7 +8,7 @@ import streamlit as st
 # ================= 設定エリア =================
 SINGLE_COL_WIDTH = 1450      
 COLUMN_GAP = 80             
-WIDTH = (SINGLE_COL_WIDTH * 2) + COLUMN_GAP
+WIDTH = (SINGLE_COL_WIDTH * 2) + COLUMN_GAP # 2980
 ROW_HEIGHT = 130            
 ROW_MARGIN = 12             
 
@@ -25,6 +25,7 @@ OVERLAY_OPACITY = 170
 
 COLOR_TEXT = (255, 255, 255, 255)   
 
+# 2列用の基本配置設定
 AREA_TIME_X = 20
 AREA_TIME_W = 320 
 AREA_ARTIST_X = 350
@@ -87,28 +88,33 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, columns=
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
-    # ★列数に応じたスケール計算（1列の時は横幅いっぱいになり、高さも自動で大きくなります）
     if columns == 1:
-        scale = WIDTH / SINGLE_COL_WIDTH
+        # ★ 1列モード用のワイドな配置設定（横幅に対して高さを抑え、横に広げる）
+        row_width = WIDTH # 2980
+        row_height = int(ROW_HEIGHT * 1.4) # 行の高さは1.4倍に抑える
+        time_x = 60
+        time_w = 600
+        artist_x = 700
+        artist_w = 1500
+        goods_x = 2240
+        goods_w = 700
+        font_size_time = int(FONT_SIZE_TIME * 1.4)
+        font_size_artist = int(FONT_SIZE_ARTIST * 1.4)
+        font_size_goods = int(FONT_SIZE_GOODS * 1.4)
     else:
-        scale = 1.0
+        # 2列モードの通常配置
+        row_width = SINGLE_COL_WIDTH
+        row_height = ROW_HEIGHT
+        time_x = AREA_TIME_X
+        time_w = AREA_TIME_W
+        artist_x = AREA_ARTIST_X
+        artist_w = AREA_ARTIST_W
+        goods_x = AREA_GOODS_X
+        goods_w = AREA_GOODS_W
+        font_size_time = FONT_SIZE_TIME
+        font_size_artist = FONT_SIZE_ARTIST
+        font_size_goods = FONT_SIZE_GOODS
 
-    row_width = int(SINGLE_COL_WIDTH * scale)
-    row_height = int(ROW_HEIGHT * scale)
-    time_x = int(AREA_TIME_X * scale)
-    time_w = int(AREA_TIME_W * scale)
-    artist_x = int(AREA_ARTIST_X * scale)
-    artist_w = int(AREA_ARTIST_W * scale)
-    goods_x = int(AREA_GOODS_X * scale)
-    goods_w = int(AREA_GOODS_W * scale)
-    font_size_time = int(FONT_SIZE_TIME * scale)
-    font_size_artist = int(FONT_SIZE_ARTIST * scale)
-    font_size_goods = int(FONT_SIZE_GOODS * scale)
-
-    # ---------------------------------------------------------
-    # 1. 画像処理 & 透過黒フィルター合成
-    # ---------------------------------------------------------
-    
     # ベースとなる透明な行画像を作成
     row_img = Image.new('RGBA', (row_width, row_height), (0, 0, 0, 0))
     has_image = False
@@ -134,10 +140,8 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, columns=
 
     # 黒フィルターの適用ロジック
     if has_image:
-        # 画像がある場合: 指定した濃さの黒を重ねる
         overlay_color = (0, 0, 0, OVERLAY_OPACITY)
     else:
-        # 画像がない場合: 背景を少し濃いグレーにする（デフォルト背景）
         overlay_color = (40, 40, 40, 230)
 
     overlay = Image.new('RGBA', (row_width, row_height), overlay_color)
@@ -178,14 +182,13 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
     db = SessionLocal()
 
     try:
-        # ★追加: 列数に応じたデータと幅・高さの計算
+        # ★追加: 列数に応じたデータと幅の計算
         if columns == 1:
             left_data = timetable_data
             right_data = []
-            canvas_width = WIDTH
-            scale = WIDTH / SINGLE_COL_WIDTH
-            current_row_height = int(ROW_HEIGHT * scale)
-            current_row_margin = int(ROW_MARGIN * scale)
+            canvas_width = WIDTH # 横幅を最大に使用
+            current_row_height = int(ROW_HEIGHT * 1.4)
+            current_row_margin = int(ROW_MARGIN * 1.4)
         else:
             half_idx = math.ceil(len(timetable_data) / 2)
             left_data = timetable_data[:half_idx]
