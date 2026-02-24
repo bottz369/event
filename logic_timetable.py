@@ -151,8 +151,8 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db):
             goods_info = f"{goods_time} ({goods_place})" if goods_place else goods_time
     draw_centered_text(draw, goods_info, base_x + AREA_GOODS_X, base_y, AREA_GOODS_W, ROW_HEIGHT, font_path, FONT_SIZE_GOODS, align="left")
 
-def generate_timetable_image(timetable_data, font_path=None):
-    if not timetable_data: return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (0,0,0,255))
+def generate_timetable_image(timetable_data, font_path=None, columns=2):
+    if not timetable_data: return Image.new('RGBA', (SINGLE_COL_WIDTH, ROW_HEIGHT), (0,0,0,255))
     
     # 完了メッセージだけシンプルに表示
     st.toast("画像生成完了！", icon="✅")
@@ -161,16 +161,23 @@ def generate_timetable_image(timetable_data, font_path=None):
     db = SessionLocal()
 
     try:
-        half_idx = math.ceil(len(timetable_data) / 2)
-        left_data = timetable_data[:half_idx]
-        right_data = timetable_data[half_idx:]
-        
+        # ★追加: 列数に応じたデータと幅の計算
+        if columns == 1:
+            left_data = timetable_data
+            right_data = []
+            canvas_width = SINGLE_COL_WIDTH
+        else:
+            half_idx = math.ceil(len(timetable_data) / 2)
+            left_data = timetable_data[:half_idx]
+            right_data = timetable_data[half_idx:]
+            canvas_width = (SINGLE_COL_WIDTH * 2) + COLUMN_GAP
+            
         rows_in_column = max(len(left_data), len(right_data))
         if rows_in_column == 0: rows_in_column = 1
         total_height = rows_in_column * (ROW_HEIGHT + ROW_MARGIN)
         
-        # 全体背景を透明で初期化
-        canvas = Image.new('RGBA', (WIDTH, total_height), COLOR_BG_ALL)
+        # 動的に計算したキャンバス幅を使用
+        canvas = Image.new('RGBA', (canvas_width, total_height), COLOR_BG_ALL)
         draw = ImageDraw.Draw(canvas)
 
         y = 0
@@ -178,16 +185,19 @@ def generate_timetable_image(timetable_data, font_path=None):
             draw_one_row(draw, canvas, 0, y, row, font_path, db)
             y += (ROW_HEIGHT + ROW_MARGIN)
 
-        right_col_start_x = SINGLE_COL_WIDTH + COLUMN_GAP
-        y = 0 
-        for row in right_data:
-            draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db)
-            y += (ROW_HEIGHT + ROW_MARGIN)
+        # 2列指定の時のみ右列を描画
+        if columns == 2:
+            right_col_start_x = SINGLE_COL_WIDTH + COLUMN_GAP
+            y = 0 
+            for row in right_data:
+                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db)
+                y += (ROW_HEIGHT + ROW_MARGIN)
             
         return canvas
 
     except Exception as e:
         st.error(f"エラー: {e}")
-        return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (255,0,0,255))
+        error_w = SINGLE_COL_WIDTH if columns == 1 else ((SINGLE_COL_WIDTH * 2) + COLUMN_GAP)
+        return Image.new('RGBA', (error_w, ROW_HEIGHT), (255,0,0,255))
     finally:
         db.close()
