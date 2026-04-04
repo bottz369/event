@@ -369,7 +369,7 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
         final_x = base_x + int(CANVAS_W * (l_off_x / 100))
         final_y = base_y - int(CANVAS_H * (l_off_y / 100))
         
-        # ★追加: ロゴの影描画
+        # ロゴの影描画
         if styles.get("logo_shadow_on", False):
             try:
                 ls_rgb = ImageColor.getrgb(styles.get("logo_shadow_color", "#000000"))
@@ -548,5 +548,28 @@ def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
             fallback_font_path=fallback_path
         )
         current_y += h + n_gap
+
+    # ==========================================
+    # ★追加: BUZZチケロゴの描画 (一番手前に描画)
+    # ==========================================
+    if styles.get("show_buzz_logo", False):
+        buzz_logo_path = os.path.join("assets", "buzz-logo-appicon.jpg")
+        if os.path.exists(buzz_logo_path):
+            try:
+                # ロゴの読み込みとリサイズ (120x120)
+                buzz_img = Image.open(buzz_logo_path).convert("RGBA")
+                b_size = 120
+                buzz_resized = buzz_img.resize((b_size, b_size), Image.LANCZOS)
+                
+                # 配置位置 (右下、余白30px)
+                margin_x = 30
+                margin_y = 30
+                paste_x = CANVAS_W - b_size - margin_x
+                paste_y = CANVAS_H - b_size - margin_y
+                
+                # キャンバスに貼り付け
+                canvas.paste(buzz_resized, (paste_x, paste_y), buzz_resized)
+            except Exception as e:
+                print(f"BUZZチケロゴの合成エラー: {e}")
 
     return canvas, layout_meta
