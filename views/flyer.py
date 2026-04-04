@@ -33,7 +33,8 @@ def gather_flyer_settings_from_session():
         "tt_scale_w", "tt_scale_h", "tt_pos_y",       
         "subtitle_date_gap", 
         "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
-        "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment"
+        "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment",
+        "show_buzz_logo" # ★追加: BUZZチケロゴ表示フラグ
     ]
     for k in base_keys:
         save_data[k] = st.session_state.get(f"flyer_{k}")
@@ -156,6 +157,7 @@ def render_flyer_editor(project_id):
     init_s("flyer_time_line_gap", 0)
     init_s("flyer_time_alignment", "center")
     init_s("flyer_preview_width", 500)
+    init_s("flyer_show_buzz_logo", False) # ★追加: BUZZチケロゴ表示の初期化
     
     sys_conf = db.query(SystemFontConfig).first()
     def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
@@ -295,7 +297,6 @@ def render_flyer_editor(project_id):
             
             sel_template = st.selectbox("保存済みテンプレート", t_options)
             
-            # ★追加: テンプレート更新ボタン
             if sel_template != "(選択してください)":
                 c_t1, c_t2 = st.columns(2)
                 with c_t1:
@@ -340,6 +341,11 @@ def render_flyer_editor(project_id):
         with st.expander("🖼️ 基本設定", expanded=True):
             render_visual_selector("背景画像", bgs, "flyer_bg_id", st.session_state.flyer_bg_id)
             st.markdown("---")
+            
+            # ★追加: BUZZチケロゴ表示チェックボックス
+            st.checkbox("🎫 右下に「BUZZチケ」のロゴを表示する", key="flyer_show_buzz_logo")
+            st.markdown("---")
+            
             render_visual_selector("ロゴ画像", logos, "flyer_logo_id", st.session_state.flyer_logo_id, allow_none=True)
             if st.session_state.flyer_logo_id:
                 st.markdown("**ロゴ微調整**")
@@ -399,8 +405,6 @@ def render_flyer_editor(project_id):
             
             st.markdown("---")
             st.markdown("**間隔設定**")
-            # ★修正: 削除した項目のUIコードを削除
-            # チケット行間などは残す
             st.number_input("チケット行間", step=1, key="flyer_ticket_gap", help="マイナス値で間隔を詰められます")
             st.number_input("チケットエリアと備考エリアの行間", step=5, key="flyer_area_gap")
             st.number_input("備考行間", step=1, key="flyer_note_gap")
@@ -412,8 +416,6 @@ def render_flyer_editor(project_id):
         render_style_editor("時間 (OPEN/START)", "time")
         render_style_editor("チケット情報 (List)", "ticket_name")
         render_style_editor("チケット共通備考 (Notes)", "ticket_note")
-        
-        # 保存ボタンは削除済み
 
     with c_prev:
         st.markdown("### 🚀 生成プレビュー")
@@ -426,7 +428,6 @@ def render_flyer_editor(project_id):
             target_key = st.radio("移動させる要素を選択:", list(move_targets.keys()), 
                                   format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
-        # ★修正: 保存して生成ボタン
         if st.button("💾 設定を保存してプレビューを生成する", type="primary", use_container_width=True):
             # 設定保存
             save_data = gather_flyer_settings_from_session()
@@ -478,9 +479,6 @@ def render_flyer_editor(project_id):
                 _generate_preview(db, proj)
 
         if HAS_CLICK_COORD:
-            # 前回のクリック情報を保持するロジック（ループ防止）は render_flyer_editor 冒頭で処理する形にした方が良いが、
-            # Streamlitの仕様上、widgetのcallbackで処理するのが一番安全。
-            # ここではシンプルに、値が変わっていたら処理するように実装済み
             pass
 
         with t1:
