@@ -13,7 +13,6 @@ from constants import (
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
-# ★修正: load_timetable_rows を追加インポート
 from logic_project import save_current_project, save_timetable_rows, load_timetable_rows
 
 try:
@@ -35,25 +34,17 @@ def check_and_migrate_add_goods_columns(db):
     なければ追加する（自動修復）
     """
     try:
-        # SQLiteとPostgreSQL(Supabase)で挙動が違うため、安全策として try-except で列追加を試みる
-        # PostgreSQLは ALTER TABLE ... ADD COLUMN IF NOT EXISTS が使えるが、
-        # SQLAlchemyのバージョン依存を避けるため個別に実行
         columns_to_add = [
             ("add_goods_start_time", "TEXT"),
             ("add_goods_duration", "INTEGER"),
             ("add_goods_place", "TEXT")
         ]
         
-        # 現在のテーブル情報を確認できればベストだが、
-        # 簡易的に「列追加コマンドを投げて、既に存在するエラーなら無視する」方式をとる
         for col_name, col_type in columns_to_add:
             try:
-                # PostgreSQL / SQLite 共通構文
                 db.execute(text(f"ALTER TABLE timetable_rows ADD COLUMN {col_name} {col_type}"))
                 db.commit()
-                # print(f"Added column: {col_name}")
             except Exception:
-                # 列が既に存在する場合はエラーになるのでロールバックして無視
                 db.rollback()
                 pass
                 
@@ -102,7 +93,6 @@ def render_timetable_page():
     
     db = next(get_db())
     
-    # ★ページ読み込み時にDBカラムチェックを実行
     check_and_migrate_add_goods_columns(db)
     
     selected_id = None
@@ -117,8 +107,6 @@ def render_timetable_page():
         if selected_label != "(選択してください)": selected_id = proj_map[selected_label]
 
     if selected_id:
-        # ★追加: 時間情報が他タブで変更されたかどうかをチェックし、リビルドを強制する
-        # これにより、概要タブで時間を変えた後に編集ができなくなる問題を解消
         current_open = st.session_state.get("tt_open_time")
         current_start = st.session_state.get("tt_start_time")
         
@@ -130,7 +118,6 @@ def render_timetable_page():
             if last_open != current_open or last_start != current_start:
                 st.session_state.rebuild_table_flag = True
                 st.session_state[last_check_key] = (current_open, current_start)
-                # st.toast("時間が変更されたため、テーブルを再構築しました", icon="🔄")
 
         # --- プロジェクトデータの読み込み ---
         if st.session_state.get("tt_current_proj_id") != selected_id:
@@ -141,7 +128,6 @@ def render_timetable_page():
                 except: st.session_state.tt_event_date = date.today()
                 st.session_state.tt_venue = proj.venue_name
                 
-                # デフォルト値の初期化
                 if "tt_open_time" not in st.session_state:
                      st.session_state.tt_open_time = proj.open_time or "10:00"
                 if "tt_start_time" not in st.session_state:
@@ -157,25 +143,22 @@ def render_timetable_page():
                         settings = json.loads(proj.settings_json)
                         if "tt_font" in settings:
                             st.session_state.tt_font = settings["tt_font"]
-                        # ★追加: 列数設定の読み込み
                         if "tt_columns" in settings:
                             st.session_state.tt_columns = settings["tt_columns"]
                     except: pass
                 
-                # ★追加: 列数設定のデフォルト
                 if "tt_columns" not in st.session_state:
                     st.session_state.tt_columns = 2
 
                 if "tt_artists_order" not in st.session_state or not st.session_state.tt_artists_order:
-                    # ★修正: まずDB(TimetableRow)から読み込みを試みる
                     loaded_rows = load_timetable_rows(db, selected_id)
                     data_source = []
                     
                     if loaded_rows:
-                        data_source = loaded_rows # DB優先
+                        data_source = loaded_rows 
                     elif proj.data_json:
                         try:
-                            data_source = json.loads(proj.data_json) # JSONバックアップ
+                            data_source = json.loads(proj.data_json) 
                         except:
                             data_source = []
 
@@ -210,7 +193,6 @@ def render_timetable_page():
                                     new_order.append(name)
                                     new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
                                     
-                                    # ★重要: ここで追加物販の情報を確実にロードする
                                     new_row_settings.append({
                                         "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
                                         "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
@@ -423,7 +405,6 @@ def render_timetable_page():
                         "ARTIST": name, "DURATION": safe_int(ad.get("DURATION"), 20), "IS_POST_GOODS": is_p,
                         "ADJUSTMENT": safe_int(rd.get("ADJUSTMENT"), 0),
                         "GOODS_START_MANUAL": safe_str(rd.get("GOODS_START_MANUAL")), "GOODS_DURATION": safe_int(rd.get("GOODS_DURATION"), 60), "PLACE": safe_str(rd.get("PLACE")),
-                        # ★修正: ここでNoneを許容する
                         "ADD_GOODS_START": safe_str(rd.get("ADD_GOODS_START")), "ADD_GOODS_DURATION": safe_int(rd.get("ADD_GOODS_DURATION"), None), "ADD_GOODS_PLACE": safe_str(rd.get("ADD_GOODS_PLACE")),
                         "IS_HIDDEN": bool(rd.get("IS_HIDDEN", False))
                     })
@@ -496,7 +477,6 @@ def render_timetable_page():
                 g_start = safe_str(row["GOODS_START_MANUAL"])
                 g_dur = safe_int(row["GOODS_DURATION"], 60)
                 add_start = safe_str(row["ADD_GOODS_START"])
-                # ★修正: None許容
                 add_dur = safe_int(row["ADD_GOODS_DURATION"], None)
                 add_place = safe_str(row["ADD_GOODS_PLACE"])
                 if is_post:
@@ -587,7 +567,6 @@ def render_timetable_page():
                     if specimen_img: st.image(specimen_img, use_container_width=True)
                     else: st.info("フォントが見つかりません")
 
-            # ★2カラムにしてフォントと列数を並べる
             c_font, c_col = st.columns([2, 1])
             with c_font:
                 st.selectbox(
@@ -596,10 +575,25 @@ def render_timetable_page():
                     format_func=lambda x: font_display_map.get(x, x),
                     key="tt_font" 
                 )
+
+            # ==========================================
+            # ★自動判定: 24組以上の場合は強制的に2列にする
+            # ==========================================
+            artist_count = len(gen_list)
+            
+            if artist_count >= 24:
+                # 24組以上の場合は警告を出し、選択肢を2列のみに固定
+                st.warning("⚠️ 24組以上のため、可読性確保の観点から自動的に「2列」レイアウトで生成されます。")
+                col_options = [2]
+                if st.session_state.get("tt_columns", 2) != 2:
+                    st.session_state.tt_columns = 2
+            else:
+                col_options = [1, 2]
+
             with c_col:
                 st.radio(
                     "画像生成の列数",
-                    options=[1, 2],
+                    options=col_options,
                     format_func=lambda x: f"{x}列",
                     horizontal=True,
                     key="tt_columns"
@@ -608,7 +602,7 @@ def render_timetable_page():
             current_tt_params = {
                 "gen_list": gen_list,
                 "font": st.session_state.tt_font,
-                "columns": st.session_state.tt_columns # ★追加
+                "columns": st.session_state.tt_columns 
             }
             if "tt_last_generated_params" not in st.session_state: st.session_state.tt_last_generated_params = None
 
@@ -617,7 +611,6 @@ def render_timetable_page():
                     try:
                         ensure_font_exists(db, st.session_state.tt_font)
                         font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
-                        # ★引数 columns を追加
                         auto_img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
                         st.session_state.last_generated_tt_image = auto_img
                         st.session_state.tt_last_generated_params = current_tt_params
@@ -634,12 +627,12 @@ def render_timetable_page():
                             try:
                                 font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
 
-                                # 1. 画像生成 (★引数 columns を追加)
+                                # 画像生成
                                 img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
                                 st.session_state.last_generated_tt_image = img
                                 st.session_state.tt_last_generated_params = current_tt_params
                                 
-                                # 2. DB保存用データの準備
+                                # DB保存用データの準備
                                 proj_to_save = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
                                 if proj_to_save:
                                     proj_to_save.open_time = st.session_state.tt_open_time
@@ -651,7 +644,7 @@ def render_timetable_page():
                                         try: settings = json.loads(proj_to_save.settings_json)
                                         except: pass
                                     settings["tt_font"] = st.session_state.tt_font
-                                    settings["tt_columns"] = st.session_state.tt_columns # ★追加
+                                    settings["tt_columns"] = st.session_state.tt_columns
                                     proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
                                     
                                     data_export = []
