@@ -6,31 +6,15 @@ from io import BytesIO
 import streamlit as st
 
 # ================= 設定エリア =================
-SINGLE_COL_WIDTH = 1450      
-COLUMN_GAP = 80             
-WIDTH = (SINGLE_COL_WIDTH * 2) + COLUMN_GAP # 2980
-ROW_HEIGHT = 130            
-ROW_MARGIN = 12             
+# 1mm = 10px の高解像度で設定し、印刷時(300dpi等)に綺麗に出るようにします
+CANVAS_HEIGHT = 2400       # 全体の高さ (240mm) 固定
+COL1_CANVAS_WIDTH = 2800   # 1列モードの幅 (280mm)
+COL2_CANVAS_WIDTH = 3600   # 2列モードの幅 (360mm)
+COLUMN_GAP = 120           # 2列モード時の列と列の隙間
 
-FONT_SIZE_TIME = 60         
-FONT_SIZE_ARTIST = 60       
-FONT_SIZE_GOODS = 48        
-
-# ★変更1: 全体の背景を「完全透明」に設定
-COLOR_BG_ALL = (0, 0, 0, 0)        
-
-# ★変更2: 黒フィルターの濃さをアップ (130 -> 170)
-# 数値を大きくするとさらに暗くなります (最大255)
-OVERLAY_OPACITY = 170
-
-COLOR_TEXT = (255, 255, 255, 255)   
-
-AREA_TIME_X = 20
-AREA_TIME_W = 320 
-AREA_ARTIST_X = 350
-AREA_ARTIST_W = 650
-AREA_GOODS_X = 1020
-AREA_GOODS_W = 410
+COLOR_BG_ALL = (0, 0, 0, 0)        # 背景透過
+OVERLAY_OPACITY = 170              # 写真上の黒フィルターの濃さ
+COLOR_TEXT = (255, 255, 255, 255)  # 文字色
 
 # ================= ヘルパー関数 =================
 
@@ -83,51 +67,39 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     draw.multiline_text((final_x+2, final_y+2), text, fill=(0,0,0,200), font=font, spacing=4, align=align)
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
-def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, columns=2):
+def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_width, row_height, columns):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
+    # 行の高さに合わせてフォントサイズを動的に計算 (上限・下限を設定)
+    font_size_artist = min(80, max(20, int(row_height * 0.45)))
+    font_size_time = min(70, max(18, int(row_height * 0.40)))
+    font_size_goods = min(50, max(15, int(row_height * 0.35)))
+
+    # 列数に応じたエリア幅と座標の計算
     if columns == 1:
-        # ★ 1列モード: 行の高さ・文字サイズはそのまま、横幅だけを2倍に広げる
-        row_width = WIDTH # キャンバス幅最大 (2980px)
-        row_height = ROW_HEIGHT
+        time_w = int(row_width * 0.15)
+        goods_w = int(row_width * 0.25)
+        artist_w = row_width - time_w - goods_w - 80 
         
-        # 配置を横長に調整（余白を多めにとる）
         time_x = 40
-        time_w = 500
-        
-        artist_x = 560
-        artist_w = 1800
-        
-        goods_w = 500
-        goods_x = WIDTH - goods_w - 40
-        
-        font_size_time = FONT_SIZE_TIME
-        font_size_artist = FONT_SIZE_ARTIST
-        font_size_goods = FONT_SIZE_GOODS
+        artist_x = time_x + time_w
+        goods_x = row_width - goods_w - 40
     else:
-        # 2列モードの通常配置
-        row_width = SINGLE_COL_WIDTH
-        row_height = ROW_HEIGHT
-        time_x = AREA_TIME_X
-        time_w = AREA_TIME_W
-        artist_x = AREA_ARTIST_X
-        artist_w = AREA_ARTIST_W
-        goods_x = AREA_GOODS_X
-        goods_w = AREA_GOODS_W
-        font_size_time = FONT_SIZE_TIME
-        font_size_artist = FONT_SIZE_ARTIST
-        font_size_goods = FONT_SIZE_GOODS
+        time_w = int(row_width * 0.20)
+        goods_w = int(row_width * 0.30)
+        artist_w = row_width - time_w - goods_w - 40
+        
+        time_x = 20
+        artist_x = time_x + time_w
+        goods_x = row_width - goods_w - 20
 
     # ---------------------------------------------------------
     # 1. 画像処理 & 透過黒フィルター合成
     # ---------------------------------------------------------
-    
-    # ベースとなる透明な行画像を作成
-    row_img = Image.new('RGBA', (row_width, row_height), (0, 0, 0, 0))
+    row_img = Image.new('RGBA', (int(row_width), int(row_height)), (0, 0, 0, 0))
     has_image = False
 
-    # 特殊行以外は画像を検索して貼り付け
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
         try:
             from database import Artist, get_image_url
@@ -141,23 +113,20 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, columns=
                 if url:
                     img = load_image(url)
                     if img:
-                        img_fitted = ImageOps.fit(img, (row_width, row_height), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+                        img_fitted = ImageOps.fit(img, (int(row_width), int(row_height)), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
                         row_img.paste(img_fitted, (0, 0))
                         has_image = True
         except Exception: pass
 
-    # 黒フィルターの適用ロジック
     if has_image:
         overlay_color = (0, 0, 0, OVERLAY_OPACITY)
     else:
         overlay_color = (40, 40, 40, 230)
 
-    overlay = Image.new('RGBA', (row_width, row_height), overlay_color)
+    overlay = Image.new('RGBA', (int(row_width), int(row_height)), overlay_color)
     
-    # 画像とフィルターを合成
+    # 画像とフィルターを合成してキャンバスに貼り付け
     row_composite = Image.alpha_composite(row_img, overlay)
-    
-    # キャンバスに貼り付け
     canvas.paste(row_composite, (int(base_x), int(base_y)), row_composite)
 
     # ---------------------------------------------------------
@@ -181,55 +150,72 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, columns=
     draw_centered_text(draw, goods_info, base_x + goods_x, base_y, goods_w, row_height, font_path, font_size_goods, align="left")
 
 def generate_timetable_image(timetable_data, font_path=None, columns=2):
-    if not timetable_data: return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (0,0,0,255))
+    if not timetable_data: return Image.new('RGBA', (COL1_CANVAS_WIDTH, CANVAS_HEIGHT), (0,0,0,255))
     
-    # 完了メッセージだけシンプルに表示
     st.toast("画像生成完了！", icon="✅")
     
     from database import SessionLocal
     db = SessionLocal()
 
     try:
-        # ★追加: 列数に応じたデータと幅の計算
+        total_artists = len(timetable_data)
+        
+        # 安全策: ロジック側でも24組以上は強制2列にする
+        if total_artists >= 24:
+            columns = 2
+
         if columns == 1:
             left_data = timetable_data
             right_data = []
-            canvas_width = WIDTH # 横幅を最大に使用
-            current_row_height = ROW_HEIGHT # 高さはそのまま
-            current_row_margin = ROW_MARGIN # マージンもそのまま
+            canvas_width = COL1_CANVAS_WIDTH
+            rows_in_column = total_artists
         else:
-            half_idx = math.ceil(len(timetable_data) / 2)
+            half_idx = math.ceil(total_artists / 2)
             left_data = timetable_data[:half_idx]
             right_data = timetable_data[half_idx:]
-            canvas_width = WIDTH
-            current_row_height = ROW_HEIGHT
-            current_row_margin = ROW_MARGIN
-            
-        rows_in_column = max(len(left_data), len(right_data))
+            canvas_width = COL2_CANVAS_WIDTH
+            rows_in_column = max(len(left_data), len(right_data))
+
         if rows_in_column == 0: rows_in_column = 1
-        total_height = rows_in_column * (current_row_height + current_row_margin)
         
-        # 動的に計算したキャンバス幅を使用
-        canvas = Image.new('RGBA', (canvas_width, total_height), COLOR_BG_ALL)
+        # ---------------------------------------------------------
+        # ★ 高さの自動調整ロジック
+        # ---------------------------------------------------------
+        margin_between_rows = 12  # 行と行の間の隙間(px)
+        
+        # キャンバス全体(2400px)を均等に割る
+        slot_height = CANVAS_HEIGHT / rows_in_column
+        # 実際に描画する高さは、割り当てられた高さからマージンを引いたもの
+        row_height = max(10, int(slot_height - margin_between_rows))
+
+        # キャンバス生成
+        canvas = Image.new('RGBA', (canvas_width, CANVAS_HEIGHT), COLOR_BG_ALL)
         draw = ImageDraw.Draw(canvas)
 
-        y = 0
-        for row in left_data:
-            draw_one_row(draw, canvas, 0, y, row, font_path, db, columns=columns)
-            y += (current_row_height + current_row_margin)
+        # 1列あたりの幅を計算
+        if columns == 1:
+            single_col_width = canvas_width
+        else:
+            single_col_width = int((canvas_width - COLUMN_GAP) / 2)
 
-        # 2列指定の時のみ右列を描画
+        # --- 左列の描画 ---
+        y = margin_between_rows / 2
+        for row in left_data:
+            draw_one_row(draw, canvas, 0, y, row, font_path, db, single_col_width, row_height, columns)
+            y += slot_height
+
+        # --- 右列の描画 ---
         if columns == 2:
-            right_col_start_x = SINGLE_COL_WIDTH + COLUMN_GAP
-            y = 0 
+            right_col_start_x = single_col_width + COLUMN_GAP
+            y = margin_between_rows / 2 
             for row in right_data:
-                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db, columns=columns)
-                y += (current_row_height + current_row_margin)
+                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db, single_col_width, row_height, columns)
+                y += slot_height
             
         return canvas
 
     except Exception as e:
         st.error(f"エラー: {e}")
-        return Image.new('RGBA', (WIDTH, ROW_HEIGHT), (255,0,0,255))
+        return Image.new('RGBA', (COL1_CANVAS_WIDTH, CANVAS_HEIGHT), (255,0,0,255))
     finally:
         db.close()
