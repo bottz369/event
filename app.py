@@ -5,6 +5,7 @@ from sqlalchemy import text, inspect
 from database import init_db, engine, TimetableProject
 
 from constants import get_default_row_settings
+from utils.logger import get_logger  # ロガー有効化(except: pass を撲滅する基盤)
 
 # --- 各画面の読み込み ---
 from views.workspace import render_workspace_page   # 統合ワークスペース
@@ -20,6 +21,9 @@ from views.ai_context import render_ai_context_page
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
 init_db()
+
+logger = get_logger("app")
+logger.info("App started")
 
 # ==========================================
 # ★重要: セッションステートの初期化
