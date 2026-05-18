@@ -26,6 +26,12 @@ def sync_draft_to_legacy_session() -> None:
     draft_project / draft_rows の内容を、旧キーに反映する。
     既存ビューはこの旧キーを参照しているので、ここで橋渡しする。
 
+    重要: この関数は reload_project() の中で clear_project_session() の直後
+    にのみ呼ばれる前提。よってここでは常に強制上書きし、setdefault や
+    「既にキーがあればスキップ」のパターンは使わない。
+    そうしないと、clear が何らかの理由で残った旧データが新プロジェクト側に
+    紛れ込む(= フェーズ1 の動作確認で見つかったバグ)。
+
     フェーズ1 ではプロジェクトロード直後に1回だけ呼ぶ。
     """
     draft = session_manager.get_draft_project()
@@ -34,56 +40,52 @@ def sync_draft_to_legacy_session() -> None:
         return
 
     # --- 基本情報 ---
-    st.session_state.setdefault("proj_title", draft.title)
-    st.session_state.setdefault("proj_subtitle", draft.subtitle)
-    st.session_state.setdefault("proj_date", draft.event_date)
-    st.session_state.setdefault("proj_venue", draft.venue_name)
-    st.session_state.setdefault("proj_url", draft.venue_url)
+    st.session_state.proj_title = draft.title
+    st.session_state.proj_subtitle = draft.subtitle
+    st.session_state.proj_date = draft.event_date
+    st.session_state.proj_venue = draft.venue_name
+    st.session_state.proj_url = draft.venue_url
 
     # --- 時間関連 ---
-    st.session_state.setdefault("tt_open_time", draft.open_time)
-    st.session_state.setdefault("tt_start_time", draft.start_time)
-    st.session_state.setdefault("tt_goods_offset", draft.goods_start_offset)
-    st.session_state.setdefault("tt_current_proj_id", draft.id)
+    st.session_state.tt_open_time = draft.open_time
+    st.session_state.tt_start_time = draft.start_time
+    st.session_state.tt_goods_offset = draft.goods_start_offset
+    st.session_state.tt_current_proj_id = draft.id
 
     # --- チケット / 自由記述 / 共通備考 ---
-    if "proj_tickets" not in st.session_state:
-        st.session_state.proj_tickets = (
-            [t.to_dict() for t in draft.tickets]
-            if draft.tickets
-            else [{"name": "", "price": "", "note": ""}]
-        )
-    if "proj_ticket_notes" not in st.session_state:
-        st.session_state.proj_ticket_notes = list(draft.ticket_notes)
-    if "proj_free_text" not in st.session_state:
-        st.session_state.proj_free_text = (
-            [f.to_dict() for f in draft.free_texts]
-            if draft.free_texts
-            else [{"title": "", "content": ""}]
-        )
+    st.session_state.proj_tickets = (
+        [t.to_dict() for t in draft.tickets]
+        if draft.tickets
+        else [{"name": "", "price": "", "note": ""}]
+    )
+    st.session_state.proj_ticket_notes = list(draft.ticket_notes)
+    st.session_state.proj_free_text = (
+        [f.to_dict() for f in draft.free_texts]
+        if draft.free_texts
+        else [{"title": "", "content": ""}]
+    )
 
     # --- フォント・列数などの設定 ---
     settings = draft.settings or {}
-    st.session_state.setdefault("tt_font", settings.get("tt_font", "keifont.ttf"))
-    st.session_state.setdefault("tt_columns", settings.get("tt_columns", 2))
-    st.session_state.setdefault("grid_font", settings.get("grid_font", "keifont.ttf"))
+    st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
+    st.session_state.tt_columns = settings.get("tt_columns", 2)
+    st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
 
     # --- グリッド設定 ---
     gs = draft.grid_settings or {}
-    st.session_state.setdefault("grid_order", gs.get("order", []))
-    st.session_state.setdefault("grid_cols", gs.get("cols", 5))
-    st.session_state.setdefault("grid_rows", gs.get("rows", 5))
-    st.session_state.setdefault("grid_row_counts_str", gs.get("row_counts_str", "5,5,5,5,5"))
-    st.session_state.setdefault("grid_alignment", gs.get("alignment", "中央揃え"))
-    st.session_state.setdefault("grid_layout_mode", gs.get("layout_mode", "レンガ (サイズ統一)"))
+    st.session_state.grid_order = gs.get("order", [])
+    st.session_state.grid_cols = gs.get("cols", 5)
+    st.session_state.grid_rows = gs.get("rows", 5)
+    st.session_state.grid_row_counts_str = gs.get("row_counts_str", "5,5,5,5,5")
+    st.session_state.grid_alignment = gs.get("alignment", "中央揃え")
+    st.session_state.grid_layout_mode = gs.get("layout_mode", "レンガ (サイズ統一)")
 
     # --- フライヤー設定 ---
     # 既存コードでは flyer_* キーを使っているのでマッピング
     flyer = draft.flyer_settings or {}
     for k, v in flyer.items():
         sess_key = f"flyer_{k}"
-        if sess_key not in st.session_state:
-            st.session_state[sess_key] = v
+        st.session_state[sess_key] = v
 
     # --- タイムテーブル行データを旧 3 分散形式に展開 ---
     _expand_rows_to_legacy(rows)
@@ -99,11 +101,10 @@ def _expand_rows_to_legacy(rows) -> None:
       - tt_has_pre_goods: bool
       - tt_pre_goods_settings: dict
       - tt_post_goods_settings: dict
-    """
-    if "tt_artists_order" in st.session_state:
-        # 既に展開済みなら何もしない(編集中のセッションを上書きしない)
-        return
 
+    sync_draft_to_legacy_session() と同じ前提(clear 直後にのみ呼ばれる)で
+    常に上書きする。早期 return はしない。
+    """
     order = []
     artist_settings = {}
     row_settings = []

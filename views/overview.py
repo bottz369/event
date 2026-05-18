@@ -19,21 +19,25 @@ EXTENDED_TIME_OPTIONS = ["※調整中"] + TIME_OPTIONS
 # ==========================================
 # コールバック関数
 # ==========================================
-def update_time_sync(key_name):
-    st.session_state[key_name] = st.session_state[f"ov_{key_name}"]
+# フェーズ1 workaround:
+# widget key にプロジェクトID を含めるようにしたので、コールバックもそれに合わせて
+# project_id 引数を受け取る形に変更している。フェーズ2 で overview.py 全面書き換え時に
+# この workaround は不要になる予定。
+def update_time_sync(key_name, src_key):
+    st.session_state[key_name] = st.session_state[src_key]
 
-def update_ticket(i, field):
-    key = f"t_{field}_{i}"
+def update_ticket(i, field, project_id):
+    key = f"t_{field}_{project_id}_{i}"
     if key in st.session_state and "proj_tickets" in st.session_state:
         st.session_state.proj_tickets[i][field] = st.session_state[key]
 
-def update_note(i):
-    key = f"t_common_note_{i}"
+def update_note(i, project_id):
+    key = f"t_common_note_{project_id}_{i}"
     if key in st.session_state and "proj_ticket_notes" in st.session_state:
         st.session_state.proj_ticket_notes[i] = st.session_state[key]
 
-def update_free(i, field):
-    key = f"f_{field}_{i}"
+def update_free(i, field, project_id):
+    key = f"f_{field}_{project_id}_{i}"
     if key in st.session_state and "proj_free_text" in st.session_state:
         st.session_state.proj_free_text[i][field] = st.session_state[key]
 
@@ -106,12 +110,14 @@ def render_overview_page():
     if curr_open not in EXTENDED_TIME_OPTIONS: curr_open = EXTENDED_TIME_OPTIONS[0]
     if curr_start not in EXTENDED_TIME_OPTIONS: curr_start = EXTENDED_TIME_OPTIONS[0]
 
+    open_key = f"ov_tt_open_time_{project_id}"
+    start_key = f"ov_tt_start_time_{project_id}"
     with c_time1:
-        st.selectbox("OPEN", EXTENDED_TIME_OPTIONS, index=EXTENDED_TIME_OPTIONS.index(curr_open), 
-                     key="ov_tt_open_time", on_change=update_time_sync, args=("tt_open_time",))
+        st.selectbox("OPEN", EXTENDED_TIME_OPTIONS, index=EXTENDED_TIME_OPTIONS.index(curr_open),
+                     key=open_key, on_change=update_time_sync, args=("tt_open_time", open_key))
     with c_time2:
-        st.selectbox("START", EXTENDED_TIME_OPTIONS, index=EXTENDED_TIME_OPTIONS.index(curr_start), 
-                     key="ov_tt_start_time", on_change=update_time_sync, args=("tt_start_time",))
+        st.selectbox("START", EXTENDED_TIME_OPTIONS, index=EXTENDED_TIME_OPTIONS.index(curr_start),
+                     key=start_key, on_change=update_time_sync, args=("tt_start_time", start_key))
 
     st.divider()
     c_tic, c_free = st.columns(2)
@@ -131,21 +137,21 @@ def render_overview_page():
         for i, ticket in enumerate(st.session_state.proj_tickets):
             with st.container(border=True):
                 cols = st.columns([3, 2, 4, 1])
-                with cols[0]: 
-                    st.text_input("チケット名", value=ticket.get("name",""), key=f"t_name_{i}", 
+                with cols[0]:
+                    st.text_input("チケット名", value=ticket.get("name",""), key=f"t_name_{project_id}_{i}",
                                   label_visibility="collapsed", placeholder="Sチケット",
-                                  on_change=update_ticket, args=(i, "name"))
-                with cols[1]: 
-                    st.text_input("金額", value=ticket.get("price",""), key=f"t_price_{i}", 
+                                  on_change=update_ticket, args=(i, "name", project_id))
+                with cols[1]:
+                    st.text_input("金額", value=ticket.get("price",""), key=f"t_price_{project_id}_{i}",
                                   label_visibility="collapsed", placeholder="¥3,000",
-                                  on_change=update_ticket, args=(i, "price"))
-                with cols[2]: 
-                    st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{i}", 
+                                  on_change=update_ticket, args=(i, "price", project_id))
+                with cols[2]:
+                    st.text_input("備考", value=ticket.get("note",""), key=f"t_note_{project_id}_{i}",
                                   label_visibility="collapsed", placeholder="D代別",
-                                  on_change=update_ticket, args=(i, "note"))
+                                  on_change=update_ticket, args=(i, "note", project_id))
                 with cols[3]:
                     if i > 0:
-                        if st.button("🗑️", key=f"del_t_{i}"):
+                        if st.button("🗑️", key=f"del_t_{project_id}_{i}"):
                             st.session_state.proj_tickets.pop(i)
                             st.rerun()
         
@@ -166,13 +172,13 @@ def render_overview_page():
                 st.text_input(
                     "共通備考",
                     value=st.session_state.proj_ticket_notes[i],
-                    key=f"t_common_note_{i}",
+                    key=f"t_common_note_{project_id}_{i}",
                     label_visibility="collapsed",
                     placeholder="例：別途1ドリンク代が必要です",
-                    on_change=update_note, args=(i,)
+                    on_change=update_note, args=(i, project_id)
                 )
             with c_note_del:
-                if st.button("🗑️", key=f"del_t_common_{i}"):
+                if st.button("🗑️", key=f"del_t_common_{project_id}_{i}"):
                     st.session_state.proj_ticket_notes.pop(i)
                     st.rerun()
 
@@ -195,19 +201,19 @@ def render_overview_page():
         for i, item in enumerate(st.session_state.proj_free_text):
             with st.container(border=True):
                 c_head, c_btn = st.columns([5, 1])
-                with c_head: 
-                    st.text_input("タイトル", value=item.get("title",""), key=f"f_title_{i}", 
+                with c_head:
+                    st.text_input("タイトル", value=item.get("title",""), key=f"f_title_{project_id}_{i}",
                                   placeholder="注意事項",
-                                  on_change=update_free, args=(i, "title"))
+                                  on_change=update_free, args=(i, "title", project_id))
                 with c_btn:
                     if i > 0:
-                        if st.button("🗑️", key=f"del_f_{i}"):
+                        if st.button("🗑️", key=f"del_f_{project_id}_{i}"):
                             st.session_state.proj_free_text.pop(i)
                             st.rerun()
-                
-                st.text_area("内容", value=item.get("content",""), key=f"f_content_{i}", 
+
+                st.text_area("内容", value=item.get("content",""), key=f"f_content_{project_id}_{i}",
                              height=100,
-                             on_change=update_free, args=(i, "content"))
+                             on_change=update_free, args=(i, "content", project_id))
 
         if st.button("＋ 新しい項目を追加"):
             st.session_state.proj_free_text.append({"title":"", "content":""})
@@ -243,7 +249,7 @@ def render_overview_page():
         
         if "proj_ticket_notes" in st.session_state:
             for i in range(len(st.session_state.proj_ticket_notes)):
-                key = f"t_common_note_{i}"
+                key = f"t_common_note_{project_id}_{i}"
                 if key in st.session_state: st.session_state.proj_ticket_notes[i] = st.session_state[key]
         
         if project_id:
