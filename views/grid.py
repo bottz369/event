@@ -3,7 +3,6 @@ import os
 import json
 import io
 import requests # URLダウンロード用
-import pandas as pd # デバッグ表示用
 
 # Asset, AssetFile, get_image_url をインポート
 from database import get_db, TimetableProject, TimetableRow, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
@@ -270,64 +269,6 @@ def render_grid_page():
                     order_changed = True
 
             if order_changed: st.rerun()
-
-            st.divider()
-            
-            # --- ★★★ デバッグ・診断モード ★★★ ---
-            with st.expander("🛠️ デバッグモード (トラブルシューティング)", expanded=True):
-                st.warning("現在、詳細デバッグモードが有効です。特定のアーティストが表示されない場合、以下を確認してください。")
-                
-                debug_target_name = st.text_input("調査するアーティスト名 (完全一致)", value="LOVE PANIC!")
-                
-                if debug_target_name:
-                    st.markdown(f"#### 🔎 調査対象: `{debug_target_name}`")
-                    
-                    # 1. リストに含まれているか
-                    in_list = debug_target_name in st.session_state.grid_order
-                    st.write(f"- グリッド表示リストに含まれている: **{'✅ YES' if in_list else '❌ NO'}**")
-                    if in_list:
-                        idx = st.session_state.grid_order.index(debug_target_name)
-                        st.write(f"  - リスト内のインデックス: `{idx}` (0始まり)")
-                    
-                    # 2. DB検索
-                    artist_db = db.query(Artist).filter(Artist.name == debug_target_name).first()
-                    if artist_db:
-                        st.write(f"- DB登録: **✅ YES** (ID: {artist_db.id})")
-                        if artist_db.image_filename:
-                            url = get_image_url(artist_db.image_filename)
-                            st.write(f"  - 画像URL: `{url}`")
-                            st.image(url, width=100)
-                        else:
-                            st.error("  - ❌ 画像未登録")
-                    else:
-                        st.error("- ❌ DBに見つかりません (完全一致が必要です)")
-                        
-                    # 6. 強制修復ボタン
-                    if st.button("🧹 リスト内のスペースを強制削除して保存", type="primary"):
-                        cleaned = [n.strip() for n in st.session_state.grid_order if n]
-                        st.session_state.grid_order = cleaned
-                        
-                        # DBにも保存
-                        proj_to_save = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
-                        if proj_to_save:
-                            settings = {}
-                            if proj_to_save.settings_json:
-                                try: settings = json.loads(proj_to_save.settings_json)
-                                except: pass
-                            
-                            current_params = {
-                                "order": st.session_state.grid_order,
-                                "row_counts": st.session_state.grid_row_counts_str,
-                                "layout_mode": st.session_state.grid_layout_mode,
-                                "alignment": st.session_state.grid_alignment,
-                                "font": st.session_state.grid_font,
-                                "rows": st.session_state.grid_rows
-                            }
-                            settings["grid_settings"] = current_params
-                            proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
-                            db.commit()
-                            st.success("修復して保存しました！")
-                            st.rerun()
 
             st.divider()
 

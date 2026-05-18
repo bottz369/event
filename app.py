@@ -14,9 +14,6 @@ from views.assets import render_assets_page        # 素材アーカイブ（ア
 from views.artists import render_artists_page      # アーティスト管理
 from views.template import render_template_management_page # テンプレート管理
 from views.manual import render_manual_page        # ユーザーマニュアル
-from views.developer_docs import render_developer_docs_page # 開発者ドキュメント
-# ★追加: AIコンテキスト出力画面
-from views.ai_context import render_ai_context_page
 
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
@@ -62,14 +59,12 @@ st.sidebar.title("メニュー")
 
 # メニュー構成
 menu_items = [
-    "ワークスペース", 
-    "プロジェクト管理", 
-    "テンプレート管理", 
-    "アーティスト管理", 
-    "アセット管理", 
-    "使い方マニュアル",
-    "開発者向けドキュメント",
-    "AIコンテキスト出力"
+    "ワークスペース",
+    "プロジェクト管理",
+    "テンプレート管理",
+    "アーティスト管理",
+    "アセット管理",
+    "使い方マニュアル"
 ]
 menu_selection = st.sidebar.radio("機能を選択", menu_items, key="sb_menu")
 
@@ -100,9 +95,3 @@ elif current_page == "アセット管理":
 
 elif current_page == "使い方マニュアル":
     render_manual_page()
-
-elif current_page == "開発者向けドキュメント":
-    render_developer_docs_page()
-
-elif current_page == "AIコンテキスト出力":
-    render_ai_context_page()
