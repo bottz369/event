@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from models import POST_GOODS_ARTIST_NAME, PRE_GOODS_ARTIST_NAME
@@ -89,6 +90,18 @@ def sync_draft_to_legacy_session() -> None:
 
     # --- タイムテーブル行データを旧 3 分散形式に展開 ---
     _expand_rows_to_legacy(rows)
+
+    # --- 制御フラグの初期化 ---
+    # clear_project_session() の直後に views/timetable.py が attribute syntax
+    # で参照するキーを setdefault しておく。これが無いと Streamlit Cloud などで
+    # ensure_project_loaded() 経由の reload(=st.rerun を挟まない経路) を通った
+    # ときに AttributeError になる。app.py の top-level defaults だけでは
+    # clear と timetable レンダーが同一 run に乗ったケースを救えない。
+    # フェーズ2 で views/timetable.py を書き換えて binding_df を廃止する際に、
+    # これら 3 行も一緒に削除できる予定。
+    st.session_state.setdefault("request_calc", False)
+    st.session_state.setdefault("tt_editor_key", 0)
+    st.session_state.setdefault("binding_df", pd.DataFrame())
 
 
 def _expand_rows_to_legacy(rows) -> None:
