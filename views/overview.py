@@ -5,8 +5,11 @@ import traceback
 
 # データベース関連
 from database import get_db, TimetableProject, TimetableRow
-from logic_project import save_current_project, load_project_data
+from logic_project import load_project_data
 from constants import TIME_OPTIONS
+
+# Phase 2B-1b: save_active_project 経由に切替
+from services import project_service
 
 # 共通のテキスト生成ロジック
 from utils.text_generator import build_event_summary_text
@@ -23,9 +26,7 @@ EXTENDED_TIME_OPTIONS = ["※調整中"] + TIME_OPTIONS
 # widget key にプロジェクトID を含めるようにしたので、コールバックもそれに合わせて
 # project_id 引数を受け取る形に変更している。フェーズ2 で overview.py 全面書き換え時に
 # この workaround は不要になる予定。
-def update_time_sync(key_name, src_key):
-    st.session_state[key_name] = st.session_state[src_key]
-
+# Phase 2B-1b: update_time_sync は OPEN/START を直接バインドに切り替えたため削除。
 def update_ticket(i, field, project_id):
     key = f"t_{field}_{project_id}_{i}"
     if key in st.session_state and "proj_tickets" in st.session_state:
@@ -103,21 +104,18 @@ def render_overview_page():
         st.text_input("会場URL", key="proj_url")
     
     # --- UI描画: 時間設定 ---
-    c_time1, c_time2 = st.columns(2)
-    curr_open = st.session_state.get("tt_open_time", "※調整中")
-    curr_start = st.session_state.get("tt_start_time", "※調整中")
-    
-    if curr_open not in EXTENDED_TIME_OPTIONS: curr_open = EXTENDED_TIME_OPTIONS[0]
-    if curr_start not in EXTENDED_TIME_OPTIONS: curr_start = EXTENDED_TIME_OPTIONS[0]
+    # Phase 2B-1b: 間接バインドを廃止し、key="tt_open_time" / "tt_start_time" で直接バインドする。
+    # session_state の値が選択肢に無い場合は強制的に有効値に更新(防御的)。
+    if st.session_state.get("tt_open_time") not in EXTENDED_TIME_OPTIONS:
+        st.session_state["tt_open_time"] = EXTENDED_TIME_OPTIONS[0]
+    if st.session_state.get("tt_start_time") not in EXTENDED_TIME_OPTIONS:
+        st.session_state["tt_start_time"] = EXTENDED_TIME_OPTIONS[0]
 
-    open_key = f"ov_tt_open_time_{project_id}"
-    start_key = f"ov_tt_start_time_{project_id}"
+    c_time1, c_time2 = st.columns(2)
     with c_time1:
-        st.selectbox("OPEN", EXTENDED_TIME_OPTIONS, index=EXTENDED_TIME_OPTIONS.index(curr_open),
-                     key=open_key, on_change=update_time_sync, args=("tt_open_time", open_key))
+        st.selectbox("OPEN", EXTENDED_TIME_OPTIONS, key="tt_open_time")
     with c_time2:
-        st.selectbox("START", EXTENDED_TIME_OPTIONS, index=EXTENDED_TIME_OPTIONS.index(curr_start),
-                     key=start_key, on_change=update_time_sync, args=("tt_start_time", start_key))
+        st.selectbox("START", EXTENDED_TIME_OPTIONS, key="tt_start_time")
 
     st.divider()
     c_tic, c_free = st.columns(2)
@@ -253,18 +251,14 @@ def render_overview_page():
                 if key in st.session_state: st.session_state.proj_ticket_notes[i] = st.session_state[key]
         
         if project_id:
-            db = next(get_db())
             try:
-                proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
-                if proj:
-                    proj.open_time = st.session_state.tt_open_time
-                    proj.start_time = st.session_state.tt_start_time
-                    if hasattr(proj, "subtitle"):
-                        proj.subtitle = st.session_state.proj_subtitle
-
-                if save_current_project(db, project_id):
+                # Phase 2B-1b: save_active_project() 経由で保存
+                # sync_session_to_draft が proj_title / proj_subtitle / proj_date / proj_venue / proj_url /
+                # tt_open_time / tt_start_time / proj_tickets / proj_ticket_notes / proj_free_text を
+                # draft_project に同期 → apply_draft で DB へ書き出す。
+                if project_service.save_active_project():
                     st.toast("イベント情報を保存しました！", icon="✅")
-                    
+
                     updated_params = {
                         "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
                         "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
@@ -284,8 +278,6 @@ def render_overview_page():
             except Exception as e:
                 st.error(f"保存エラー: {e}")
                 st.code(traceback.format_exc())
-            finally:
-                db.close()
         else:
             st.error("プロジェクトIDが不明です")
 

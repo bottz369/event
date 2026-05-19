@@ -13,7 +13,10 @@ from constants import (
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
-from logic_project import save_current_project, save_timetable_rows, load_timetable_rows
+from logic_project import load_timetable_rows
+
+# Phase 2B-1b: save_active_project 経由に切替
+from services import project_service
 
 try:
     from streamlit_sortables import sort_items
@@ -316,13 +319,19 @@ def render_timetable_page():
         
         # 設定エリア
         col_p1, col_p2, col_p3 = st.columns(3)
-        
-        with col_p1: 
-            st.selectbox("開場時間", TIME_OPTIONS, key="tt_open_time", on_change=mark_dirty)
-        with col_p2: 
-            st.selectbox("開演時間", TIME_OPTIONS, key="tt_start_time", on_change=mark_dirty)
-        
+
+        # OPEN / START は read-only 表示(編集は概要タブで行う)。
+        # Phase 2B-1b で widget key 競合(罠10)を解消するため selectbox を削除。
+        open_time_display = st.session_state.get("tt_open_time") or "未設定"
+        start_time_display = st.session_state.get("tt_start_time") or "未設定"
+        with col_p1:
+            st.metric(label="開場時間", value=open_time_display)
+        with col_p2:
+            st.metric(label="開演時間", value=start_time_display)
+
         with col_p3: st.number_input("物販開始オフセット(分)", min_value=0, key="tt_goods_offset", on_change=mark_dirty)
+
+        st.caption("ℹ️ OPEN / START の変更はイベント概要タブで行ってください。")
         
         if st.button("🔄 時間を再計算して反映"):
             st.session_state.request_calc = True
@@ -631,73 +640,15 @@ def render_timetable_page():
                                 img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
                                 st.session_state.last_generated_tt_image = img
                                 st.session_state.tt_last_generated_params = current_tt_params
-                                
-                                # DB保存用データの準備
-                                proj_to_save = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
-                                if proj_to_save:
-                                    proj_to_save.open_time = st.session_state.tt_open_time
-                                    proj_to_save.start_time = st.session_state.tt_start_time
-                                    proj_to_save.goods_start_offset = st.session_state.tt_goods_offset
-                                    
-                                    settings = {}
-                                    if proj_to_save.settings_json:
-                                        try: settings = json.loads(proj_to_save.settings_json)
-                                        except: pass
-                                    settings["tt_font"] = st.session_state.tt_font
-                                    settings["tt_columns"] = st.session_state.tt_columns
-                                    proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
-                                    
-                                    data_export = []
-                                    if st.session_state.tt_has_pre_goods:
-                                        p = st.session_state.tt_pre_goods_settings
-                                        data_export.append({
-                                            "ARTIST": "開演前物販", 
-                                            "GOODS_START_MANUAL": p.get("GOODS_START_MANUAL"), 
-                                            "GOODS_DURATION": p.get("GOODS_DURATION"), 
-                                            "PLACE": p.get("PLACE"),
-                                            "IS_HIDDEN": p.get("IS_HIDDEN", False)
-                                        })
-                                    
-                                    for i, name in enumerate(st.session_state.tt_artists_order):
-                                        ad = st.session_state.tt_artist_settings.get(name, {"DURATION": 20})
-                                        rd = st.session_state.tt_row_settings[i] if i < len(st.session_state.tt_row_settings) else {}
-                                        
-                                        item = {
-                                            "ARTIST": name,
-                                            "DURATION": ad.get("DURATION", 20),
-                                            "ADJUSTMENT": rd.get("ADJUSTMENT", 0),
-                                            "GOODS_START_MANUAL": rd.get("GOODS_START_MANUAL"),
-                                            "GOODS_DURATION": rd.get("GOODS_DURATION"),
-                                            "PLACE": rd.get("PLACE"),
-                                            "ADD_GOODS_START": rd.get("ADD_GOODS_START"),
-                                            "ADD_GOODS_DURATION": rd.get("ADD_GOODS_DURATION"),
-                                            "ADD_GOODS_PLACE": rd.get("ADD_GOODS_PLACE"),
-                                            "IS_POST_GOODS": rd.get("IS_POST_GOODS", False),
-                                            "IS_HIDDEN": rd.get("IS_HIDDEN", False)
-                                        }
-                                        data_export.append(item)
-                                    
-                                    has_post = any(r.get("IS_POST_GOODS") for r in st.session_state.tt_row_settings)
-                                    if has_post:
-                                        p = st.session_state.tt_post_goods_settings
-                                        data_export.append({
-                                            "ARTIST": "終演後物販", 
-                                            "GOODS_START_MANUAL": p.get("GOODS_START_MANUAL"), 
-                                            "GOODS_DURATION": p.get("GOODS_DURATION"), 
-                                            "PLACE": p.get("PLACE"),
-                                            "IS_HIDDEN": p.get("IS_HIDDEN", False)
-                                        })
 
-                                    proj_to_save.data_json = json.dumps(data_export, ensure_ascii=False)
-                                    save_current_project(db, selected_id)
-                                    
-                                    if save_timetable_rows(db, selected_id, data_export):
-                                        st.toast("保存＆プレビュー更新完了！", icon="✅")
-                                    else:
-                                        st.error("詳細データの保存に失敗しました")
+                                # Phase 2B-1b: save_active_project() 経由で保存
+                                # sync_session_to_draft が tt_open_time / tt_start_time / tt_goods_offset /
+                                # tt_font / tt_columns を draft_project に同期 → apply_draft で DB へ書き出す。
+                                if project_service.save_active_project():
+                                    st.toast("保存＆プレビュー更新完了！", icon="✅")
                                 else:
-                                    st.error("プロジェクトが見つかりません")
-                                    
+                                    st.error("保存に失敗しました")
+
                             except Exception as e:
                                 st.error(f"生成エラー: {e}")
                     else:
