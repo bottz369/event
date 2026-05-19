@@ -17,12 +17,13 @@ Streamlit セッションステートの一元管理。
 """
 from __future__ import annotations
 
+import datetime
 from typing import List, Optional
 
 import streamlit as st
 
 from database import SessionLocal
-from models import ProjectDraft, TimetableRowDraft
+from models import FreeTextDraft, ProjectDraft, TicketDraft, TimetableRowDraft
 from repositories import project_repo, timetable_repo
 from utils.logger import get_logger
 
@@ -132,6 +133,188 @@ def set_draft_project(draft: ProjectDraft) -> None:
 
 def set_draft_rows(rows: List[TimetableRowDraft]) -> None:
     st.session_state["draft_rows"] = rows
+
+
+# =========================================================
+# session_state -> draft 同期(保存直前に呼ぶ)
+# =========================================================
+# session_state には view 層が widget 経由で書き込んだ生キー
+# (proj_title, tt_open_time, proj_tickets, ...) が入っている。
+# 一方 draft_project は reload 時にしか更新されず、編集中の値が反映されていない。
+# このため、save_active_project() を view から呼んだだけでは画面入力が保存されない。
+#
+# sync_session_to_draft() は保存直前に呼び、session_state -> draft の写像を行う。
+# フェーズ2B で view を draft_rows 直接編集に書き換える際、本関数は不要になり削除予定。
+# =========================================================
+
+_FLYER_EXCLUDED_KEYS = {
+    # PIL.Image など serializable でない transient データ
+    "flyer_result_grid",
+    "flyer_result_tt",
+    "flyer_layout_meta",
+    # UI のクリック追跡用、永続化しない
+    "flyer_click_target",
+}
+
+# session_state のキーから draft.grid_settings のキーへの写像
+_GRID_KEY_MAP = {
+    "grid_order": "order",
+    "grid_cols": "cols",
+    "grid_rows": "rows",
+    "grid_row_counts_str": "row_counts_str",
+    "grid_alignment": "alignment",
+    "grid_layout_mode": "layout_mode",
+}
+
+
+def _is_persistable(value) -> bool:
+    """JSON 化可能か簡易判定(scalar / list / dict のみ許容)。"""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_is_persistable(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_persistable(v) for k, v in value.items())
+    return False
+
+
+def sync_session_to_draft() -> bool:
+    """
+    st.session_state の現在値を draft_project に書き戻す。
+
+    save_active_project() の冒頭で呼ぶことで、view 側は session_state の
+    生キー(proj_title, tt_open_time, proj_tickets, ...) を更新するだけで済む。
+
+    対象キー(ProjectDraft 側):
+      - proj_title → draft.title
+      - proj_subtitle → draft.subtitle
+      - proj_date → draft.event_date (date 型に変換)
+      - proj_venue → draft.venue_name
+      - proj_url → draft.venue_url
+      - tt_open_time → draft.open_time
+      - tt_start_time → draft.start_time
+      - tt_goods_offset → draft.goods_start_offset
+      - proj_tickets → draft.tickets (TicketDraft への正規化)
+      - proj_ticket_notes → draft.ticket_notes
+      - proj_free_text → draft.free_texts (FreeTextDraft への正規化)
+      - tt_font / tt_columns / grid_font → draft.settings(既存 dict に merge)
+      - flyer_* → draft.flyer_settings(prefix を strip, transient を除外して merge)
+      - grid_* → draft.grid_settings(_GRID_KEY_MAP の通り merge)
+
+    draft_rows は touch しない(フェーズ2B-2 で view を書き換える時に対応)。
+
+    Returns:
+        True: draft を更新した
+        False: アクティブな draft が無いなどで更新できなかった
+    """
+    draft = get_draft_project()
+    if draft is None:
+        logger.debug("sync_session_to_draft: no active draft, skipping")
+        return False
+
+    updated_fields: List[str] = []
+
+    # --- 基本情報 ---
+    if "proj_title" in st.session_state:
+        draft.title = str(st.session_state.proj_title or "")
+        updated_fields.append("title")
+    if "proj_subtitle" in st.session_state:
+        draft.subtitle = str(st.session_state.proj_subtitle or "")
+        updated_fields.append("subtitle")
+    if "proj_date" in st.session_state:
+        v = st.session_state.proj_date
+        try:
+            if v is None or v == "":
+                draft.event_date = None
+            elif isinstance(v, datetime.datetime):
+                draft.event_date = v.date()
+            elif isinstance(v, datetime.date):
+                draft.event_date = v
+            else:
+                draft.event_date = datetime.datetime.strptime(str(v), "%Y-%m-%d").date()
+            updated_fields.append("event_date")
+        except Exception as e:
+            logger.warning(f"sync_session_to_draft: cannot parse proj_date {v!r}: {e}")
+    if "proj_venue" in st.session_state:
+        draft.venue_name = str(st.session_state.proj_venue or "")
+        updated_fields.append("venue_name")
+    if "proj_url" in st.session_state:
+        draft.venue_url = str(st.session_state.proj_url or "")
+        updated_fields.append("venue_url")
+
+    # --- 時間 ---
+    if "tt_open_time" in st.session_state:
+        draft.open_time = str(st.session_state.tt_open_time or "")
+        updated_fields.append("open_time")
+    if "tt_start_time" in st.session_state:
+        draft.start_time = str(st.session_state.tt_start_time or "")
+        updated_fields.append("start_time")
+    if "tt_goods_offset" in st.session_state:
+        try:
+            draft.goods_start_offset = int(st.session_state.tt_goods_offset or 0)
+            updated_fields.append("goods_start_offset")
+        except Exception as e:
+            logger.warning(f"sync_session_to_draft: cannot parse tt_goods_offset: {e}")
+
+    # --- チケット / 自由記述 / 共通備考 ---
+    if "proj_tickets" in st.session_state:
+        raw = st.session_state.proj_tickets or []
+        if isinstance(raw, list):
+            draft.tickets = [TicketDraft.from_dict(t) for t in raw]
+            updated_fields.append(f"tickets[{len(draft.tickets)}]")
+    if "proj_ticket_notes" in st.session_state:
+        raw = st.session_state.proj_ticket_notes or []
+        if isinstance(raw, list):
+            draft.ticket_notes = [str(n) for n in raw if n is not None]
+            updated_fields.append(f"ticket_notes[{len(draft.ticket_notes)}]")
+    if "proj_free_text" in st.session_state:
+        raw = st.session_state.proj_free_text or []
+        if isinstance(raw, list):
+            draft.free_texts = [FreeTextDraft.from_dict(f) for f in raw]
+            updated_fields.append(f"free_texts[{len(draft.free_texts)}]")
+
+    # --- settings (tt_font / tt_columns / grid_font を既存 dict にマージ) ---
+    settings = dict(draft.settings or {})
+    if "tt_font" in st.session_state:
+        settings["tt_font"] = st.session_state.tt_font
+    if "tt_columns" in st.session_state:
+        settings["tt_columns"] = st.session_state.tt_columns
+    if "grid_font" in st.session_state:
+        settings["grid_font"] = st.session_state.grid_font
+    draft.settings = settings
+
+    # --- grid_settings (grid_* → draft.grid_settings、prefix strip) ---
+    grid_settings = dict(draft.grid_settings or {})
+    for sess_key, settings_key in _GRID_KEY_MAP.items():
+        if sess_key in st.session_state:
+            grid_settings[settings_key] = st.session_state[sess_key]
+    draft.grid_settings = grid_settings
+
+    # --- flyer_settings (flyer_* → draft.flyer_settings、prefix strip, transient 除外) ---
+    flyer_settings = dict(draft.flyer_settings or {})
+    flyer_added = 0
+    for key in list(st.session_state.keys()):
+        if not isinstance(key, str) or not key.startswith("flyer_"):
+            continue
+        if key in _FLYER_EXCLUDED_KEYS:
+            continue
+        value = st.session_state[key]
+        if not _is_persistable(value):
+            continue
+        short_key = key[len("flyer_"):]
+        flyer_settings[short_key] = value
+        flyer_added += 1
+    draft.flyer_settings = flyer_settings
+
+    # dataclass は mutable なので set_draft_project は厳密には不要だが、明示的に書き戻す
+    set_draft_project(draft)
+
+    logger.info(
+        f"sync_session_to_draft: draft.id={draft.id} "
+        f"fields={updated_fields} "
+        f"settings_keys={len(settings)} grid_keys={len(grid_settings)} flyer_keys={len(flyer_settings)}"
+    )
+    return True
 
 
 def ensure_project_loaded(project_id: int) -> bool:

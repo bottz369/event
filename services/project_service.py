@@ -53,10 +53,17 @@ def save_active_project() -> bool:
     session_state にあるドラフトを DB に書き出す。
     成功したら mark_saved を呼んで未保存判定をリセットする。
 
+    保存直前に sync_session_to_draft() を呼んで、widget で編集された
+    session_state の生キーを draft に書き戻す。これにより view 層は
+    本関数を呼ぶだけで「画面入力が DB に反映される」状態になる。
+
     戻り値:
         True: 成功
         False: 失敗(または対象なし)
     """
+    # widget で編集された session_state の値を draft に同期(★Phase 2B-1a で追加)
+    session_manager.sync_session_to_draft()
+
     draft = session_manager.get_draft_project()
     rows = session_manager.get_draft_rows()
 
@@ -66,7 +73,8 @@ def save_active_project() -> bool:
 
     db = SessionLocal()
     try:
-        ok_proj = project_repo.update_project_from_draft(db, draft)
+        # rows を渡すと、apply_draft 内で過渡期互換のため data_json も同時書き出しされる
+        ok_proj = project_repo.update_project_from_draft(db, draft, rows=rows)
         if not ok_proj:
             return False
 

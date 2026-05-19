@@ -13,9 +13,12 @@ from sqlalchemy.orm import Session
 
 from database import TimetableProject
 from models import (
+    PRE_GOODS_ARTIST_NAME,
+    POST_GOODS_ARTIST_NAME,
+    FreeTextDraft,
     ProjectDraft,
     TicketDraft,
-    FreeTextDraft,
+    TimetableRowDraft,
 )
 from utils.logger import get_logger
 
@@ -141,10 +144,49 @@ def to_draft(proj: TimetableProject) -> ProjectDraft:
     )
 
 
-def apply_draft(proj: TimetableProject, draft: ProjectDraft) -> None:
+def _build_legacy_data_json_from_rows(rows: List[TimetableRowDraft]) -> List[dict]:
+    """
+    draft_rows を logic_project.save_current_project() と同じ形式の
+    list of dicts に変換して返す(大文字キー)。
+
+    フェーズ2B 中の過渡期、grid.py / overview.py / flyer_helpers.py 等の
+    フォールバック読み込みが古い data_json を参照し続けるのを防ぐため、
+    apply_draft() で同時書き出しする。
+    フェーズ4 で data_json 廃止時に本関数ごと削除予定。
+    """
+    result: List[dict] = []
+    for r in rows:
+        d = r.to_legacy_dict()
+        if r.artist_name in (PRE_GOODS_ARTIST_NAME, POST_GOODS_ARTIST_NAME):
+            # legacy 仕様: 開演前/終演後物販の特殊行は特定フィールドを強制リセット
+            # (logic_project.save_current_project と完全一致させる)
+            d["DURATION"] = 0
+            d["ADJUSTMENT"] = 0
+            d["IS_POST_GOODS"] = False
+            d["PLACE"] = ""
+            d["ADD_GOODS_START"] = ""
+            d["ADD_GOODS_DURATION"] = None
+            d["ADD_GOODS_PLACE"] = ""
+        result.append(d)
+    return result
+
+
+def apply_draft(
+    proj: TimetableProject,
+    draft: ProjectDraft,
+    rows: Optional[List[TimetableRowDraft]] = None,
+) -> None:
     """
     Draft の内容を ORM オブジェクトに反映する(commit はしない)。
     DB スキーマには手を入れない方針なので、JSON カラムへの書き戻しはここで行う。
+
+    rows を渡すと、過渡期互換のため projects_v4.data_json も同時書き出しする
+    (grid.py / overview.py / flyer_helpers.py のフォールバック経路のため、
+     フェーズ4 で削除予定)。
+    rows=None の場合は data_json には触らない(既存値を保持)。
+
+    flyer_json は既存 JSON と draft.flyer_settings をマージする
+    (init_s 由来の動的キーが消失するのを防ぐ)。
     """
     proj.title = draft.title
     if hasattr(proj, "subtitle"):
@@ -161,7 +203,38 @@ def apply_draft(proj: TimetableProject, draft: ProjectDraft) -> None:
     proj.free_text_json = json.dumps([f.to_dict() for f in draft.free_texts], ensure_ascii=False)
     proj.settings_json = json.dumps(draft.settings, ensure_ascii=False)
     proj.grid_order_json = json.dumps(draft.grid_settings, ensure_ascii=False)
-    proj.flyer_json = json.dumps(draft.flyer_settings, ensure_ascii=False)
+
+    # --- flyer_json: 既存値と draft.flyer_settings をマージ ---
+    # 全消し上書きすると init_s 由来の動的キー(flyer_grid_scale_w 等 30+ 個)が
+    # 失われるため、既存 JSON を読んでから draft の値で update する。
+    existing_flyer: dict = {}
+    if proj.flyer_json:
+        try:
+            parsed = json.loads(proj.flyer_json)
+            if isinstance(parsed, dict):
+                existing_flyer = parsed
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"apply_draft: flyer_json parse failed for project {proj.id}, "
+                f"treating as empty: {e}"
+            )
+    merged_flyer = dict(existing_flyer)
+    merged_flyer.update(draft.flyer_settings or {})
+    proj.flyer_json = json.dumps(merged_flyer, ensure_ascii=False)
+
+    # --- data_json: 過渡期の互換書き出し(rows が渡されたときのみ) ---
+    if rows is not None:
+        data_payload = _build_legacy_data_json_from_rows(rows)
+        proj.data_json = json.dumps(data_payload, ensure_ascii=False)
+        logger.debug(
+            f"apply_draft: wrote data_json with {len(data_payload)} rows, "
+            f"flyer_json keys={len(merged_flyer)}"
+        )
+    else:
+        logger.debug(
+            f"apply_draft: data_json untouched (rows=None), "
+            f"flyer_json keys={len(merged_flyer)}"
+        )
 
 
 # ---------------------------------------------------------
@@ -192,8 +265,15 @@ def create_project(
     return new_proj
 
 
-def update_project_from_draft(db: Session, draft: ProjectDraft) -> bool:
-    """Draft の内容で既存プロジェクトを更新。"""
+def update_project_from_draft(
+    db: Session,
+    draft: ProjectDraft,
+    rows: Optional[List[TimetableRowDraft]] = None,
+) -> bool:
+    """
+    Draft の内容で既存プロジェクトを更新。
+    rows を渡すと apply_draft が data_json も同時書き出しする(過渡期互換)。
+    """
     if draft.id is None:
         logger.error("update_project_from_draft: draft.id is None")
         return False
@@ -201,7 +281,7 @@ def update_project_from_draft(db: Session, draft: ProjectDraft) -> bool:
     if not proj:
         logger.error(f"update_project_from_draft: project not found id={draft.id}")
         return False
-    apply_draft(proj, draft)
+    apply_draft(proj, draft, rows=rows)
     db.commit()
     logger.info(f"Updated project id={draft.id}")
     return True
