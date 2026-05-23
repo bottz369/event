@@ -192,6 +192,7 @@ def render_grid_page():
                     st.session_state.grid_rows = 5
                     st.session_state.grid_row_counts_str = "5,5,5,5,5"
                     st.session_state.grid_font = "keifont.ttf"
+                    st.session_state.grid_just_reset = True
                     
                 except Exception as e:
                     print(f"Reset Error: {e}")
@@ -264,7 +265,11 @@ def render_grid_page():
                 new_flat = []
                 for g in res: new_flat.extend(g["items"])
                 
-                if new_flat != st.session_state.grid_order:
+                if st.session_state.get("grid_just_reset"):
+                    # リセット直後の1回は sort_items の古い戻り値を無視する
+                    st.session_state.grid_just_reset = False
+                    order_changed = True
+                elif new_flat != st.session_state.grid_order:
                     st.session_state.grid_order = new_flat
                     order_changed = True
 
