@@ -7,7 +7,7 @@ import requests # URLダウンロード用
 # Asset, AssetFile, get_image_url をインポート
 from database import get_db, TimetableProject, TimetableRow, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
 from constants import FONT_DIR
-from logic_project import save_current_project
+from services import project_service
 from utils import create_font_specimen_img, get_sorted_font_list
 
 try:
@@ -379,22 +379,15 @@ def render_grid_page():
                                 if img:
                                     st.session_state.last_generated_grid_image = img
                                     st.session_state.grid_last_generated_params = current_params
-                                    
-                                    # DB保存
-                                    proj_to_save = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
-                                    if proj_to_save:
-                                        settings = {}
-                                        if proj_to_save.settings_json:
-                                            try: settings = json.loads(proj_to_save.settings_json)
-                                            except: pass
-                                        
-                                        settings["grid_settings"] = current_params
-                                        proj_to_save.settings_json = json.dumps(settings, ensure_ascii=False)
-                                        
-                                        if save_current_project(db, selected_id):
-                                            st.toast("保存＆プレビュー更新完了！", icon="✅")
-                                        else:
-                                            st.error("DB保存に失敗しました")
+
+                                    # Phase 2B: 保存経路を save_active_project に統一。
+                                    # 旧 save_current_project は settings_json を {tt_font, grid_font}
+                                    # で全置換し tt_columns を消すため使わない。grid_* は
+                                    # sync_session_to_draft が draft.grid_settings / draft.settings に拾う。
+                                    if project_service.save_active_project():
+                                        st.toast("保存＆プレビュー更新完了！", icon="✅")
+                                    else:
+                                        st.error("DB保存に失敗しました")
                                 else:
                                     st.error("生成失敗")
                             except Exception as e:
