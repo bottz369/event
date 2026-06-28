@@ -22,29 +22,40 @@ from utils.flyer_generator import create_flyer_image_shadow
 # 設定データの収集関数
 # ==========================================
 def gather_flyer_settings_from_session():
-    """現在のセッションステートから保存すべき設定データを辞書で返す"""
+    """現在のセッションステートから保存すべき設定データを辞書で返す。
+
+    Phase 2B-1c-①: None 値は save_data に含めない。
+    init_s が走る前にこの関数が呼ばれた場合、未初期化キーは
+    st.session_state.get() で None が返り、そのまま json.dumps すると
+    flyer_json に null が焼き付いてしまう。null を書かないことで、
+    呼び出し側 (line 434 の保存ボタン経路) で既存値を意図せず潰さない。
+    """
     save_data = {}
     base_keys = [
-        "bg_id", "logo_id", "date_format", 
+        "bg_id", "logo_id", "date_format",
         "logo_scale", "logo_pos_x", "logo_pos_y",
-        "logo_shadow_on", "logo_shadow_color", "logo_shadow_opacity", 
+        "logo_shadow_on", "logo_shadow_color", "logo_shadow_opacity",
         "logo_shadow_spread", "logo_shadow_blur", "logo_shadow_off_x", "logo_shadow_off_y",
-        "grid_scale_w", "grid_scale_h", "grid_pos_y", 
-        "tt_scale_w", "tt_scale_h", "tt_pos_y",       
-        "subtitle_date_gap", 
+        "grid_scale_w", "grid_scale_h", "grid_pos_y",
+        "tt_scale_w", "tt_scale_h", "tt_pos_y",
+        "subtitle_date_gap",
         "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
         "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment",
         "show_buzz_logo" # ★追加: BUZZチケロゴ表示フラグ
     ]
     for k in base_keys:
-        save_data[k] = st.session_state.get(f"flyer_{k}")
-    
+        v = st.session_state.get(f"flyer_{k}")
+        if v is not None:
+            save_data[k] = v
+
     target_keys = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
     style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "shadow_opacity", "shadow_spread", "pos_x", "pos_y"]
     for k in target_keys:
         for p in style_params:
-            save_data[f"{k}_{p}"] = st.session_state.get(f"flyer_{k}_{p}")
-            
+            v = st.session_state.get(f"flyer_{k}_{p}")
+            if v is not None:
+                save_data[f"{k}_{p}"] = v
+
     return save_data
 
 def render_visual_selector(label, options, key_name, current_value, allow_none=False):
@@ -210,11 +221,9 @@ def render_flyer_editor(project_id):
                 st.session_state[f"flyer_{target}_pos_y"] = new_pos_y
                 
                 st.toast(f"{move_targets.get(target, target)} を移動しました (X={new_pos_x}, Y={new_pos_y})")
-                
-                # 自動保存してプレビュー更新
-                save_data = gather_flyer_settings_from_session()
-                proj.flyer_json = json.dumps(save_data)
-                db.commit()
+
+                # Phase 2B-1c-①: 座標クリックによる即時 DB commit を廃止。
+                # 編集は session_state に留め、DB 反映は保存ボタン押下時のみ。
                 _generate_preview(db, proj)
 
     if HAS_CLICK_COORD:
@@ -471,11 +480,9 @@ def render_flyer_editor(project_id):
                 st.session_state[f"flyer_{target}_pos_y"] = new_pos_y
                 
                 st.toast(f"{move_targets.get(target, target)} を移動しました (X={new_pos_x}, Y={new_pos_y})")
-                
-                # 自動保存してプレビュー更新
-                save_data = gather_flyer_settings_from_session()
-                proj.flyer_json = json.dumps(save_data)
-                db.commit()
+
+                # Phase 2B-1c-①: 座標クリックによる即時 DB commit を廃止。
+                # 編集は session_state に留め、DB 反映は保存ボタン押下時のみ。
                 _generate_preview(db, proj)
 
         if HAS_CLICK_COORD:
