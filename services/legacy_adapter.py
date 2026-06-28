@@ -91,8 +91,14 @@ def sync_draft_to_legacy_session() -> None:
     for key in list(st.session_state.keys()):
         if isinstance(key, str) and key.startswith("flyer_"):
             del st.session_state[key]
+    # Phase 2B-1c-②a (P2): None 値はスキップ。DB に焼き付いた null を
+    # session_state に渡さないことで、widget が min_value に正規化する
+    # 退化ループの入口を塞ぐ。views/flyer.py の init_s 側 (P1) も
+    # None フォールバックするが、ここでも defense-in-depth で止める。
     flyer = draft.flyer_settings or {}
     for k, v in flyer.items():
+        if v is None:
+            continue
         sess_key = f"flyer_{k}"
         st.session_state[sess_key] = v
 
