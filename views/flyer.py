@@ -129,10 +129,17 @@ def render_flyer_editor(project_id):
         except: pass
 
     # Session State 初期化
+    # Phase 2B-1c-②a (P1): None も「未初期化」として扱う。
+    # 過去に flyer_json に焼き付いた null が saved_config 経由で
+    # session_state に None として刺さると、widget が min_value に正規化して
+    # 書き戻し、次の保存で min が DB に焼き付く退化ループの起点になっていた。
+    # dict.get(k, default) は value=None でも default を返さないため、
+    # cfg_val が None のときは明示的に val(ハードコード default)へフォールバックする。
     def init_s(key, val):
-        if key not in st.session_state:
+        if key not in st.session_state or st.session_state[key] is None:
             short_key = key.replace("flyer_", "")
-            st.session_state[key] = saved_config.get(short_key, val)
+            cfg_val = saved_config.get(short_key)
+            st.session_state[key] = val if cfg_val is None else cfg_val
 
     init_s("flyer_bg_id", 0)
     init_s("flyer_logo_id", 0)
