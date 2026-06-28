@@ -82,7 +82,15 @@ def sync_draft_to_legacy_session() -> None:
     st.session_state.grid_layout_mode = gs.get("layout_mode", "レンガ (サイズ統一)")
 
     # --- フライヤー設定 ---
-    # 既存コードでは flyer_* キーを使っているのでマッピング
+    # Phase 2B-1c-①: 「全消し→入れ直し」に変更。
+    # 旧コードは draft.flyer_settings.items() を上書きするだけだったため、
+    # 新プロジェクトに存在しないキーは旧プロジェクトの値が session_state に
+    # 残留し、他タブ保存時の apply_draft merge で flyer_json を汚染していた。
+    # clear_project_session でも flyer_ は消しているが、本関数の不変条件
+    # (常に強制上書き)を維持する意図でここでも明示的に消す。
+    for key in list(st.session_state.keys()):
+        if isinstance(key, str) and key.startswith("flyer_"):
+            del st.session_state[key]
     flyer = draft.flyer_settings or {}
     for k, v in flyer.items():
         sess_key = f"flyer_{k}"

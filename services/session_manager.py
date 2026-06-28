@@ -513,6 +513,9 @@ def clear_project_session() -> None:
             del st.session_state[key]
 
     # 動的に作られるキー(プレフィックス一致で消すもの)
+    # Phase 2B-1c-①: flyer_ を追加。プロジェクト切替時に旧プロジェクトの
+    # flyer_* キーが session_state に残留し、他タブの「設定反映」で
+    # apply_draft の merge 書き戻し時に flyer_json を破壊していた。
     dynamic_prefixes = (
         "tt_last_check_times_",
         "t_name_",
@@ -527,6 +530,7 @@ def clear_project_session() -> None:
         "last_coord_",
         "ov_tt_open_time",
         "ov_tt_start_time",
+        "flyer_",
     )
     for key in list(st.session_state.keys()):
         if isinstance(key, str) and key.startswith(dynamic_prefixes):
