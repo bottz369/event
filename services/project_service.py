@@ -61,6 +61,8 @@ def save_active_project() -> bool:
         True: 成功
         False: 失敗(または対象なし)
     """
+    import time as _time
+    _t0 = _time.perf_counter()
     # widget で編集された session_state の値を draft に同期(★Phase 2B-1a で追加)
     session_manager.sync_session_to_draft()
 
@@ -84,6 +86,10 @@ def save_active_project() -> bool:
 
         session_manager.mark_saved()
         logger.info(f"save_active_project: saved id={draft.id}, rows={len(rows)}")
+        logger.info(
+            f"[PERF] save_active_project total took {(_time.perf_counter()-_t0)*1000:.0f} ms "
+            f"(id={draft.id}, rows={len(rows)})"
+        )
         return True
     except Exception as e:
         logger.error(f"save_active_project failed: {e}", exc_info=True)
@@ -148,9 +154,16 @@ def list_projects_for_selector():
     プロジェクト選択 UI 用に、軽量な (id, label) のリストを返す。
     DB アクセスを view から切り離すために用意。
     """
+    import time as _time
+    _t0 = _time.perf_counter()
     db = SessionLocal()
     try:
         projects = project_repo.list_projects(db)
-        return [(p.id, f"{p.event_date or '----'} {p.title}") for p in projects]
+        result = [(p.id, f"{p.event_date or '----'} {p.title}") for p in projects]
+        logger.info(
+            f"[PERF] list_projects_for_selector took {(_time.perf_counter()-_t0)*1000:.0f} ms "
+            f"(rows={len(result)})"
+        )
+        return result
     finally:
         db.close()

@@ -36,13 +36,20 @@ def check_and_migrate_add_goods_columns(db):
     timetable_rows テーブルに追加物販用のカラムが存在するか確認し、
     なければ追加する（自動修復）
     """
+    import time as _time
+    _t0 = _time.perf_counter()
+    try:
+        from utils.logger import get_logger as _gl
+        _gl("perf").info("[PERF] check_and_migrate_add_goods_columns start")
+    except Exception:
+        pass
     try:
         columns_to_add = [
             ("add_goods_start_time", "TEXT"),
             ("add_goods_duration", "INTEGER"),
             ("add_goods_place", "TEXT")
         ]
-        
+
         for col_name, col_type in columns_to_add:
             try:
                 db.execute(text(f"ALTER TABLE timetable_rows ADD COLUMN {col_name} {col_type}"))
@@ -50,9 +57,16 @@ def check_and_migrate_add_goods_columns(db):
             except Exception:
                 db.rollback()
                 pass
-                
+
     except Exception as e:
         print(f"Migration check error: {e}")
+    try:
+        from utils.logger import get_logger as _gl
+        _gl("perf").info(
+            f"[PERF] check_and_migrate_add_goods_columns took {(_time.perf_counter()-_t0)*1000:.0f} ms"
+        )
+    except Exception:
+        pass
 
 # --- フォント確保関数 ---
 def ensure_font_exists(db, font_filename):
@@ -618,14 +632,28 @@ def render_timetable_page():
             if st.session_state.get("last_generated_tt_image") is None:
                 if generate_timetable_image and gen_list:
                     try:
+                        import time as _ptime
+                        _pt0 = _ptime.perf_counter()
                         ensure_font_exists(db, st.session_state.tt_font)
                         font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
                         auto_img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
                         st.session_state.last_generated_tt_image = auto_img
                         st.session_state.tt_last_generated_params = current_tt_params
+                        try:
+                            from utils.logger import get_logger as _gl
+                            _gl("perf").info(
+                                f"[PERF] tt_image AUTO generate took {(_ptime.perf_counter()-_pt0)*1000:.0f} ms"
+                            )
+                        except Exception:
+                            pass
                     except Exception as e: pass
 
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
+                try:
+                    from utils.logger import get_logger as _gl
+                    _gl("perf").info("[PERF] BUTTON tt_generate pressed")
+                except Exception:
+                    pass
                 if import_error_msg:
                     st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
                 elif generate_timetable_image:
