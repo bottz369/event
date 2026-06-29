@@ -399,15 +399,14 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                     crop_x = getattr(target_artist, 'crop_x', 0) or 0
                     crop_y = getattr(target_artist, 'crop_y', 0) or 0
 
-                    is_manual = (crop_scale != 1.0) or (crop_x != 0) or (crop_y != 0)
-
-                    if is_manual:
-                        # ★修正: 縮小対応版の apply_manual_crop を呼び出す
-                        cropped = apply_manual_crop(img, crop_scale, crop_x, crop_y, TILE_WIDTH, TILE_HEIGHT)
-                        _perf_add("crop_manual_count", 1)  # [PERF] 手動 crop カウント(新行挿入のみ)
-                    else:
-                        # 自動調整
-                        cropped = crop_smart(img)
+                    # Phase 3 P2 コミットB: 顔検出(crop_smart)を grid から撤去。
+                    # 未設定(scale=1.0,x=0,y=0)でも apply_manual_crop は中央寄せ Cover
+                    # (黒余白なし)になるため分岐不要。手動設定済みは従来通り設定値が
+                    # 反映される(動作不変)。
+                    # crop_smart 関数自体は views/artists.py が使うため残置(ここから
+                    # 呼ばないだけ)。
+                    cropped = apply_manual_crop(img, crop_scale, crop_x, crop_y, TILE_WIDTH, TILE_HEIGHT)
+                    _perf_add("crop_manual_count", 1)  # 注: 今は全件カウント(Phase3完了時の[PERF] revertで整理)
                 else:
                     cropped = create_no_image_placeholder(TILE_WIDTH, TILE_HEIGHT)
                 
