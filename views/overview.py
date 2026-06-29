@@ -244,12 +244,6 @@ def render_overview_page():
     st.caption("変更内容は以下のボタンで保存してください。")
 
     if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", width='stretch', key="btn_overview_save"):
-        try:
-            from utils.logger import get_logger as _gl
-            _gl("perf").info("[PERF] BUTTON overview_save pressed")
-        except Exception:
-            pass
-
         if "proj_ticket_notes" in st.session_state:
             for i in range(len(st.session_state.proj_ticket_notes)):
                 key = f"t_common_note_{project_id}_{i}"

@@ -66,9 +66,6 @@ def save_active_project() -> bool:
         True: 成功
         False: 失敗(または対象なし)
     """
-    import time as _time
-    _t0 = _time.perf_counter()
-
     # Phase 3 cache-selector: sync 前にセレクタ label に出る項目を snapshot。
     # 保存成功時に title/event_date が変化していた場合のみ list_projects_for_selector
     # を invalidate する (TT/Grid/Flyer の保存では label が変わらないので無駄な
@@ -104,10 +101,6 @@ def save_active_project() -> bool:
         if draft.title != old_title or draft.event_date != old_date:
             list_projects_for_selector.clear()
         logger.info(f"save_active_project: saved id={draft.id}, rows={len(rows)}")
-        logger.info(
-            f"[PERF] save_active_project total took {(_time.perf_counter()-_t0)*1000:.0f} ms "
-            f"(id={draft.id}, rows={len(rows)})"
-        )
         return True
     except Exception as e:
         logger.error(f"save_active_project failed: {e}", exc_info=True)
@@ -186,18 +179,11 @@ def list_projects_for_selector():
       - delete_project_by_id (成功時)
       - save_active_project (title/event_date 変化時のみ成功時)
       - views/projects.py:71 直接 db.delete 直後 (孤立経路、将来 services 統一予定)
-    [PERF] ログはキャッシュミス時のみ出る (=キャッシュ効果の指標になる)。
     """
-    import time as _time
-    _t0 = _time.perf_counter()
     db = SessionLocal()
     try:
         projects = project_repo.list_projects(db)
         result = [(p.id, f"{p.event_date or '----'} {p.title}") for p in projects]
-        logger.info(
-            f"[PERF] list_projects_for_selector took {(_time.perf_counter()-_t0)*1000:.0f} ms "
-            f"(rows={len(result)})"
-        )
         return result
     finally:
         db.close()

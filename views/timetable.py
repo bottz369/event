@@ -36,13 +36,6 @@ def check_and_migrate_add_goods_columns(db):
     timetable_rows テーブルに追加物販用のカラムが存在するか確認し、
     なければ追加する（自動修復）
     """
-    import time as _time
-    _t0 = _time.perf_counter()
-    try:
-        from utils.logger import get_logger as _gl
-        _gl("perf").info("[PERF] check_and_migrate_add_goods_columns start")
-    except Exception:
-        pass
     try:
         columns_to_add = [
             ("add_goods_start_time", "TEXT"),
@@ -60,13 +53,6 @@ def check_and_migrate_add_goods_columns(db):
 
     except Exception as e:
         print(f"Migration check error: {e}")
-    try:
-        from utils.logger import get_logger as _gl
-        _gl("perf").info(
-            f"[PERF] check_and_migrate_add_goods_columns took {(_time.perf_counter()-_t0)*1000:.0f} ms"
-        )
-    except Exception:
-        pass
 
 # --- フォント確保関数 ---
 def ensure_font_exists(db, font_filename):
@@ -649,15 +635,9 @@ def render_timetable_page():
             # Phase 3 stop-autogen: render 時の TT 画像自動生成を廃止。
             # 生成は下記「🔄 設定反映 (プレビュー生成)」ボタン押下時のみ。
             # workspace の eager タブ描画でプロジェクトを開くだけで 20 秒級の
-            # 画像生成が走る問題 ([PERF] tt_image AUTO generate took 22910 ms 観測)
-            # を解消する。生成関数本体・速度は無変更 (Priority 2 で扱う)。
+            # 画像生成が走る問題を解消する。生成関数本体・速度は無変更。
 
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", width='stretch', key="btn_tt_generate"):
-                try:
-                    from utils.logger import get_logger as _gl
-                    _gl("perf").info("[PERF] BUTTON tt_generate pressed")
-                except Exception:
-                    pass
                 if import_error_msg:
                     st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
                 elif generate_timetable_image:

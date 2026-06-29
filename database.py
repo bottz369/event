@@ -153,15 +153,6 @@ def init_db():
         st.stop()
 
 def get_db():
-    # [PERF] Phase 3 計測: 1 rerun あたり何回 DB セッションが開かれるか
-    try:
-        import streamlit as _st  # 計測のみ、循環回避のためローカル import
-        from utils.logger import get_logger as _get_logger
-        n = _st.session_state.get("_perf_db_session_count", 0) + 1
-        _st.session_state["_perf_db_session_count"] = n
-        _get_logger("perf").info(f"[PERF] db_session #{n} opened")
-    except Exception:
-        pass  # 計測ログは挙動に絶対影響させない
     db = SessionLocal()
     try:
         yield db

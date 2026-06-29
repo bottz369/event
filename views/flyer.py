@@ -271,11 +271,6 @@ def render_flyer_editor(project_id):
                 c_t1, c_t2 = st.columns(2)
                 with c_t1:
                     if st.button("読込", width='stretch'):
-                        try:
-                            from utils.logger import get_logger as _gl
-                            _gl("perf").info("[PERF] BUTTON flyer_template_load pressed")
-                        except Exception:
-                            pass
                         target_t = next((t for t in templates if t.name == sel_template), None)
                         if target_t and target_t.data_json:
                             try:
@@ -416,11 +411,6 @@ def render_flyer_editor(project_id):
                                   format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
         if st.button("💾 設定を保存してプレビューを生成する", type="primary", width='stretch'):
-            try:
-                from utils.logger import get_logger as _gl
-                _gl("perf").info("[PERF] BUTTON flyer_save pressed")
-            except Exception:
-                pass
             # Phase 2B-2a: 直接書き込みを廃止し save_active_project 経由に統一。
             # sync_session_to_draft が session_state.flyer_* を draft.flyer_settings に
             # 同期 → apply_draft が既存 flyer_json と merge して書き込む。

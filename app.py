@@ -1,4 +1,3 @@
-import time
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -19,31 +18,18 @@ from views.manual import render_manual_page        # ユーザーマニュアル
 # --- 設定 ---
 st.set_page_config(page_title="イベント画像生成アプリ", layout="wide")
 
-# ====================== [PERF] Phase 3 計測ログ ======================
-# 1 操作で何回 rerun するか / 各セクション ms / DB セッション扇形を追跡。
-# 計測のみ。挙動変更・DB 書き込みなし。原因特定後 revert 予定。
-_rerun_t0 = time.perf_counter()
-st.session_state["_perf_rerun_seq"] = st.session_state.get("_perf_rerun_seq", 0) + 1
-st.session_state["_perf_db_session_count"] = 0  # 各 rerun の冒頭でリセット
-_perf_rerun_n = st.session_state["_perf_rerun_seq"]
-# =====================================================================
-
 logger = get_logger("app")
-logger.info(f"[PERF] ===== RERUN start #{_perf_rerun_n} =====")
 
 # Phase 3 Fix1: init_db() をプロセス 1 回のみに削減。
 # Base.metadata.create_all は冪等な CREATE TABLE IF NOT EXISTS だが、
 # 毎 rerun ごとに全テーブル分の DDL ラウンドトリップが発生して累積で重い。
 # @st.cache_resource で初回のみ実行、以降はキャッシュヒットで ~0ms に。
-# 計測ログ ([PERF] init_db took) は外側に残し、効果確認 (2 回目以降 ~0ms) ができるようにする。
 @st.cache_resource
 def _ensure_db_initialized():
     init_db()
     return True
 
-_perf_t_initdb = time.perf_counter()
 _ensure_db_initialized()
-logger.info(f"[PERF] init_db took {(time.perf_counter()-_perf_t_initdb)*1000:.0f} ms")
 
 logger.info("App started")
 
@@ -120,11 +106,3 @@ elif current_page == "アセット管理":
 
 elif current_page == "使い方マニュアル":
     render_manual_page()
-
-# ====================== [PERF] rerun 総壁時計 ======================
-logger.info(
-    f"[PERF] ===== RERUN end #{_perf_rerun_n} "
-    f"total={(time.perf_counter()-_rerun_t0)*1000:.0f} ms "
-    f"db_sessions={st.session_state.get('_perf_db_session_count', 0)} ====="
-)
-# =====================================================================
