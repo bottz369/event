@@ -3,7 +3,6 @@ import os
 import json
 import io
 import requests # URLダウンロード用
-from time import perf_counter  # [PERF] Phase 3 P2 N+1 計測用(新行挿入のみ)
 
 # Asset, AssetFile, get_image_url をインポート
 from database import get_db, TimetableProject, TimetableRow, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
@@ -322,27 +321,15 @@ def render_grid_page():
             # Phase 3 stop-autogen: render 時のグリッド画像自動生成を廃止。
             # 生成は下記「🔄 設定反映 (プレビュー生成)」ボタン押下時のみ。
             # workspace の eager タブ描画でプロジェクトを開くだけで 20 秒級の
-            # 画像生成が走る問題 ([PERF] grid_image AUTO generate took 20531 ms 観測)
-            # を解消する。生成関数本体・N+1 クエリ・速度は無変更 (Priority 2 で扱う)。
+            # 画像生成が走る問題を解消する。生成関数本体・N+1 クエリ・速度は無変更。
 
             # 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", width='stretch', key="btn_grid_generate"):
-                try:
-                    from utils.logger import get_logger as _gl
-                    _gl("perf").info("[PERF] BUTTON grid_generate pressed")
-                except Exception:
-                    pass
                 if generate_grid_image:
-                    _perf_db_t0 = perf_counter()  # [PERF] N+1 計測開始(新行挿入のみ)
                     target_artists = []
                     for n in st.session_state.grid_order:
                         a = db.query(Artist).filter(Artist.name == n).first()
                         if a: target_artists.append(a)
-                    try:
-                        from utils.logger import get_logger as _gl
-                        _gl("perf").info(f"[PERF] grid_db_nplus1 took {(perf_counter() - _perf_db_t0)*1000:.0f} ms (count={len(target_artists)})")
-                    except Exception:
-                        pass
                     
                     if not target_artists:
                         st.warning("表示するアーティストデータがありません。")

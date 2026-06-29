@@ -3,36 +3,8 @@ import math
 import os
 import requests
 from io import BytesIO
-from time import perf_counter
 from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
-from utils.logger import get_logger
-
-# ====================== [PERF] Phase 3 P2 計測の足場 ======================
-# logic_grid.py と同型の足場を独立に持つ。grid と TT の _PERF_BUCKET は別物。
-# TT は crop_smart を使わないので crop / face_detect バケツは無し。代わりに
-# Artist N+1 が logic 内 (draw_one_row) にあるので db_ms / ilike_fallback を持つ。
-# Phase 3 完了時に既存 [PERF] 群と一括 revert 予定。
-_perf_logger = get_logger("perf")
-_PERF_BUCKET = {}
-
-
-def _perf_reset():
-    _PERF_BUCKET.clear()
-    _PERF_BUCKET.update({
-        "fetch_ms": 0.0, "fetch_bytes": 0, "fetch_count": 0, "fetch_max_ms": 0.0,
-        "font_ms": 0.0, "font_count": 0,
-        "db_ms": 0.0, "ilike_fallback": 0,
-    })
-
-
-def _perf_add(key, value):
-    _PERF_BUCKET[key] = _PERF_BUCKET.get(key, 0) + value
-
-
-def _perf_max(key, value):
-    _PERF_BUCKET[key] = max(_PERF_BUCKET.get(key, 0), value)
-# =========================================================================
 
 # ================= 設定エリア =================
 # 1mm = 10px の高解像度で設定し、印刷時(300dpi等)に綺麗に出るようにします
@@ -64,16 +36,8 @@ def load_image(path_or_url):
     if not path_or_url: return None
     try:
         if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
-            _perf_fetch_t0 = perf_counter()  # [PERF] HTTP 取得計測 (新行挿入のみ・leaf 完結)
             response = requests.get(path_or_url, timeout=10)
             if response.status_code != 200: return None
-            _perf_fetch_ms = (perf_counter() - _perf_fetch_t0) * 1000  # [PERF] (新行挿入のみ)
-            _perf_fetch_size = len(response.content)  # [PERF] (新行挿入のみ)
-            _perf_logger.info(f"[PERF] tt_img_fetch took {_perf_fetch_ms:.0f} ms (size={_perf_fetch_size} bytes)")
-            _perf_add("fetch_ms", _perf_fetch_ms)
-            _perf_add("fetch_bytes", _perf_fetch_size)
-            _perf_add("fetch_count", 1)
-            _perf_max("fetch_max_ms", _perf_fetch_ms)
             return Image.open(BytesIO(response.content)).convert("RGBA")
         if os.path.exists(path_or_url):
              return Image.open(path_or_url).convert("RGBA")
@@ -99,7 +63,6 @@ def _prefetch_tt_images(timetable_data, db):
       DB N+1 解消は別タスク。
     """
     from database import Artist, get_image_url
-    _wall_t0 = perf_counter()
     SKIP_NAMES = {"OPEN / START", "開演前物販", "終演後物販"}
 
     # 1. name_str → url を集める (DBクエリ + URL生成は直列)
@@ -134,10 +97,6 @@ def _prefetch_tt_images(timetable_data, db):
                 except Exception:
                     image_cache[name] = None
 
-    _perf_logger.info(
-        f"[PERF] tt_fetch_parallel_wall took {(perf_counter() - _wall_t0) * 1000:.0f} ms "
-        f"(jobs={len(name_to_url)} names={len(name_to_url)} fetched={sum(1 for v in image_cache.values() if v is not None)})"
-    )
     return image_cache
 
 
@@ -145,18 +104,14 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     text = str(text).strip()
     if not text: return
     current_font_size = max_font_size
-    _perf_font_t0 = perf_counter()  # [PERF] フォントサイズ調整 while + truetype 計測開始(新行挿入のみ)
     font = get_font(font_path, current_font_size)
-    _perf_add("font_count", 1)  # [PERF] get_font = truetype 1 試行(新行挿入のみ)
     min_font_size = 15
     while current_font_size > min_font_size:
         bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=4)
         if (bbox[2]-bbox[0]) <= (box_w - 10) and (bbox[3]-bbox[1]) <= (box_h - 4): break
         current_font_size -= 2
         font = get_font(font_path, current_font_size)
-        _perf_add("font_count", 1)  # [PERF] while 内 get_font = truetype 1 試行(新行挿入のみ)
 
-    _perf_add("font_ms", (perf_counter() - _perf_font_t0) * 1000)  # [PERF] while 終了で font 時間集計(新行挿入のみ)
     bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=4)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
@@ -205,13 +160,10 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
     if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
         try:
             from database import Artist, get_image_url
-            _perf_db_t0 = perf_counter()  # [PERF] Artist N+1 計測開始(新行挿入のみ)
             artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
             if not artist:
                 clean = name_str.replace(" ", "").replace("　", "")
                 if clean: artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
-                if clean: _perf_add("ilike_fallback", 1)  # [PERF] fallback クエリ発火カウント(新行挿入のみ)
-            _perf_add("db_ms", (perf_counter() - _perf_db_t0) * 1000)  # [PERF] N+1 計測終了(新行挿入のみ)
 
             if artist and artist.image_filename:
                 url = get_image_url(artist.image_filename)
@@ -259,8 +211,6 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
     draw_centered_text(draw, goods_info, base_x + goods_x, base_y, goods_w, row_height, font_path, font_size_goods, align="left")
 
 def generate_timetable_image(timetable_data, font_path=None, columns=2):
-    _perf_reset()  # [PERF] generate_timetable_image 入口でバケツ初期化(新行挿入のみ・前回残留防止)
-    _perf_t_start = perf_counter()  # [PERF] 全体時間計測開始(新行挿入のみ)
     if not timetable_data: return Image.new('RGBA', (COL1_CANVAS_WIDTH, CANVAS_HEIGHT), (0,0,0,255))
     
     st.toast("画像生成完了！", icon="✅")
@@ -325,19 +275,6 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
                 draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db, single_col_width, row_height, columns, image_cache=image_cache)
                 y += slot_height
             
-        # [PERF] gen_tt_summary 全体サマリ 1 行 (新行挿入のみ・既存 return 行は無変更)
-        # ※ TT は crop_smart 不使用なので crop / face_detect バケツは出さない。
-        #   db_ms は logic 内 (draw_one_row) で計測しているのでサマリに含める。
-        _perf_total_ms = (perf_counter() - _perf_t_start) * 1000
-        _perf_other_pil = _perf_total_ms - _PERF_BUCKET["fetch_ms"] - _PERF_BUCKET["font_ms"] - _PERF_BUCKET["db_ms"]
-        _perf_logger.info(
-            f"[PERF] gen_tt_summary total={_perf_total_ms:.0f} ms "
-            f"(fetch={_PERF_BUCKET['fetch_ms']:.0f} font={_PERF_BUCKET['font_ms']:.0f} "
-            f"db={_PERF_BUCKET['db_ms']:.0f} "
-            f"other_pil={_perf_other_pil:.0f}) rows={total_artists} "
-            f"fetch_bytes={_PERF_BUCKET['fetch_bytes']} fetch_max_ms={_PERF_BUCKET['fetch_max_ms']:.0f} "
-            f"font_loads={_PERF_BUCKET['font_count']} ilike_fallback={_PERF_BUCKET['ilike_fallback']}"
-        )
         return canvas
 
     except Exception as e:

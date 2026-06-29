@@ -2,7 +2,6 @@ import os
 import math
 import unicodedata
 import re
-from time import perf_counter
 from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
@@ -10,7 +9,6 @@ import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from database import get_image_url
-from utils.logger import get_logger
 
 # ★追加: パス解決のために constants からディレクトリ情報をインポート
 try:
@@ -19,32 +17,6 @@ except ImportError:
     # 万が一 constants が読み込めない場合のバックアップ設定
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     FONT_DIR = os.path.join(BASE_DIR, "assets", "fonts")
-
-# ====================== [PERF] Phase 3 P2 計測の足場 ======================
-# 画像生成 1 回あたりの内訳を fetch / crop / font / db の 4 バケツ + per-image
-# fetch ログで把握するための計測。挙動・出力は変えない (純粋ラップ + ログ追加)。
-# Phase 3 完了時に既存 [PERF] 群と一括 revert 予定。
-_perf_logger = get_logger("perf")
-_PERF_BUCKET = {}
-
-
-def _perf_reset():
-    _PERF_BUCKET.clear()
-    _PERF_BUCKET.update({
-        "fetch_ms": 0.0, "fetch_bytes": 0, "fetch_count": 0, "fetch_max_ms": 0.0,
-        "crop_ms": 0.0, "crop_face_count": 0, "crop_manual_count": 0,
-        "face_detect_ms": 0.0,
-        "font_ms": 0.0, "font_count": 0, "db_ms": 0.0,
-    })
-
-
-def _perf_add(key, value):
-    _PERF_BUCKET[key] = _PERF_BUCKET.get(key, 0) + value
-
-
-def _perf_max(key, value):
-    _PERF_BUCKET[key] = max(_PERF_BUCKET.get(key, 0), value)
-# =========================================================================
 
 # ================= 設定エリア =================
 TILE_WIDTH = 800       
@@ -74,19 +46,14 @@ def get_face_center_y_from_cv_img(cv_img):
 
 def crop_smart(pil_img):
     """スマートクロッピング関数"""
-    _perf_t0 = perf_counter()  # [PERF] crop_smart 全体計測 (新行挿入のみ)
     img_width, img_height = pil_img.size
     try:
         # OpenCV形式への変換
         open_cv_image = np.array(pil_img.convert('RGB')) 
         open_cv_image = open_cv_image[:, :, ::-1].copy() 
-        _perf_face_t0 = perf_counter()  # [PERF] 顔検出単独計測 (新行挿入のみ)
         face_y = get_face_center_y_from_cv_img(open_cv_image)
-        _perf_face_detect_ms = (perf_counter() - _perf_face_t0) * 1000  # [PERF] (新行挿入のみ)
-        _perf_add("face_detect_ms", _perf_face_detect_ms)  # [PERF] (新行挿入のみ)
     except:
         face_y = None
-        _perf_face_detect_ms = 0.0  # [PERF] 例外時は 0 扱い (新行挿入のみ)
     
     crop_width = TILE_WIDTH
     crop_height = TILE_HEIGHT
@@ -110,13 +77,6 @@ def crop_smart(pil_img):
     if top < 0: top = 0
     if top + crop_height > resized_h: top = resized_h - crop_height
     
-    # [PERF] crop_smart 全体サマリ + per-call ログ (新行挿入のみ・既存 return 行は無変更)
-    _perf_crop_ms = (perf_counter() - _perf_t0) * 1000
-    _perf_face_detected = (face_y is not None)
-    _perf_logger.info(f"[PERF] grid_crop_smart took {_perf_crop_ms:.0f} ms (face={_perf_face_detected} face_detect={_perf_face_detect_ms:.0f} ms)")
-    _perf_add("crop_ms", _perf_crop_ms)
-    if _perf_face_detected:
-        _perf_add("crop_face_count", 1)
     return resized_img.crop((left, int(top), left + int(crop_width), int(top) + int(crop_height)))
 
 # --- ★修正: 手動トリミングロジック (縮小・黒背景対応) ---
@@ -183,16 +143,8 @@ def create_no_image_placeholder(width, height):
 
 def load_image_from_url(url):
     try:
-        _perf_fetch_t0 = perf_counter()  # [PERF] HTTP 取得計測 (新行挿入のみ・leaf 関数で完結)
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        _perf_fetch_ms = (perf_counter() - _perf_fetch_t0) * 1000  # [PERF] (新行挿入のみ)
-        _perf_fetch_size = len(response.content)  # [PERF] (新行挿入のみ)
-        _perf_logger.info(f"[PERF] grid_img_fetch took {_perf_fetch_ms:.0f} ms (size={_perf_fetch_size} bytes)")
-        _perf_add("fetch_ms", _perf_fetch_ms)
-        _perf_add("fetch_bytes", _perf_fetch_size)
-        _perf_add("fetch_count", 1)
-        _perf_max("fetch_max_ms", _perf_fetch_ms)
         return Image.open(BytesIO(response.content)).convert("RGBA")
     except:
         return None
@@ -213,7 +165,6 @@ def _fetch_grid_images_parallel(target_artists):
     - image_filename が無い / URL が None の artist は dict に含めない
       → 呼び出し側で None が返り、create_no_image_placeholder にフォールバック
     """
-    _wall_t0 = perf_counter()
     # dedupe (artist.id がキー)
     by_id = {}
     for a in target_artists:
@@ -242,10 +193,6 @@ def _fetch_grid_images_parallel(target_artists):
                 except Exception:
                     image_cache[aid] = None
 
-    _perf_logger.info(
-        f"[PERF] grid_fetch_parallel_wall took {(perf_counter() - _wall_t0) * 1000:.0f} ms "
-        f"(jobs={len(url_jobs)} artists_dedup={len(by_id)} fetched={sum(1 for v in image_cache.values() if v is not None)})"
-    )
     return image_cache
 
 
@@ -279,8 +226,6 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
     """
     grid画像を生成する
     """
-    _perf_reset()  # [PERF] generate_grid_image 入口でバケツ初期化(新行挿入のみ)
-    _perf_t_start = perf_counter()  # [PERF] 全体時間計測開始(新行挿入のみ)
     target_artists = artists 
     total_images = len(target_artists)
     if total_images == 0: return None
@@ -406,7 +351,6 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                     # crop_smart 関数自体は views/artists.py が使うため残置(ここから
                     # 呼ばないだけ)。
                     cropped = apply_manual_crop(img, crop_scale, crop_x, crop_y, TILE_WIDTH, TILE_HEIGHT)
-                    _perf_add("crop_manual_count", 1)  # 注: 今は全件カウント(Phase3完了時の[PERF] revertで整理)
                 else:
                     cropped = create_no_image_placeholder(TILE_WIDTH, TILE_HEIGHT)
                 
@@ -425,12 +369,10 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
             current_font_size = font_max
             target_font = default_font
 
-            _perf_font_t0 = perf_counter()  # [PERF] フォント truetype while 計測開始(新行挿入のみ)
             while current_font_size > MIN_FONT_SIZE:
                 try:
                     if font_exists:
                         target_font = ImageFont.truetype(valid_font_path, int(current_font_size))
-                        _perf_add("font_count", 1)  # [PERF] truetype 1 回ロード(新行挿入のみ)
                     else:
                         target_font = default_font
                         break
@@ -446,8 +388,6 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                 
                 current_font_size -= 2 
 
-            _perf_add("font_ms", (perf_counter() - _perf_font_t0) * 1000)  # [PERF] while 終了で font 時間集計(新行挿入のみ)
-
             try:
                 bbox = draw.textbbox((0, 0), artist_name, font=target_font)
                 text_w = bbox[2] - bbox[0]
@@ -462,18 +402,4 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
         
         current_y += (h + th + MARGIN)
 
-    # [PERF] gen_grid_summary 全体サマリ 1 行 (新行挿入のみ・既存 return 行は無変更)
-    # ※ grid の DB クエリは views/grid.py 側にあり、独立ログ [PERF] grid_db_nplus1 で
-    #   別途記録される。本サマリは logic_grid 内の処理だけを内訳化するため db= は出さない。
-    _perf_total_ms = (perf_counter() - _perf_t_start) * 1000
-    _perf_other_pil = _perf_total_ms - _PERF_BUCKET["fetch_ms"] - _PERF_BUCKET["crop_ms"] - _PERF_BUCKET["font_ms"]
-    _perf_logger.info(
-        f"[PERF] gen_grid_summary total={_perf_total_ms:.0f} ms "
-        f"(fetch={_PERF_BUCKET['fetch_ms']:.0f} crop={_PERF_BUCKET['crop_ms']:.0f} "
-        f"font={_PERF_BUCKET['font_ms']:.0f} "
-        f"other_pil={_perf_other_pil:.0f}) artists={total_images} "
-        f"fetch_bytes={_PERF_BUCKET['fetch_bytes']} fetch_max_ms={_PERF_BUCKET['fetch_max_ms']:.0f} "
-        f"crop_face={_PERF_BUCKET['crop_face_count']} crop_manual={_PERF_BUCKET['crop_manual_count']} "
-        f"face_detect_ms={_PERF_BUCKET['face_detect_ms']:.0f} font_loads={_PERF_BUCKET['font_count']}"
-    )
     return canvas
