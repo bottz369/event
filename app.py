@@ -31,8 +31,18 @@ _perf_rerun_n = st.session_state["_perf_rerun_seq"]
 logger = get_logger("app")
 logger.info(f"[PERF] ===== RERUN start #{_perf_rerun_n} =====")
 
+# Phase 3 Fix1: init_db() をプロセス 1 回のみに削減。
+# Base.metadata.create_all は冪等な CREATE TABLE IF NOT EXISTS だが、
+# 毎 rerun ごとに全テーブル分の DDL ラウンドトリップが発生して累積で重い。
+# @st.cache_resource で初回のみ実行、以降はキャッシュヒットで ~0ms に。
+# 計測ログ ([PERF] init_db took) は外側に残し、効果確認 (2 回目以降 ~0ms) ができるようにする。
+@st.cache_resource
+def _ensure_db_initialized():
+    init_db()
+    return True
+
 _perf_t_initdb = time.perf_counter()
-init_db()
+_ensure_db_initialized()
 logger.info(f"[PERF] init_db took {(time.perf_counter()-_perf_t_initdb)*1000:.0f} ms")
 
 logger.info("App started")
