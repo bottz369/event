@@ -38,7 +38,7 @@ def render_projects_page():
                     f"summary_{proj.id}.pdf",
                     "application/pdf",
                     key=f"dl_sum_{proj.id}",
-                    use_container_width=True
+                    width='stretch'
                 )
 
                 # 2. タイムテーブルPDF (データがある場合のみ)
@@ -54,7 +54,7 @@ def render_projects_page():
                             f"timetable_{proj.id}.pdf",
                             "application/pdf",
                             key=f"dl_tt_{proj.id}",
-                            use_container_width=True
+                            width='stretch'
                         )
                     except:
                         st.warning("タイムテーブルデータが不完全です")

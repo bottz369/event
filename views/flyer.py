@@ -58,12 +58,12 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
             img_url = None
             if hasattr(opt, "image_filename") and opt.image_filename:
                 img_url = get_image_url(opt.image_filename)
-            if img_url: st.image(img_url, use_container_width=True)
+            if img_url: st.image(img_url, width='stretch')
             else: st.markdown(f"🔲 {opt.name}")
             if is_selected:
-                st.button("✅ 選択中", key=f"btn_{key_name}_{opt.id}", disabled=True, use_container_width=True)
+                st.button("✅ 選択中", key=f"btn_{key_name}_{opt.id}", disabled=True, width='stretch')
             else:
-                if st.button("選択", key=f"btn_{key_name}_{opt.id}", use_container_width=True):
+                if st.button("選択", key=f"btn_{key_name}_{opt.id}", width='stretch'):
                     st.session_state[key_name] = opt.id
                     st.rerun()
     st.divider()
@@ -259,7 +259,7 @@ def render_flyer_editor(project_id):
             if sel_template != "(選択してください)":
                 c_t1, c_t2 = st.columns(2)
                 with c_t1:
-                    if st.button("読込", use_container_width=True):
+                    if st.button("読込", width='stretch'):
                         try:
                             from utils.logger import get_logger as _gl
                             _gl("perf").info("[PERF] BUTTON flyer_template_load pressed")
@@ -288,7 +288,7 @@ def render_flyer_editor(project_id):
                                 st.rerun()
                             except Exception as e: st.error(f"読込エラー: {e}")
                 with c_t2:
-                    if st.button("変更を保存 (上書き)", use_container_width=True):
+                    if st.button("変更を保存 (上書き)", width='stretch'):
                         target_t = next((t for t in templates if t.name == sel_template), None)
                         if target_t:
                             save_data = gather_flyer_settings_from_session()
@@ -301,7 +301,7 @@ def render_flyer_editor(project_id):
             c_save1, c_save2 = st.columns([3, 1])
             with c_save1: new_t_name = st.text_input("新規テンプレート名", placeholder="例: 赤系ロック風")
             with c_save2:
-                if st.button("新規保存", use_container_width=True):
+                if st.button("新規保存", width='stretch'):
                     if not new_t_name: st.error("名前を入力してください")
                     else:
                         existing = db.query(FlyerTemplate).filter(FlyerTemplate.name == new_t_name).first()
@@ -356,7 +356,7 @@ def render_flyer_editor(project_id):
         with st.expander("🔤 フォント一覧見本を表示"):
             with st.container(height=300):
                 specimen_img = create_font_specimen_img(db, font_list_data)
-                if specimen_img: st.image(specimen_img, use_container_width=True)
+                if specimen_img: st.image(specimen_img, width='stretch')
                 else: st.info("フォントが見つかりません")
 
         with st.expander("📐 コンテンツ・余白調整", expanded=False):
@@ -404,7 +404,7 @@ def render_flyer_editor(project_id):
             target_key = st.radio("移動させる要素を選択:", list(move_targets.keys()), 
                                   format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
-        if st.button("💾 設定を保存してプレビューを生成する", type="primary", use_container_width=True):
+        if st.button("💾 設定を保存してプレビューを生成する", type="primary", width='stretch'):
             try:
                 from utils.logger import get_logger as _gl
                 _gl("perf").info("[PERF] BUTTON flyer_save pressed")

@@ -296,7 +296,7 @@ def render_grid_page():
                     specimen_list = sorted(sorted_fonts, key=lambda x: x["filename"].lower())
                     specimen_img = create_font_specimen_img(db, specimen_list)
                     if specimen_img:
-                        st.image(specimen_img, use_container_width=True)
+                        st.image(specimen_img, width='stretch')
                     else:
                         st.info("フォントが見つかりません。")
 
@@ -325,7 +325,7 @@ def render_grid_page():
             # を解消する。生成関数本体・N+1 クエリ・速度は無変更 (Priority 2 で扱う)。
 
             # 設定反映・保存ボタン
-            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
+            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", width='stretch', key="btn_grid_generate"):
                 try:
                     from utils.logger import get_logger as _gl
                     _gl("perf").info("[PERF] BUTTON grid_generate pressed")
@@ -388,7 +388,7 @@ def render_grid_page():
                     st.caption("👇 前回生成時のプレビュー")
                 else:
                     st.caption("👇 現在のプレビュー")
-                st.image(st.session_state.last_generated_grid_image, use_container_width=True)
+                st.image(st.session_state.last_generated_grid_image, width='stretch')
             else:
                 # Phase 3 stop-autogen: 自動生成廃止に伴い、画像未生成時は常にプレースホルダ。
                 st.info("👆 設定を行ったら「設定反映」ボタンを押してプレビューを生成してください。")

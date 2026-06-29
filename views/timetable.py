@@ -470,7 +470,7 @@ def render_timetable_page():
                         st.session_state.binding_df = st.session_state[current_key]
 
             edited_df = st.data_editor(
-                st.session_state.binding_df, key=current_key, num_rows="fixed", use_container_width=True,
+                st.session_state.binding_df, key=current_key, num_rows="fixed", width='stretch',
                 column_config={
                     "IS_HIDDEN": st.column_config.CheckboxColumn("非表示", width="small"),
                     "ARTIST": st.column_config.TextColumn("アーティスト", disabled=True),
@@ -555,7 +555,7 @@ def render_timetable_page():
 
             # --- データ表示 ---
             calculated_df = calculate_timetable_flow(edited_df, st.session_state.tt_open_time, st.session_state.tt_start_time)
-            st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], use_container_width=True, hide_index=True)
+            st.dataframe(calculated_df[["TIME_DISPLAY", "ARTIST", "GOODS_DISPLAY", "PLACE"]], width='stretch', hide_index=True)
             
             # 画像生成用リスト (IS_HIDDEN対応)
             gen_list = []
@@ -604,7 +604,7 @@ def render_timetable_page():
                 with st.container(height=300):
                     specimen_list = sorted(sorted_fonts, key=lambda x: x["filename"].lower())
                     specimen_img = create_font_specimen_img(db, specimen_list)
-                    if specimen_img: st.image(specimen_img, use_container_width=True)
+                    if specimen_img: st.image(specimen_img, width='stretch')
                     else: st.info("フォントが見つかりません")
 
             c_font, c_col = st.columns([2, 1])
@@ -652,7 +652,7 @@ def render_timetable_page():
             # 画像生成が走る問題 ([PERF] tt_image AUTO generate took 22910 ms 観測)
             # を解消する。生成関数本体・速度は無変更 (Priority 2 で扱う)。
 
-            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
+            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", width='stretch', key="btn_tt_generate"):
                 try:
                     from utils.logger import get_logger as _gl
                     _gl("perf").info("[PERF] BUTTON tt_generate pressed")
@@ -698,7 +698,7 @@ def render_timetable_page():
                     st.caption("👇 前回生成時のプレビュー")
                 else:
                     st.caption("👇 現在のプレビュー")
-                st.image(st.session_state.last_generated_tt_image, use_container_width=True)
+                st.image(st.session_state.last_generated_tt_image, width='stretch')
             else:
                 # Phase 3 stop-autogen: 自動生成廃止に伴い、画像未生成時は常にプレースホルダ。
                 st.info("👆 「設定反映」ボタンを押してプレビューを生成してください。")

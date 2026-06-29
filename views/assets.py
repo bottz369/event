@@ -91,7 +91,7 @@ def render_asset_card(asset, db, is_font=False):
             font_path = os.path.join(FONT_DIR, asset.image_filename)
             if os.path.exists(font_path):
                 thumb = create_font_thumbnail(font_path, text="Design 123")
-                if thumb: st.image(thumb, use_container_width=True)
+                if thumb: st.image(thumb, width='stretch')
                 else: st.warning("プレビュー生成失敗")
             else:
                 st.warning("📥 未ダウンロード")
@@ -119,7 +119,7 @@ def render_asset_card(asset, db, is_font=False):
                     st.rerun()
 
         # 4. 削除ボタン
-        if st.button("🗑️ 削除", key=f"del_{asset.id}", type="secondary", use_container_width=True):
+        if st.button("🗑️ 削除", key=f"del_{asset.id}", type="secondary", width='stretch'):
             asset.is_deleted = True
             db.commit()
             st.rerun()
@@ -260,7 +260,7 @@ def render_assets_page():
                     try:
                         specimen_img = create_font_specimen_img(db, sorted_fonts_data)
                         if specimen_img:
-                            st.image(specimen_img, use_container_width=True)
+                            st.image(specimen_img, width='stretch')
                         else:
                             st.info("フォント画像の生成に失敗しました（一部のフォントファイルが不足している可能性があります）。")
                     except Exception as e:
