@@ -17,7 +17,7 @@ from utils import get_sorted_font_list, create_font_specimen_img
 from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str, generate_timetable_csv_string, ensure_font_file_exists
 from utils.flyer_generator import create_flyer_image_shadow
-from views.flyer_keys import FLYER_KEY_REGISTRY
+from models.flyer_keys import FLYER_KEY_REGISTRY
 from services import project_service, session_manager
 
 # ==========================================
