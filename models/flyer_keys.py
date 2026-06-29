@@ -22,7 +22,7 @@ Streamlit / DB に依存しないモジュール (純データのみ)。scratch/
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Set
 
 
 @dataclass(frozen=True)
@@ -126,6 +126,23 @@ STYLE_ENTRIES: List[FlyerKey] = [
 # 公開: 全エントリの順序付きリスト
 # ----------------------------------------------------------------------
 FLYER_KEY_REGISTRY: List[FlyerKey] = BASE_ENTRIES + STYLE_ENTRIES
+
+
+# ----------------------------------------------------------------------
+# 公開: persist=False の session_state キー集合 (services 層から参照)
+# ----------------------------------------------------------------------
+def non_persisted_session_keys() -> Set[str]:
+    """persist=False のエントリの session_state キー名(flyer_ プレフィックス付き)の集合。
+
+    services/session_manager.py の _FLYER_EXCLUDED_KEYS の UI 専用フラグ部分の
+    SSOT。Phase 2B-2b-2 で導入。手書きの「flyer_grid_link / flyer_tt_link /
+    flyer_preview_width」3 行と完全に同じ集合を返す。
+
+    transient キー(flyer_result_*, flyer_layout_meta, flyer_click_target)は
+    レジストリに無い(設定値ではなく一時状態のため)。それらは session_manager.py
+    側で手書きで定義する。
+    """
+    return {f"flyer_{e.short_key}" for e in FLYER_KEY_REGISTRY if not e.persist}
 
 
 # ----------------------------------------------------------------------

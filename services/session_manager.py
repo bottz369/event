@@ -31,6 +31,7 @@ from models import (
     TicketDraft,
     TimetableRowDraft,
 )
+from models.flyer_keys import non_persisted_session_keys
 from repositories import project_repo, timetable_repo
 from utils.logger import get_logger
 
@@ -154,22 +155,23 @@ def set_draft_rows(rows: List[TimetableRowDraft]) -> None:
 # フェーズ2B で view を draft_rows 直接編集に書き換える際、本関数は不要になり削除予定。
 # =========================================================
 
-_FLYER_EXCLUDED_KEYS = {
+# レジストリに乗らない transient な session_state キー(設定値ではなく一時状態)。
+# ここに該当: PIL.Image などの生成物 / クリック追跡用フラグ。
+_FLYER_TRANSIENT_KEYS = {
     # PIL.Image など serializable でない transient データ
     "flyer_result_grid",
     "flyer_result_tt",
     "flyer_layout_meta",
     # UI のクリック追跡用、永続化しない
     "flyer_click_target",
-    # Phase 2B-2a: UI 専用フラグ。views/flyer_keys.py の FLYER_KEY_REGISTRY で
-    # persist=False と定義されているキー群と一致させる。views/flyer.py の保存ボタンを
-    # save_active_project 経由に切り替えた際、sync_session_to_draft が拾わないよう
-    # ここで除外する(旧 gather と同じ保存キー集合を維持・挙動不変)。
-    # 二重管理 TODO: registry の persist 情報と本セットの SSOT 統一は後続フェーズで。
-    "flyer_grid_link",
-    "flyer_tt_link",
-    "flyer_preview_width",
 }
+
+# Phase 2B-2b-2: UI 専用フラグ (flyer_grid_link / flyer_tt_link / flyer_preview_width)
+# は models/flyer_keys.py の FLYER_KEY_REGISTRY で persist=False と定義済み。
+# 二重管理を解消し SSOT を registry に統一するため、ここではレジストリから動的に
+# 取得する (Phase 2B-2a で手書きだった 3 行を削除)。
+# 変更前後で _FLYER_EXCLUDED_KEYS の集合は同一 (7 キー: transient 4 + UI 3)。
+_FLYER_EXCLUDED_KEYS = _FLYER_TRANSIENT_KEYS | non_persisted_session_keys()
 
 # session_state のキーから draft.grid_settings のキーへの写像
 _GRID_KEY_MAP = {
