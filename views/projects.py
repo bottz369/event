@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from database import get_db, TimetableProject, Asset
 from utils import create_event_summary_pdf, create_project_assets_zip, create_business_pdf, calculate_timetable_flow
+from services import project_service
 import json
 import io
 
@@ -69,6 +70,10 @@ def render_projects_page():
                     if st.button("本当に削除する", key=f"del_{proj.id}", type="primary"):
                         db.delete(proj)
                         db.commit()
+                        # Phase 3 cache-selector: services を経由しない孤立削除経路。
+                        # 本来は project_service.delete_project_by_id 経由に統一すべき
+                        # (将来タスク)。それまでの暫定として一覧キャッシュをここで無効化する。
+                        project_service.list_projects_for_selector.clear()
                         st.success("削除しました")
                         st.rerun()
 

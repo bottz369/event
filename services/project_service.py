@@ -8,6 +8,8 @@ from __future__ import annotations
 import datetime
 from typing import Optional
 
+import streamlit as st
+
 from database import SessionLocal, TimetableProject
 from models import ProjectDraft
 from repositories import project_repo, timetable_repo
@@ -43,6 +45,9 @@ def create_new_project(
     finally:
         db.close()
 
+    # Phase 3 cache-selector: 新規行追加でセレクタ一覧が変わるため無効化。
+    list_projects_for_selector.clear()
+
     # 新規プロジェクトをロード(セッションをクリアして読み直す)
     session_manager.reload_project(new_id)
     return new_id
@@ -63,6 +68,15 @@ def save_active_project() -> bool:
     """
     import time as _time
     _t0 = _time.perf_counter()
+
+    # Phase 3 cache-selector: sync 前にセレクタ label に出る項目を snapshot。
+    # 保存成功時に title/event_date が変化していた場合のみ list_projects_for_selector
+    # を invalidate する (TT/Grid/Flyer の保存では label が変わらないので無駄な
+    # invalidate を避ける)。except 経路では clear しない。
+    before_draft = session_manager.get_draft_project()
+    old_title = before_draft.title if before_draft else None
+    old_date = before_draft.event_date if before_draft else None
+
     # widget で編集された session_state の値を draft に同期(★Phase 2B-1a で追加)
     session_manager.sync_session_to_draft()
 
@@ -85,6 +99,10 @@ def save_active_project() -> bool:
             return False
 
         session_manager.mark_saved()
+        # Phase 3 cache-selector: 保存成功時、title or event_date が変化したときだけ
+        # セレクタキャッシュを invalidate。
+        if draft.title != old_title or draft.event_date != old_date:
+            list_projects_for_selector.clear()
         logger.info(f"save_active_project: saved id={draft.id}, rows={len(rows)}")
         logger.info(
             f"[PERF] save_active_project total took {(_time.perf_counter()-_t0)*1000:.0f} ms "
@@ -127,6 +145,9 @@ def duplicate_active_project() -> Optional[int]:
     finally:
         db.close()
 
+    # Phase 3 cache-selector: 複製で新規行追加 → セレクタ一覧が変わる。
+    list_projects_for_selector.clear()
+
     session_manager.reload_project(new_id)
     return new_id
 
@@ -137,6 +158,8 @@ def delete_project_by_id(project_id: int) -> bool:
     try:
         ok = project_repo.delete_project(db, project_id)
         if ok:
+            # Phase 3 cache-selector: 削除でセレクタ一覧が変わる。
+            list_projects_for_selector.clear()
             # active を消した場合はセッションもクリア
             if session_manager.get_active_project_id() == project_id:
                 session_manager.clear_project_session()
@@ -149,10 +172,21 @@ def delete_project_by_id(project_id: int) -> bool:
 # ---------------------------------------------------------
 # 一覧取得(view から軽く呼ぶ用)
 # ---------------------------------------------------------
+@st.cache_data
 def list_projects_for_selector():
     """
     プロジェクト選択 UI 用に、軽量な (id, label) のリストを返す。
     DB アクセスを view から切り離すために用意。
+
+    Phase 3 cache-selector: @st.cache_data でキャッシュ化 (毎 rerun ~460ms の
+    固定費削減)。一覧を変える操作の直後に list_projects_for_selector.clear()
+    を呼ぶことで明示的に無効化する。仕込み箇所:
+      - create_new_project (成功時)
+      - duplicate_active_project (成功時)
+      - delete_project_by_id (成功時)
+      - save_active_project (title/event_date 変化時のみ成功時)
+      - views/projects.py:71 直接 db.delete 直後 (孤立経路、将来 services 統一予定)
+    [PERF] ログはキャッシュミス時のみ出る (=キャッシュ効果の指標になる)。
     """
     import time as _time
     _t0 = _time.perf_counter()
