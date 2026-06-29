@@ -3,6 +3,7 @@ import os
 import json
 import io
 import requests # URLダウンロード用
+from time import perf_counter  # [PERF] Phase 3 P2 N+1 計測用(新行挿入のみ)
 
 # Asset, AssetFile, get_image_url をインポート
 from database import get_db, TimetableProject, TimetableRow, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
@@ -332,10 +333,16 @@ def render_grid_page():
                 except Exception:
                     pass
                 if generate_grid_image:
+                    _perf_db_t0 = perf_counter()  # [PERF] N+1 計測開始(新行挿入のみ)
                     target_artists = []
                     for n in st.session_state.grid_order:
                         a = db.query(Artist).filter(Artist.name == n).first()
                         if a: target_artists.append(a)
+                    try:
+                        from utils.logger import get_logger as _gl
+                        _gl("perf").info(f"[PERF] grid_db_nplus1 took {(perf_counter() - _perf_db_t0)*1000:.0f} ms (count={len(target_artists)})")
+                    except Exception:
+                        pass
                     
                     if not target_artists:
                         st.warning("表示するアーティストデータがありません。")
