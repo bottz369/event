@@ -18,6 +18,7 @@ from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str, generate_timetable_csv_string, ensure_font_file_exists
 from utils.flyer_generator import create_flyer_image_shadow
 from views.flyer_keys import FLYER_KEY_REGISTRY
+from services import project_service
 
 # ==========================================
 # 設定データの収集関数
@@ -387,13 +388,19 @@ def render_flyer_editor(project_id):
                                   format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
         if st.button("💾 設定を保存してプレビューを生成する", type="primary", use_container_width=True):
-            # 設定保存
-            save_data = gather_flyer_settings_from_session()
-            proj.flyer_json = json.dumps(save_data)
-            db.commit()
-            st.toast("設定を保存しました", icon="✅")
-            # 生成
-            _generate_preview(db, proj)
+            # Phase 2B-2a: 直接書き込みを廃止し save_active_project 経由に統一。
+            # sync_session_to_draft が session_state.flyer_* を draft.flyer_settings に
+            # 同期 → apply_draft が既存 flyer_json と merge して書き込む。
+            # _FLYER_EXCLUDED_KEYS で UI 専用 3 キーを除外しているため、保存される
+            # キー集合は旧 gather (registry persist=True 103 件) と一致する。
+            if project_service.save_active_project():
+                st.toast("設定を保存しました", icon="✅")
+                # 副作用: プレビュー画像生成 (session_state.flyer_result_* に格納)。
+                # _generate_preview は proj.flyer_json を読まず session_state を直接
+                # 参照するので、別 db セッションの proj が stale でも問題なし。
+                _generate_preview(db, proj)
+            else:
+                st.error("保存に失敗しました")
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         

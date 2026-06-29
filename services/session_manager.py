@@ -161,6 +161,14 @@ _FLYER_EXCLUDED_KEYS = {
     "flyer_layout_meta",
     # UI のクリック追跡用、永続化しない
     "flyer_click_target",
+    # Phase 2B-2a: UI 専用フラグ。views/flyer_keys.py の FLYER_KEY_REGISTRY で
+    # persist=False と定義されているキー群と一致させる。views/flyer.py の保存ボタンを
+    # save_active_project 経由に切り替えた際、sync_session_to_draft が拾わないよう
+    # ここで除外する(旧 gather と同じ保存キー集合を維持・挙動不変)。
+    # 二重管理 TODO: registry の persist 情報と本セットの SSOT 統一は後続フェーズで。
+    "flyer_grid_link",
+    "flyer_tt_link",
+    "flyer_preview_width",
 }
 
 # session_state のキーから draft.grid_settings のキーへの写像
