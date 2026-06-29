@@ -17,6 +17,7 @@ from utils import get_sorted_font_list, create_font_specimen_img
 from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str, generate_timetable_csv_string, ensure_font_file_exists
 from utils.flyer_generator import create_flyer_image_shadow
+from views.flyer_keys import FLYER_KEY_REGISTRY
 
 # ==========================================
 # 設定データの収集関数
@@ -24,38 +25,19 @@ from utils.flyer_generator import create_flyer_image_shadow
 def gather_flyer_settings_from_session():
     """現在のセッションステートから保存すべき設定データを辞書で返す。
 
-    Phase 2B-1c-①: None 値は save_data に含めない。
-    init_s が走る前にこの関数が呼ばれた場合、未初期化キーは
-    st.session_state.get() で None が返り、そのまま json.dumps すると
-    flyer_json に null が焼き付いてしまう。null を書かないことで、
-    呼び出し側 (line 434 の保存ボタン経路) で既存値を意図せず潰さない。
+    Phase 2B-1c-①: None 値は save_data に含めない(null 焼き付き防止)。
+    Phase 2B-1c-②b-1: キー列を FLYER_KEY_REGISTRY 駆動に統一(P5 解消)。
+    レジストリで persist=True のエントリのみを順に拾うため、出力 JSON の
+    キー順は旧 base_keys 列 + target_keys × style_params の二重ループ順と
+    完全に一致する(scratch/repro_flyer.py で挙動不変を assert 済み)。
     """
     save_data = {}
-    base_keys = [
-        "bg_id", "logo_id", "date_format",
-        "logo_scale", "logo_pos_x", "logo_pos_y",
-        "logo_shadow_on", "logo_shadow_color", "logo_shadow_opacity",
-        "logo_shadow_spread", "logo_shadow_blur", "logo_shadow_off_x", "logo_shadow_off_y",
-        "grid_scale_w", "grid_scale_h", "grid_pos_y",
-        "tt_scale_w", "tt_scale_h", "tt_pos_y",
-        "subtitle_date_gap",
-        "date_venue_gap", "ticket_gap", "area_gap", "note_gap", "footer_pos_y",
-        "fallback_font", "time_tri_visible", "time_tri_scale", "time_line_gap", "time_alignment",
-        "show_buzz_logo" # ★追加: BUZZチケロゴ表示フラグ
-    ]
-    for k in base_keys:
-        v = st.session_state.get(f"flyer_{k}")
+    for entry in FLYER_KEY_REGISTRY:
+        if not entry.persist:
+            continue
+        v = st.session_state.get(f"flyer_{entry.short_key}")
         if v is not None:
-            save_data[k] = v
-
-    target_keys = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
-    style_params = ["font", "size", "color", "shadow_on", "shadow_color", "shadow_blur", "shadow_off_x", "shadow_off_y", "shadow_opacity", "shadow_spread", "pos_x", "pos_y"]
-    for k in target_keys:
-        for p in style_params:
-            v = st.session_state.get(f"flyer_{k}_{p}")
-            if v is not None:
-                save_data[f"{k}_{p}"] = v
-
+            save_data[entry.short_key] = v
     return save_data
 
 def render_visual_selector(label, options, key_name, current_value, allow_none=False):
@@ -141,45 +123,17 @@ def render_flyer_editor(project_id):
             cfg_val = saved_config.get(short_key)
             st.session_state[key] = val if cfg_val is None else cfg_val
 
-    init_s("flyer_bg_id", 0)
-    init_s("flyer_logo_id", 0)
-    init_s("flyer_date_format", "EN")
-    init_s("flyer_logo_scale", 1.0)
-    init_s("flyer_logo_pos_x", 0.0)
-    init_s("flyer_logo_pos_y", 0.0)
-    
-    init_s("flyer_logo_shadow_on", False)
-    init_s("flyer_logo_shadow_color", "#000000")
-    init_s("flyer_logo_shadow_opacity", 128)
-    init_s("flyer_logo_shadow_spread", 0)
-    init_s("flyer_logo_shadow_blur", 5)
-    init_s("flyer_logo_shadow_off_x", 5)
-    init_s("flyer_logo_shadow_off_y", 5)
-
-    init_s("flyer_grid_scale_w", 95)
-    init_s("flyer_grid_scale_h", 100)
-    init_s("flyer_grid_pos_y", 0)    
-    init_s("flyer_tt_scale_w", 95)
-    init_s("flyer_tt_scale_h", 100)
-    init_s("flyer_tt_pos_y", 0)      
-    init_s("flyer_grid_link", True) 
-    init_s("flyer_tt_link", True)
-    init_s("flyer_subtitle_date_gap", 10) 
-    init_s("flyer_date_venue_gap", 10)
-    init_s("flyer_ticket_gap", 20)
-    init_s("flyer_area_gap", 40)
-    init_s("flyer_note_gap", 15)
-    init_s("flyer_footer_pos_y", 0)
-    init_s("flyer_time_tri_visible", True)
-    init_s("flyer_time_tri_scale", 1.0)
-    init_s("flyer_time_line_gap", 0)
-    init_s("flyer_time_alignment", "center")
-    init_s("flyer_preview_width", 500)
-    init_s("flyer_show_buzz_logo", False) # ★追加: BUZZチケロゴ表示の初期化
-    
+    # Phase 2B-1c-②b-1: init_s 列を FLYER_KEY_REGISTRY 駆動に統一(P5)。
+    # fallback_font だけは SystemFontConfig 由来の動的 default を持つため、
+    # レジストリ駆動ループより先に明示的に init_s する(順序保護)。
+    # レジストリ側エントリの default は静的 "keifont.ttf" だが、ここで先に
+    # 動的値で初期化済みなのでループの init_s は no-op となり挙動不変。
     sys_conf = db.query(SystemFontConfig).first()
     def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
     init_s("flyer_fallback_font", def_sys)
+
+    for entry in FLYER_KEY_REGISTRY:
+        init_s(f"flyer_{entry.short_key}", entry.default)
 
     # 移動対象の定義
     move_targets = {
@@ -241,21 +195,9 @@ def render_flyer_editor(project_id):
     # スタイル編集用UI関数
     # ==========================================
     def render_style_editor(label, prefix):
-        init_s(f"flyer_{prefix}_font", "keifont.ttf")
-        init_s(f"flyer_{prefix}_size", 50)
-        init_s(f"flyer_{prefix}_color", "#FFFFFF")
-        init_s(f"flyer_{prefix}_shadow_on", False)
-        init_s(f"flyer_{prefix}_shadow_color", "#000000")
-        init_s(f"flyer_{prefix}_shadow_blur", 2)
-        init_s(f"flyer_{prefix}_shadow_off_x", 5)
-        init_s(f"flyer_{prefix}_shadow_off_y", 5)
-        
-        init_s(f"flyer_{prefix}_shadow_opacity", 255)
-        init_s(f"flyer_{prefix}_shadow_spread", 0)
-        
-        init_s(f"flyer_{prefix}_pos_x", 0)
-        init_s(f"flyer_{prefix}_pos_y", 0)
-
+        # Phase 2B-1c-②b-1: 各 style キーの init_s は render_flyer_editor 冒頭の
+        # FLYER_KEY_REGISTRY 駆動ループで全プレフィックス分まとめて済んでいる。
+        # ここでは widget 描画のみ行う(挙動不変)。
         with st.expander(f"📝 {label} スタイル", expanded=False):
             c1, c2 = st.columns([2, 1])
             with c1:
