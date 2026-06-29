@@ -4,6 +4,7 @@ import os
 import requests
 from io import BytesIO
 from time import perf_counter
+from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
 from utils.logger import get_logger
 
@@ -79,6 +80,67 @@ def load_image(path_or_url):
         return None
     except Exception: return None
 
+
+# =========================================================
+# Phase 3 P2: アー写画像並列取得ヘルパー (TT 用、Grid 側と同型)
+# =========================================================
+def _prefetch_tt_images(timetable_data, db):
+    """timetable_data の全行をスキャンして name_str → PIL.Image の dict を返す。
+    ThreadPoolExecutor で並列 HTTP 取得。出力画像 (タイムテーブル合成結果) は不変。
+    HTTP 取得の wall-clock 時間を短縮するための取得フェーズのみ並列化。
+
+    - Artist 解決: 既存 draw_one_row 内と同じロジック (name 完全一致 → ilike fallback)
+    - 物販系 ("OPEN / START" / "開演前物販" / "終演後物販") はスキップ
+    - URL 生成 (get_image_url) は直列 (DB を引かない・軽い文字列処理)
+    - HTTP 取得は max_workers=8 で並列
+    - 失敗時は None を返す (既存 load_image の挙動と同じ)
+    - 同名行は同じ画像を共有 (1 回取得で済む)
+    - DB 二重引き (prefetch でも draw_one_row 内でも Artist を引く) は今回許容。
+      DB N+1 解消は別タスク。
+    """
+    from database import Artist, get_image_url
+    _wall_t0 = perf_counter()
+    SKIP_NAMES = {"OPEN / START", "開演前物販", "終演後物販"}
+
+    # 1. name_str → url を集める (DBクエリ + URL生成は直列)
+    name_to_url = {}
+    for row in timetable_data:
+        if not row or len(row) < 2:
+            continue
+        name_str = str(row[1]).strip()
+        if not name_str or name_str in SKIP_NAMES:
+            continue
+        if name_str in name_to_url:
+            continue
+        artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
+        if not artist:
+            clean = name_str.replace(" ", "").replace("　", "")
+            if clean:
+                artist = db.query(Artist).filter(Artist.name.ilike(f"%{clean}%"), Artist.is_deleted == False).first()
+        if artist and artist.image_filename:
+            url = get_image_url(artist.image_filename)
+            if url:
+                name_to_url[name_str] = url
+
+    # 2. ThreadPoolExecutor で並列 HTTP 取得
+    image_cache = {}
+    if name_to_url:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_name = {executor.submit(load_image, url): name for (name, url) in name_to_url.items()}
+            for fut in future_to_name:
+                name = future_to_name[fut]
+                try:
+                    image_cache[name] = fut.result()
+                except Exception:
+                    image_cache[name] = None
+
+    _perf_logger.info(
+        f"[PERF] tt_fetch_parallel_wall took {(perf_counter() - _wall_t0) * 1000:.0f} ms "
+        f"(jobs={len(name_to_url)} names={len(name_to_url)} fetched={sum(1 for v in image_cache.values() if v is not None)})"
+    )
+    return image_cache
+
+
 def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_font_size, align="center"):
     text = str(text).strip()
     if not text: return
@@ -107,7 +169,7 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     draw.multiline_text((final_x+2, final_y+2), text, fill=(0,0,0,200), font=font, spacing=4, align=align)
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
-def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_width, row_height, columns):
+def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_width, row_height, columns, image_cache=None):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
@@ -154,7 +216,11 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
             if artist and artist.image_filename:
                 url = get_image_url(artist.image_filename)
                 if url:
-                    img = load_image(url)
+                    # Phase 3 P2: 並列取得済みの image_cache から取り出し (image_cache=None のとき従来動作にフォールバック)
+                    if image_cache is not None:
+                        img = image_cache.get(name_str)
+                    else:
+                        img = load_image(url)
                     if img:
                         img_fitted = ImageOps.fit(img, (int(row_width), int(row_height)), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
                         row_img.paste(img_fitted, (0, 0))
@@ -203,6 +269,8 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
     db = SessionLocal()
 
     try:
+        # Phase 3 P2: アー写画像を並列取得 (取得フェーズと加工フェーズの分離・出力不変)
+        image_cache = _prefetch_tt_images(timetable_data, db)
         total_artists = len(timetable_data)
         
         # 安全策: ロジック側でも24組以上は強制2列にする
@@ -246,7 +314,7 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
         # --- 左列の描画 ---
         y = margin_between_rows / 2
         for row in left_data:
-            draw_one_row(draw, canvas, 0, y, row, font_path, db, single_col_width, row_height, columns)
+            draw_one_row(draw, canvas, 0, y, row, font_path, db, single_col_width, row_height, columns, image_cache=image_cache)
             y += slot_height
 
         # --- 右列の描画 ---
@@ -254,7 +322,7 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
             right_col_start_x = single_col_width + COLUMN_GAP
             y = margin_between_rows / 2 
             for row in right_data:
-                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db, single_col_width, row_height, columns)
+                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db, single_col_width, row_height, columns, image_cache=image_cache)
                 y += slot_height
             
         # [PERF] gen_tt_summary 全体サマリ 1 行 (新行挿入のみ・既存 return 行は無変更)
