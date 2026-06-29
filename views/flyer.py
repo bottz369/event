@@ -18,7 +18,7 @@ from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str, generate_timetable_csv_string, ensure_font_file_exists
 from utils.flyer_generator import create_flyer_image_shadow
 from views.flyer_keys import FLYER_KEY_REGISTRY
-from services import project_service
+from services import project_service, session_manager
 
 # ==========================================
 # 設定データの収集関数
@@ -263,10 +263,22 @@ def render_flyer_editor(project_id):
                         target_t = next((t for t in templates if t.name == sel_template), None)
                         if target_t and target_t.data_json:
                             try:
+                                # Phase 2B-3 (案Q): テンプレ「読込」を明示保存型に統一。
+                                # 旧: loaded_data を session_state に展開し、同時に proj.flyer_json
+                                # も直接書き込んで db.commit していた。DB 反映は保存ボタン押下時
+                                # のみ、という設計原則 (2B-2a で保存ボタンを統一済み) に外れていた。
+                                # 新: session_state への展開のみ行う。draft.flyer_settings にも
+                                # 同期して has_unsaved_changes() を発火させる。DB 反映はユーザが
+                                # フライヤー保存ボタン等を押した瞬間 (save_active_project 経由)。
                                 loaded_data = json.loads(target_t.data_json)
-                                for k, v in loaded_data.items(): st.session_state[f"flyer_{k}"] = v
-                                proj.flyer_json = json.dumps(loaded_data)
-                                db.commit()
+                                for k, v in loaded_data.items():
+                                    # 汚染テンプレ防御 (②a P2 と同じ): null は session_state に
+                                    # 入れない。後段 init_s の P1 フォールバックに任せる。
+                                    if v is None:
+                                        continue
+                                    st.session_state[f"flyer_{k}"] = v
+                                # draft にも反映して「未保存変更」警告を発火させる
+                                session_manager.sync_session_to_draft()
                                 st.toast(f"テンプレート「{sel_template}」を適用しました！", icon="✨")
                                 st.rerun()
                             except Exception as e: st.error(f"読込エラー: {e}")
