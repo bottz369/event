@@ -646,24 +646,11 @@ def render_timetable_page():
             }
             if "tt_last_generated_params" not in st.session_state: st.session_state.tt_last_generated_params = None
 
-            if st.session_state.get("last_generated_tt_image") is None:
-                if generate_timetable_image and gen_list:
-                    try:
-                        import time as _ptime
-                        _pt0 = _ptime.perf_counter()
-                        ensure_font_exists(db, st.session_state.tt_font)
-                        font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
-                        auto_img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
-                        st.session_state.last_generated_tt_image = auto_img
-                        st.session_state.tt_last_generated_params = current_tt_params
-                        try:
-                            from utils.logger import get_logger as _gl
-                            _gl("perf").info(
-                                f"[PERF] tt_image AUTO generate took {(_ptime.perf_counter()-_pt0)*1000:.0f} ms"
-                            )
-                        except Exception:
-                            pass
-                    except Exception as e: pass
+            # Phase 3 stop-autogen: render 時の TT 画像自動生成を廃止。
+            # 生成は下記「🔄 設定反映 (プレビュー生成)」ボタン押下時のみ。
+            # workspace の eager タブ描画でプロジェクトを開くだけで 20 秒級の
+            # 画像生成が走る問題 ([PERF] tt_image AUTO generate took 22910 ms 観測)
+            # を解消する。生成関数本体・速度は無変更 (Priority 2 で扱う)。
 
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_tt_generate"):
                 try:
@@ -712,8 +699,9 @@ def render_timetable_page():
                 else:
                     st.caption("👇 現在のプレビュー")
                 st.image(st.session_state.last_generated_tt_image, use_container_width=True)
-            elif is_outdated:
-                 st.info("👆 「設定反映」ボタンを押してプレビューを生成してください。")
+            else:
+                # Phase 3 stop-autogen: 自動生成廃止に伴い、画像未生成時は常にプレースホルダ。
+                st.info("👆 「設定反映」ボタンを押してプレビューを生成してください。")
 
     else:
         st.info("👈 上のボックスからプロジェクトを選択してください")

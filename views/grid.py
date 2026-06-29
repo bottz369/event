@@ -318,43 +318,11 @@ def render_grid_page():
                 "rows": st.session_state.grid_rows
             }
 
-            # 自動生成ロジック (初回のみ)
-            if st.session_state.get("last_generated_grid_image") is None:
-                if generate_grid_image:
-                    import time as _ptime
-                    _pt0 = _ptime.perf_counter()
-                    target_artists = []
-                    for n in st.session_state.grid_order:
-                        a = db.query(Artist).filter(Artist.name == n).first()
-                        if a: target_artists.append(a)
-
-                    if target_artists:
-                        try:
-                            # フォント確保
-                            check_and_download_font(db, st.session_state.grid_font)
-
-                            is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
-                            align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
-                            align_val = align_map.get(st.session_state.grid_alignment, "center")
-
-                            # 絶対パス生成
-                            abs_font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.grid_font)
-
-                            auto_img = generate_grid_image(
-                                target_artists, IMAGE_DIR,
-                                font_path=abs_font_path,
-                                row_counts=parsed_counts, is_brick_mode=is_brick, alignment=align_val
-                            )
-                            st.session_state.last_generated_grid_image = auto_img
-                            st.session_state.grid_last_generated_params = current_params
-                            try:
-                                from utils.logger import get_logger as _gl
-                                _gl("perf").info(
-                                    f"[PERF] grid_image AUTO generate took {(_ptime.perf_counter()-_pt0)*1000:.0f} ms"
-                                )
-                            except Exception:
-                                pass
-                        except: pass
+            # Phase 3 stop-autogen: render 時のグリッド画像自動生成を廃止。
+            # 生成は下記「🔄 設定反映 (プレビュー生成)」ボタン押下時のみ。
+            # workspace の eager タブ描画でプロジェクトを開くだけで 20 秒級の
+            # 画像生成が走る問題 ([PERF] grid_image AUTO generate took 20531 ms 観測)
+            # を解消する。生成関数本体・N+1 クエリ・速度は無変更 (Priority 2 で扱う)。
 
             # 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
@@ -421,8 +389,9 @@ def render_grid_page():
                 else:
                     st.caption("👇 現在のプレビュー")
                 st.image(st.session_state.last_generated_grid_image, use_container_width=True)
-            elif is_outdated:
-                 st.info("👆 設定を行ったら「設定反映」ボタンを押してプレビューを生成してください。")
+            else:
+                # Phase 3 stop-autogen: 自動生成廃止に伴い、画像未生成時は常にプレースホルダ。
+                st.info("👆 設定を行ったら「設定反映」ボタンを押してプレビューを生成してください。")
 
     except Exception as main_e:
         st.error(f"予期せぬエラー: {main_e}")
