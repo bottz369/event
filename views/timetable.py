@@ -104,13 +104,30 @@ def ensure_font_exists(db, font_filename):
 
     return None
 
+
+# Phase 3 Fix2: check_and_migrate_add_goods_columns をプロセス 1 回のみに削減。
+# 本体ロジック (ALTER TABLE × 3 を duplicate column で握りつぶす冪等 DDL) は変更しない。
+# render_timetable_page は workspace の eager タブ描画で毎レンダ呼ばれるため、
+# 旧仕様だと 1 rerun あたり 3 DDL のラウンドトリップが発生していた。
+# @st.cache_resource で初回 1 回のみ実行、2 回目以降はキャッシュヒットで ~0ms に。
+# 完全撤去は将来の timetable.py 全面書き換え時に行う(壊さない優先)。
+@st.cache_resource
+def _ensure_goods_columns_migrated():
+    db = SessionLocal()
+    try:
+        check_and_migrate_add_goods_columns(db)
+    finally:
+        db.close()
+    return True
+
+
 def render_timetable_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("⏱️ タイムテーブル作成")
-    
+
     db = next(get_db())
-    
-    check_and_migrate_add_goods_columns(db)
+
+    _ensure_goods_columns_migrated()
     
     selected_id = None
     if "ws_active_project_id" in st.session_state and st.session_state.ws_active_project_id:
