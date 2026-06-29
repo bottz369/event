@@ -321,11 +321,13 @@ def render_grid_page():
             # 自動生成ロジック (初回のみ)
             if st.session_state.get("last_generated_grid_image") is None:
                 if generate_grid_image:
+                    import time as _ptime
+                    _pt0 = _ptime.perf_counter()
                     target_artists = []
                     for n in st.session_state.grid_order:
                         a = db.query(Artist).filter(Artist.name == n).first()
                         if a: target_artists.append(a)
-                    
+
                     if target_artists:
                         try:
                             # フォント確保
@@ -337,18 +339,30 @@ def render_grid_page():
 
                             # 絶対パス生成
                             abs_font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.grid_font)
-                            
+
                             auto_img = generate_grid_image(
-                                target_artists, IMAGE_DIR, 
-                                font_path=abs_font_path, 
+                                target_artists, IMAGE_DIR,
+                                font_path=abs_font_path,
                                 row_counts=parsed_counts, is_brick_mode=is_brick, alignment=align_val
                             )
                             st.session_state.last_generated_grid_image = auto_img
                             st.session_state.grid_last_generated_params = current_params
+                            try:
+                                from utils.logger import get_logger as _gl
+                                _gl("perf").info(
+                                    f"[PERF] grid_image AUTO generate took {(_ptime.perf_counter()-_pt0)*1000:.0f} ms"
+                                )
+                            except Exception:
+                                pass
                         except: pass
 
             # 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", use_container_width=True, key="btn_grid_generate"):
+                try:
+                    from utils.logger import get_logger as _gl
+                    _gl("perf").info("[PERF] BUTTON grid_generate pressed")
+                except Exception:
+                    pass
                 if generate_grid_image:
                     target_artists = []
                     for n in st.session_state.grid_order:

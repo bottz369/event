@@ -471,13 +471,28 @@ def ensure_project_loaded(project_id: int) -> bool:
 
     戻り値: ロード成功なら True、失敗なら False
     """
+    import time as _time
+    _t0 = _time.perf_counter()
     current = get_draft_project()
     if current is not None and current.id == project_id:
         # すでに正しいプロジェクトがロード済み
+        logger.info(
+            f"[PERF] ensure_project_loaded SHORT-CIRCUIT id={project_id} "
+            f"took {(_time.perf_counter()-_t0)*1000:.1f} ms"
+        )
         return True
 
     # 違うプロジェクトを開いていた / または未ロード
-    return reload_project(project_id)
+    logger.info(
+        f"[PERF] ensure_project_loaded FULL-RELOAD id={project_id} "
+        f"(current_id={current.id if current else None}) -> calling reload_project"
+    )
+    ok = reload_project(project_id)
+    logger.info(
+        f"[PERF] ensure_project_loaded done id={project_id} "
+        f"took {(_time.perf_counter()-_t0)*1000:.0f} ms ok={ok}"
+    )
+    return ok
 
 
 def reload_project(project_id: int) -> bool:
@@ -485,6 +500,9 @@ def reload_project(project_id: int) -> bool:
     指定プロジェクトを DB から強制再ロードする。
     既存の編集中状態は破棄される。
     """
+    import time as _time
+    _t0 = _time.perf_counter()
+    logger.info(f"[PERF] reload fired id={project_id}")
     clear_project_session()
 
     db = SessionLocal()
@@ -508,6 +526,10 @@ def reload_project(project_id: int) -> bool:
         legacy_adapter.sync_draft_to_legacy_session()
 
         logger.info(f"reload_project: loaded id={project_id}, rows={len(rows)}")
+        logger.info(
+            f"[PERF] reload_project total took {(_time.perf_counter()-_t0)*1000:.0f} ms "
+            f"(id={project_id}, rows={len(rows)})"
+        )
         return True
     except Exception as e:
         logger.error(f"reload_project failed: {e}", exc_info=True)
@@ -518,6 +540,7 @@ def reload_project(project_id: int) -> bool:
 
 def clear_project_session() -> None:
     """プロジェクトに紐づくセッション項目を一括削除する。"""
+    logger.info("[PERF] clear fired")
     for key in SESSION_PROJECT_KEYS:
         if key in st.session_state:
             del st.session_state[key]
