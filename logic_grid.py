@@ -3,6 +3,7 @@ import math
 import unicodedata
 import re
 from time import perf_counter
+from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 import requests
@@ -196,6 +197,58 @@ def load_image_from_url(url):
     except:
         return None
 
+
+# =========================================================
+# Phase 3 P2: アー写画像並列取得ヘルパー
+# =========================================================
+def _fetch_grid_images_parallel(target_artists):
+    """target_artists の各 image_filename を ThreadPoolExecutor で並列取得し、
+    {artist.id: PIL.Image or None} の dict を返す。出力画像 (キャンバス合成結果)
+    は不変。HTTP 取得の wall-clock 時間を短縮するための取得フェーズのみ並列化。
+
+    - artist.id で dedupe (同一 ID の重複取得を防ぐ)
+    - URL 生成 (get_image_url) は直列 (DB を引かない・軽い文字列処理)
+    - HTTP 取得は max_workers=8 で並列
+    - 失敗時は None を返す (既存 load_image_from_url の挙動と同じ)
+    - image_filename が無い / URL が None の artist は dict に含めない
+      → 呼び出し側で None が返り、create_no_image_placeholder にフォールバック
+    """
+    _wall_t0 = perf_counter()
+    # dedupe (artist.id がキー)
+    by_id = {}
+    for a in target_artists:
+        if a.id in by_id:
+            continue
+        by_id[a.id] = a
+
+    # 取得対象を url_jobs にまとめる (URL 生成は直列・軽い)
+    url_jobs = []  # list of (artist_id, url)
+    for a in by_id.values():
+        if not a.image_filename:
+            continue
+        url = get_image_url(a.image_filename)
+        if not url:
+            continue
+        url_jobs.append((a.id, url))
+
+    image_cache = {}
+    if url_jobs:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_id = {executor.submit(load_image_from_url, url): aid for (aid, url) in url_jobs}
+            for fut in future_to_id:
+                aid = future_to_id[fut]
+                try:
+                    image_cache[aid] = fut.result()
+                except Exception:
+                    image_cache[aid] = None
+
+    _perf_logger.info(
+        f"[PERF] grid_fetch_parallel_wall took {(perf_counter() - _wall_t0) * 1000:.0f} ms "
+        f"(jobs={len(url_jobs)} artists_dedup={len(by_id)} fetched={sum(1 for v in image_cache.values() if v is not None)})"
+    )
+    return image_cache
+
+
 # =========================================================
 # フォントパス解決ロジック
 # =========================================================
@@ -231,6 +284,9 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
     target_artists = artists 
     total_images = len(target_artists)
     if total_images == 0: return None
+
+    # Phase 3 P2: アー写画像を並列取得 (取得フェーズと加工フェーズの分離・出力不変)
+    image_cache = _fetch_grid_images_parallel(target_artists)
 
     # 行指定がない場合の安全策
     if not row_counts: row_counts = [5] * 10
@@ -334,9 +390,8 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
             try:
                 img = None
                 if target_artist.image_filename:
-                    img_url = get_image_url(target_artist.image_filename)
-                    if img_url:
-                        img = load_image_from_url(img_url)
+                    # Phase 3 P2: 並列取得済みの image_cache から取り出し (出力不変・get_image_url/load_image_from_url の直列呼び出しを置換)
+                    img = image_cache.get(target_artist.id)
                 
                 if img:
                     # DB値の読み込み
