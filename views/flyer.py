@@ -233,10 +233,21 @@ def render_flyer_editor(project_id):
                 align_map = {"right":"右揃え", "center":"中央揃え", "left":"左揃え", "triangle":"▶揃え"}
                 c_al1, c_al2 = st.columns(2)
                 with c_al1:
-                    sel_align = st.selectbox("配置モード", list(align_map.keys()), format_func=lambda x: align_map[x],
-                                             key="flyer_time_alignment_sel",
-                                             index=list(align_map.keys()).index(st.session_state.flyer_time_alignment))
-                    st.session_state.flyer_time_alignment = sel_align
+                    # Phase 3 fix-time-alignment (案A): widget key を真の SSOT "flyer_time_alignment"
+                    # に一本化。旧コードは key="flyer_time_alignment_sel" + index= + 外部書き込みの
+                    # 3 重設定で、罠10 (widget 所有 key への外部書き込み競合) の警告を出していた。
+                    # 加えて sync_session_to_draft が flyer_* を総ざらいする関係で、
+                    # "time_alignment_sel" が DB の flyer_json にゴミとして焼き付いていた (罠15)。
+                    # 案A 適用後は session_state.flyer_time_alignment_sel が二度と作られない。
+                    # 既存 DB ゴミ 4 件は widget が読まないため無害のまま放置 (除去 UPDATE しない)。
+                    _opts = list(align_map.keys())
+                    # 選択肢外の値 (旧汚染データ等) が draft に入っていた場合の堅牢化フォールバック。
+                    # registry default は "center" (models/flyer_keys.py:88)。
+                    if st.session_state.get("flyer_time_alignment") not in _opts:
+                        st.session_state["flyer_time_alignment"] = "center" if "center" in _opts else _opts[0]
+                    st.selectbox("配置モード", _opts,
+                                 format_func=lambda x: align_map[x],
+                                 key="flyer_time_alignment")
                 with c_al2:
                     st.checkbox("三角形(▶)を表示", key="flyer_time_tri_visible")
                 
