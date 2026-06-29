@@ -49,7 +49,7 @@ def render_template_management_page():
 
             with col_action:
                 # 更新ボタン
-                if st.button("名前を更新", key=f"upd_{tmpl.id}", use_container_width=True):
+                if st.button("名前を更新", key=f"upd_{tmpl.id}", width='stretch'):
                     if new_name:
                         tmpl.name = new_name
                         db.commit()
@@ -64,7 +64,7 @@ def render_template_management_page():
                 st.write("") # スペース
 
                 # 削除ボタン
-                if st.button("🗑 削除", key=f"del_{tmpl.id}", type="primary", use_container_width=True):
+                if st.button("🗑 削除", key=f"del_{tmpl.id}", type="primary", width='stretch'):
                     db.delete(tmpl)
                     db.commit()
                     st.toast("テンプレートを削除しました", icon="🗑")

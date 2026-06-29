@@ -138,7 +138,7 @@ def render_artists_page():
                         cy = getattr(target_artist, 'crop_y', 0) or 0
                         
                         thumb = get_processed_thumbnail(target_artist.image_filename, s, cx, cy)
-                        st.image(thumb, caption="現在の表示 (黒背景)", use_container_width=True)
+                        st.image(thumb, caption="現在の表示 (黒背景)", width='stretch')
 
                     # 右カラム: 編集コントロール
                     with c_edit:
@@ -207,7 +207,7 @@ def render_artists_page():
             # --- 全リスト確認用 (テキストのみ) ---
             with st.expander("📋 登録リスト一覧を表示 (テキストのみ)"):
                 data = [{"ID": a.id, "名前": a.name, "画像": "あり" if a.image_filename else "なし"} for a in all_artists]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), width='stretch', hide_index=True)
 
         st.divider()
 
@@ -234,7 +234,7 @@ def render_artists_page():
                 default_index = 1 if len(artist_options) > 1 else 0
                 loser_id = st.selectbox("🗑️ 統合・削除するアーティスト (誤)", options=list(artist_options.values()), format_func=lambda x: [k for k, v in artist_options.items() if v == x][0], index=default_index, key="merge_loser")
 
-            if st.button("⚠️ 統合を実行する", type="primary", use_container_width=True):
+            if st.button("⚠️ 統合を実行する", type="primary", width='stretch'):
                 if winner_id == loser_id:
                     st.error("同じアーティスト同士は統合できません。")
                 else:

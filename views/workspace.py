@@ -176,7 +176,7 @@ def _render_project_header(draft) -> None:
     st.markdown("---")
     col_dummy, col_act = st.columns([4, 1])
     with col_act:
-        if st.button("📄 複製して編集", use_container_width=True, key="btn_proj_duplicate"):
+        if st.button("📄 複製して編集", width='stretch', key="btn_proj_duplicate"):
             new_id = project_service.duplicate_active_project()
             if new_id:
                 st.toast("プロジェクトを複製しました！", icon="✨")
