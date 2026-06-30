@@ -66,7 +66,6 @@ SESSION_PROJECT_KEYS = [
     "tt_pre_goods_settings",
     "tt_post_goods_settings",
     "tt_editor_key",
-    "binding_df",
     "rebuild_table_flag",
     # Phase 2B-2-b sentinel: TT タブが draft_rows を直接編集している間 True。
     # 立っていれば _rebuild_draft_rows_from_legacy が None を返し、

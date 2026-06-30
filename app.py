@@ -43,7 +43,6 @@ if "tt_has_pre_goods" not in st.session_state: st.session_state.tt_has_pre_goods
 if "tt_pre_goods_settings" not in st.session_state: st.session_state.tt_pre_goods_settings = get_default_row_settings()
 if "tt_post_goods_settings" not in st.session_state: st.session_state.tt_post_goods_settings = get_default_row_settings()
 if "tt_editor_key" not in st.session_state: st.session_state.tt_editor_key = 0
-if "binding_df" not in st.session_state: st.session_state.binding_df = pd.DataFrame()
 if "rebuild_table_flag" not in st.session_state: st.session_state.rebuild_table_flag = True
 if "tt_title" not in st.session_state: st.session_state.tt_title = ""
 if "tt_event_date" not in st.session_state: st.session_state.tt_event_date = date.today()

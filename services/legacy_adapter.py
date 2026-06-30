@@ -111,11 +111,10 @@ def sync_draft_to_legacy_session() -> None:
     # ensure_project_loaded() 経由の reload(=st.rerun を挟まない経路) を通った
     # ときに AttributeError になる。app.py の top-level defaults だけでは
     # clear と timetable レンダーが同一 run に乗ったケースを救えない。
-    # フェーズ2 で views/timetable.py を書き換えて binding_df を廃止する際に、
-    # これら 3 行も一緒に削除できる予定。
+    # Phase 2B-2-c で binding_df setdefault は撤去 (binding_df 自体が dead 化)。
+    # 残り 2 つ (request_calc / tt_editor_key) は views/timetable.py から参照あり。
     st.session_state.setdefault("request_calc", False)
     st.session_state.setdefault("tt_editor_key", 0)
-    st.session_state.setdefault("binding_df", pd.DataFrame())
 
 
 def _expand_rows_to_legacy(rows) -> None:

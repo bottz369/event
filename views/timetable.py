@@ -211,24 +211,10 @@ def render_timetable_page():
         if selected_label != "(選択してください)": selected_id = proj_map[selected_label]
 
     if selected_id:
-        current_open = st.session_state.get("tt_open_time")
-        current_start = st.session_state.get("tt_start_time")
-        
-        last_check_key = f"tt_last_check_times_{selected_id}"
-        if last_check_key not in st.session_state:
-            st.session_state[last_check_key] = (current_open, current_start)
-        else:
-            last_open, last_start = st.session_state[last_check_key]
-            if last_open != current_open or last_start != current_start:
-                # Phase 2B-2-b ③: rebuild_table_flag セットを撤去。
-                # draft_rows は mutate せず、open_time 変化は editor 再表示時に
-                # _normalize_edited_rows が draft_rows[開演前物販].goods_start_time
-                # を自動上書きするため editor key bump も不要。
-                # 旧経路は rebuild ブロック内の binding_df 再構築が
-                # tt_pre_goods_settings 更新「前」に走るため次 render 以降表示が
-                # 古い値のまま固定される potential bug があった (新経路で 1 rerun 収束)。
-                # last_check_key の dead block 全体撤去は -c の cleanup で実施予定。
-                st.session_state[last_check_key] = (current_open, current_start)
+        # Phase 2B-2-c: last_check_key block を撤去 (旧 rebuild_table_flag セット用の
+        # dead block。draft_rows ベースでは open_time 変化は editor 再表示時に
+        # _normalize_edited_rows が draft_rows[開演前物販].goods_start_time を
+        # 自動上書きするため、ここで何もする必要がない)。
 
         # --- プロジェクトデータの読み込み ---
         if st.session_state.get("tt_current_proj_id") != selected_id:
