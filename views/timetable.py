@@ -107,6 +107,15 @@ def _ensure_goods_columns_migrated():
     return True
 
 
+# Phase 2B-2-b: editor key bump helper.
+# 旧構造は「mutation → rebuild_table_flag = True → rebuild ブロック (L447) で
+# tt_editor_key += 1」の間接構造だった。新構造では各 mutation 直後にこの
+# helper を直接呼び、editor を強制 reset する(rebuild_table_flag 経由を撤去)。
+# tt_editor_key の名前は据え置き(rename は -c 以降)。
+def _bump_editor_seq():
+    st.session_state["tt_editor_key"] = st.session_state.get("tt_editor_key", 0) + 1
+
+
 def render_timetable_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("⏱️ タイムテーブル作成")

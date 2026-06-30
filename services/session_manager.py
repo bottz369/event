@@ -68,6 +68,10 @@ SESSION_PROJECT_KEYS = [
     "tt_editor_key",
     "binding_df",
     "rebuild_table_flag",
+    # Phase 2B-2-b sentinel: TT タブが draft_rows を直接編集している間 True。
+    # 立っていれば _rebuild_draft_rows_from_legacy が None を返し、
+    # 旧 6 状態からの再構築をスキップする(draft_rows が真実)。
+    "tt_draft_authoritative",
     "tt_title",
     "tt_event_date",
     "tt_venue",
@@ -229,7 +233,15 @@ def _rebuild_draft_rows_from_legacy() -> Optional[List[TimetableRowDraft]]:
               ロード直後で legacy_adapter による sync が走る前に
               空リストで上書きする事故を防ぐ。
       - List[TimetableRowDraft]: 再構築結果。[] も有効値(アーティスト 0 件)。
+
+    Phase 2B-2-b: sentinel `tt_draft_authoritative` が立っていれば
+    view (TT タブ) が draft_rows を直接編集している後なので、ここでレガシー
+    キーから再構築してしまうと view の編集が消える。その場合は None を返し、
+    sync_session_to_draft 側の `if rebuilt_rows is not None` 分岐で skip され、
+    既存 draft_rows がそのまま使われる。
     """
+    if st.session_state.get("tt_draft_authoritative"):
+        return None
     if "tt_artists_order" not in st.session_state:
         return None
     order = st.session_state.get("tt_artists_order")
