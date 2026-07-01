@@ -306,3 +306,64 @@ Phase 2B-2-c 以降の cleanup で削除予定。
 画像生成)すべて合格。draft_rows 一本化が本番で旧経路と同一出力を生成。
 → save chain は draft_rows → DB に完全一本化。Phase 2B 本丸完了。
 コミット: 30ee2e0 Add CLAUDE.md operational guard / ac33737 Phase 2B-2-d 本体
+
+## 16. Phase 4-0 完了記録(2026-07-01)
+
+✅ フェーズ4-0: data_json を primary 直読みしていた live reader の移行/撤去
+(2026-07-01 実施、本番反映済み、commit 03fcd95 / 0368450)
+
+**背景**: Phase 4 本体(projects_v4.data_json 二重書き込みの停止)の前提作業。
+書き込みを止めると stale/空データを出す「data_json を primary で直読みする live 経路」を
+先に排除する。investigation-first で repo 全体の data_json 使用を棚卸しして判定した。
+
+**data_json 使用の棚卸し結果(projects_v4)**:
+- 書き込み(Phase 4 本体で止める対象・今回は温存): `repositories/project_repo.py` の
+  apply_draft 過渡期二重書き込み + `_build_legacy_data_json_from_rows`。
+- 読み・安全(rows 優先フォールバック。timetable_rows が無い旧 proj のみ落ちる・温存):
+  - `repositories/timetable_repo.load_rows`(正規窓口)
+  - `views/grid.py` の `elif proj.data_json`(L122/178)
+  - `logic_project.py` load_project_data の else(L157、overview.py:75 から live)
+- 読み・live blocker(primary 直読み・フォールバック無し → 今回排除):
+  - ① `views/projects.py` 「⏱️ タイムテーブルPDF」ボタン(プロジェクト管理メニュー、live)
+  - ② `utils/flyer_helpers.py` の generate_timetable_csv_string
+     (flyer.py の ZIP 素材同梱から live)
+- 死コード(data_json に触るが到達不能。今回は温存、Phase 4 本体で cleanup 候補):
+  - generate_event_summary_text_from_proj(呼び出し元ゼロ)
+  - create_project_assets_zip(唯一の呼び出しが projects.py でコメントアウト)
+- 対象外(別テーブル flyer_templates.data_json。触ると別機能破壊・保護):
+  - views/flyer.py(テンプレ読込/保存)、views/template.py(st.json 表示)
+
+**実装(2 コミット・性質で分離)**:
+- 03fcd95 PDF 移行(挙動維持リファクタ): projects.py の
+  `pd.DataFrame(json.loads(proj.data_json))` を `draft_rows_to_df(load_rows(db, proj.id))`
+  に置換。ガードを `if proj.data_json:` → `tt_rows = load_rows(...); if tt_rows:` に変更。
+  未使用化した import json / import pandas as pd を撤去(grep 0件確認後)。
+  import io は未使用だが指示により温存(Phase 6 の import 整理候補)。
+- 0368450 CSV 撤去(機能削除): flyer.py の呼び出し2行 + import から当該関数のみ除去 →
+  参照0件を grep 確認 → flyer_helpers.py の関数定義(27行)を撤去。「参照→足場」順。
+
+**検証**: 両コミット py_compile 通過。grep 生出力で projects.py の data_json/json./pd. 0件、
+CSV 関数の定義/参照/"Timetable_Data.csv" 文字列すべて0件を確認。本番実機テスト
+(PDF ボタン表示 / 内容一致 / 【核心】TT 編集→保存→PDF 再DL で反映=stale でない /
+ZIP に CSV 無し・他ファイル無傷)すべて合格。
+
+→ primary 直読みの live 経路が消滅。data_json 二重書き込みを止めても stale 化する読み手が
+残らない状態になり、**Phase 4 本体(data_json 廃止)がアンブロック**。
+
+### 罠22: data_json は projects_v4 と flyer_templates の2テーブルにある同名カラム
+database.py で projects_v4(TimetableProject, L74)と flyer_templates(FlyerTemplate,
+L134)の両方が data_json カラムを持つ。前者は TT データ、後者はフライヤーのテンプレ
+プリセット設定で全くの別機能。`grep -rn data_json` の結果を無差別に消すと
+flyer_templates 側(flyer.py のテンプレ読込/保存、template.py の表示)を破壊する。
+→ 対処: data_json を触る作業では必ず「どのテーブルの data_json か」を先に判定。
+  ORM オブジェクトの型(proj=TimetableProject か target_t/tmpl=FlyerTemplate か)で切り分ける。
+
+### 罠23: 「dead code 疑い」の正体が「生きているが半壊(出力が空)」だったケース
+申し送りにあった「CSV export に dead-code 疑い」は、実際は呼び出し経路が live だった。
+真因は別で、generate_timetable_csv_string が data_json から読む計算後キー
+(START/END/GOODS_START/GOODS_END/GOODS_LOC)を、Phase 2B の二重書き込み
+(_build_legacy_data_json_from_rows = to_legacy_dict() の入力キーのみ)が一切書いておらず、
+2B 以降に保存した proj では時刻・物販列が既に空欄で出力されていた(=半壊)。
+→ 教訓: 「使われていない」という申し送りを鵜呑みにせず grep で呼び出し到達性を確認する。
+  reader が期待するスキーマと writer が書くスキーマの不一致は「クラッシュしない静かな
+  データ欠落」を生む。撤去/移行の判断前に両スキーマを突き合わせること。
