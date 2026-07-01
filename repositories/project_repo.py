@@ -262,7 +262,6 @@ def duplicate_project(db: Session, project_id: int) -> Optional[TimetableProject
         open_time=src.open_time,
         start_time=src.start_time,
         goods_start_offset=src.goods_start_offset,
-        data_json=src.data_json,
         grid_order_json=src.grid_order_json,
         tickets_json=src.tickets_json,
         free_text_json=src.free_text_json,
