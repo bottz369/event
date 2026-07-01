@@ -524,31 +524,3 @@ def create_event_summary_pdf(project):
     doc.build(elements)
     buffer.seek(0)
     return buffer
-
-def create_project_assets_zip(project, db, Asset):
-    """プロジェクトに関連する素材（フライヤー設定で使用した画像）をZIPにする"""
-    zip_buffer = io.BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # 1. イベント概要PDF
-        summary_pdf = create_event_summary_pdf(project)
-        zf.writestr(f"event_summary_{project.id}.pdf", summary_pdf.getvalue())
-        
-        # 2. フライヤーで使用した素材画像 (簡易実装)
-        if project.flyer_json:
-            try:
-                settings = json.loads(project.flyer_json)
-                logo_id = settings.get("logo_id")
-                bg_id = settings.get("bg_id")
-                
-                info_txt = f"Logo ID: {logo_id}\nBackground ID: {bg_id}"
-                zf.writestr("flyer_assets_info.txt", info_txt)
-            except:
-                pass
-        
-        # 3. データJSON
-        if project.data_json:
-             zf.writestr("timetable_data.json", project.data_json)
-
-    zip_buffer.seek(0)
-    return zip_buffer

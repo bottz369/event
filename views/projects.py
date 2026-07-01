@@ -1,6 +1,6 @@
 import streamlit as st
 from database import get_db, TimetableProject, Asset
-from utils import create_event_summary_pdf, create_project_assets_zip, create_business_pdf, calculate_timetable_flow
+from utils import create_event_summary_pdf, create_business_pdf, calculate_timetable_flow
 from services import project_service
 from repositories.timetable_repo import load_rows
 from models.timetable import draft_rows_to_df
@@ -61,10 +61,6 @@ def render_projects_page():
                     except:
                         st.warning("タイムテーブルデータが不完全です")
 
-                # 3. 全素材ZIP (簡易版)
-                # zip_data = create_project_assets_zip(proj, db, Asset)
-                # st.download_button("📦 素材＆データZIP", zip_data, f"assets_{proj.id}.zip", "application/zip", key=f"dl_zip_{proj.id}", use_container_width=True)
-                
                 # 4. 削除ボタン (確認付き)
                 with st.expander("🗑️ プロジェクトを削除"):
                     st.warning("この操作は取り消せません！")
