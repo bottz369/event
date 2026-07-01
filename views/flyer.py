@@ -15,7 +15,7 @@ except ImportError:
 from database import get_db, TimetableProject, TimetableRow, Asset, get_image_url, SystemFontConfig, FlyerTemplate
 from utils import get_sorted_font_list, create_font_specimen_img
 from utils.text_generator import build_event_summary_text
-from utils.flyer_helpers import format_event_date, format_time_str, generate_timetable_csv_string, ensure_font_file_exists
+from utils.flyer_helpers import format_event_date, format_time_str, ensure_font_file_exists
 from utils.flyer_generator import create_flyer_image_shadow
 from models.flyer_keys import FLYER_KEY_REGISTRY
 from services import project_service, session_manager
@@ -555,8 +555,6 @@ def render_flyer_editor(project_id):
                                     buf = io.BytesIO()
                                     st.session_state.last_generated_tt_image.save(buf, format="PNG")
                                     zip_file.writestr("Source_Timetable_Transparent.png", buf.getvalue())
-                                csv_str = generate_timetable_csv_string(proj)
-                                if csv_str: zip_file.writestr("Timetable_Data.csv", csv_str)
                         st.download_button("⬇️ ZIPをダウンロード", zip_buffer.getvalue(), f"flyer_assets_{proj.id}.zip", "application/zip")
                     except Exception as e: st.error(f"ZIP生成エラー: {e}")
 

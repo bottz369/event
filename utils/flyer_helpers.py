@@ -184,30 +184,3 @@ def generate_event_summary_text_from_proj(proj, tickets, notes):
 
     except Exception as e:
         return f"テキスト生成エラー: {e}"
-
-def generate_timetable_csv_string(proj):
-    if not proj.data_json: return ""
-    try:
-        data = json.loads(proj.data_json)
-        rows = []
-        for d in data:
-            row = {
-                "START ": d.get("START", ""),
-                "END": d.get("END", ""),
-                "グループ名": d.get("ARTIST", ""),
-                "持ち時間": d.get("DURATION", ""),
-                "物販開始": d.get("GOODS_START", ""),
-                "物販終了": d.get("GOODS_END", ""),
-                "物販時間": d.get("GOODS_DURATION", ""),
-                "物販場所": d.get("GOODS_LOC", "")
-            }
-            rows.append(row)
-        
-        df = pd.DataFrame(rows)
-        cols = ["START ", "END", "グループ名", "持ち時間", "物販開始", "物販終了", "物販時間", "物販場所"]
-        for c in cols:
-            if c not in df.columns: df[c] = ""
-            
-        return df[cols].to_csv(index=False, encoding='utf-8_sig')
-    except Exception as e:
-        return f"CSV Error: {e}"
