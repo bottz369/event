@@ -1,9 +1,9 @@
 import streamlit as st
-import pandas as pd
 from database import get_db, TimetableProject, Asset
 from utils import create_event_summary_pdf, create_project_assets_zip, create_business_pdf, calculate_timetable_flow
 from services import project_service
-import json
+from repositories.timetable_repo import load_rows
+from models.timetable import draft_rows_to_df
 import io
 
 def render_projects_page():
@@ -42,11 +42,12 @@ def render_projects_page():
                     width='stretch'
                 )
 
-                # 2. タイムテーブルPDF (データがある場合のみ)
-                if proj.data_json:
+                # 2. タイムテーブルPDF (行データがある場合のみ)
+                tt_rows = load_rows(db, proj.id)
+                if tt_rows:
                     try:
-                        # データフレームを復元して計算
-                        df_src = pd.DataFrame(json.loads(proj.data_json))
+                        # timetable_rows(正規ソース)から復元して計算
+                        df_src = draft_rows_to_df(tt_rows)
                         df_calc = calculate_timetable_flow(df_src, proj.open_time, proj.start_time)
                         pdf_tt = create_business_pdf(df_calc, proj.title, proj.event_date, proj.venue_name)
                         st.download_button(
