@@ -144,33 +144,6 @@ def to_draft(proj: TimetableProject) -> ProjectDraft:
     )
 
 
-def _build_legacy_data_json_from_rows(rows: List[TimetableRowDraft]) -> List[dict]:
-    """
-    draft_rows を logic_project.save_current_project() と同じ形式の
-    list of dicts に変換して返す(大文字キー)。
-
-    フェーズ2B 中の過渡期、grid.py / overview.py / flyer_helpers.py 等の
-    フォールバック読み込みが古い data_json を参照し続けるのを防ぐため、
-    apply_draft() で同時書き出しする。
-    フェーズ4 で data_json 廃止時に本関数ごと削除予定。
-    """
-    result: List[dict] = []
-    for r in rows:
-        d = r.to_legacy_dict()
-        if r.artist_name in (PRE_GOODS_ARTIST_NAME, POST_GOODS_ARTIST_NAME):
-            # legacy 仕様: 開演前/終演後物販の特殊行は特定フィールドを強制リセット
-            # (logic_project.save_current_project と完全一致させる)
-            d["DURATION"] = 0
-            d["ADJUSTMENT"] = 0
-            d["IS_POST_GOODS"] = False
-            d["PLACE"] = ""
-            d["ADD_GOODS_START"] = ""
-            d["ADD_GOODS_DURATION"] = None
-            d["ADD_GOODS_PLACE"] = ""
-        result.append(d)
-    return result
-
-
 def apply_draft(
     proj: TimetableProject,
     draft: ProjectDraft,
@@ -221,20 +194,6 @@ def apply_draft(
     merged_flyer = dict(existing_flyer)
     merged_flyer.update(draft.flyer_settings or {})
     proj.flyer_json = json.dumps(merged_flyer, ensure_ascii=False)
-
-    # --- data_json: 過渡期の互換書き出し(rows が渡されたときのみ) ---
-    if rows is not None:
-        data_payload = _build_legacy_data_json_from_rows(rows)
-        proj.data_json = json.dumps(data_payload, ensure_ascii=False)
-        logger.debug(
-            f"apply_draft: wrote data_json with {len(data_payload)} rows, "
-            f"flyer_json keys={len(merged_flyer)}"
-        )
-    else:
-        logger.debug(
-            f"apply_draft: data_json untouched (rows=None), "
-            f"flyer_json keys={len(merged_flyer)}"
-        )
 
 
 # ---------------------------------------------------------
