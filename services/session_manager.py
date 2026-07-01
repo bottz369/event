@@ -57,19 +57,10 @@ SESSION_PROJECT_KEYS = [
     "flyer_result_grid",
     "flyer_result_tt",
     "flyer_layout_meta",
-    # 旧キー(段階的削除のため一旦リストに含める)
-    # フェーズ2 以降で実コードから消していくが、安全のため切替時には常に飛ばす
-    "tt_artists_order",
-    "tt_artist_settings",
-    "tt_row_settings",
-    "tt_has_pre_goods",
-    "tt_pre_goods_settings",
-    "tt_post_goods_settings",
     "tt_editor_key",
-    "rebuild_table_flag",
     # Phase 2B-2-b sentinel: TT タブが draft_rows を直接編集している間 True。
-    # 立っていれば _rebuild_draft_rows_from_legacy が None を返し、
-    # 旧 6 状態からの再構築をスキップする(draft_rows が真実)。
+    # (旧: _rebuild_draft_rows_from_legacy のスキップ判定に使用。当該関数は
+    #  2B-2-d で撤去済のため、現在は役割が縮小。将来フェーズで棚卸し候補)
     "tt_draft_authoritative",
     "tt_title",
     "tt_event_date",
@@ -186,126 +177,6 @@ _GRID_KEY_MAP = {
     "grid_layout_mode": "layout_mode",
 }
 
-
-def _coerce_int(value, default: int) -> int:
-    try:
-        if value is None or value == "":
-            return default
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _coerce_optional_int(value) -> Optional[int]:
-    if value is None or value == "":
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _coerce_str(value) -> str:
-    if value is None:
-        return ""
-    s = str(value)
-    return "" if s.lower() == "nan" else s
-
-
-def _rebuild_draft_rows_from_legacy() -> Optional[List[TimetableRowDraft]]:
-    """
-    session_state のレガシーキーから draft_rows を再構築する
-    (legacy_adapter._expand_rows_to_legacy の逆変換)。
-
-    参照キー:
-      - tt_artists_order      : List[str]   (並び順 = sort_order)
-      - tt_artist_settings    : Dict[str, {"DURATION": int}]
-      - tt_row_settings       : List[dict]  (ADJUSTMENT / GOODS_* / ADD_GOODS_* / IS_POST_GOODS / IS_HIDDEN)
-      - tt_has_pre_goods      : bool
-      - tt_pre_goods_settings : dict
-      - tt_post_goods_settings: dict
-
-    返り値:
-      - None: tt_artists_order が未初期化(キー無し or None)。呼び出し側は
-              既存 draft_rows を維持すること。
-              これにより、TT タブをまだ開いていないプロジェクトや、
-              ロード直後で legacy_adapter による sync が走る前に
-              空リストで上書きする事故を防ぐ。
-      - List[TimetableRowDraft]: 再構築結果。[] も有効値(アーティスト 0 件)。
-
-    Phase 2B-2-b: sentinel `tt_draft_authoritative` が立っていれば
-    view (TT タブ) が draft_rows を直接編集している後なので、ここでレガシー
-    キーから再構築してしまうと view の編集が消える。その場合は None を返し、
-    sync_session_to_draft 側の `if rebuilt_rows is not None` 分岐で skip され、
-    既存 draft_rows がそのまま使われる。
-    """
-    if st.session_state.get("tt_draft_authoritative"):
-        return None
-    if "tt_artists_order" not in st.session_state:
-        return None
-    order = st.session_state.get("tt_artists_order")
-    if order is None:
-        return None
-
-    artist_settings = st.session_state.get("tt_artist_settings", {}) or {}
-    row_settings = st.session_state.get("tt_row_settings", []) or []
-    has_pre = bool(st.session_state.get("tt_has_pre_goods", False))
-    pre = st.session_state.get("tt_pre_goods_settings", {}) or {}
-    post = st.session_state.get("tt_post_goods_settings", {}) or {}
-
-    rebuilt: List[TimetableRowDraft] = []
-
-    if has_pre:
-        rebuilt.append(TimetableRowDraft(
-            artist_name=PRE_GOODS_ARTIST_NAME,
-            duration=0,
-            adjustment=0,
-            is_post_goods=False,
-            is_hidden=bool(pre.get("IS_HIDDEN", False)),
-            goods_start_time=_coerce_str(pre.get("GOODS_START_MANUAL")),
-            goods_duration=_coerce_int(pre.get("GOODS_DURATION"), 60),
-            place=_coerce_str(pre.get("PLACE")),
-        ))
-
-    has_post = False
-    for i, name in enumerate(order):
-        if not name:
-            continue
-        ad = artist_settings.get(name, {}) or {}
-        rd = (row_settings[i] if i < len(row_settings) else {}) or {}
-        is_post = bool(rd.get("IS_POST_GOODS", False))
-        if is_post:
-            has_post = True
-
-        rebuilt.append(TimetableRowDraft(
-            artist_name=_coerce_str(name),
-            duration=_coerce_int(ad.get("DURATION"), 20),
-            adjustment=_coerce_int(rd.get("ADJUSTMENT"), 0),
-            is_post_goods=is_post,
-            is_hidden=bool(rd.get("IS_HIDDEN", False)),
-            goods_start_time=_coerce_str(rd.get("GOODS_START_MANUAL")),
-            goods_duration=_coerce_int(rd.get("GOODS_DURATION"), 60),
-            place=_coerce_str(rd.get("PLACE")),
-            add_goods_start_time=_coerce_str(rd.get("ADD_GOODS_START")),
-            add_goods_duration=_coerce_optional_int(rd.get("ADD_GOODS_DURATION")),
-            add_goods_place=_coerce_str(rd.get("ADD_GOODS_PLACE")),
-        ))
-
-    if has_post:
-        rebuilt.append(TimetableRowDraft(
-            artist_name=POST_GOODS_ARTIST_NAME,
-            duration=0,
-            adjustment=0,
-            is_post_goods=False,
-            is_hidden=bool(post.get("IS_HIDDEN", False)),
-            goods_start_time=_coerce_str(post.get("GOODS_START_MANUAL")),
-            goods_duration=_coerce_int(post.get("GOODS_DURATION"), 60),
-            place=_coerce_str(post.get("PLACE")),
-        ))
-
-    return rebuilt
-
-
 def _is_persistable(value) -> bool:
     """JSON 化可能か簡易判定(scalar / list / dict のみ許容)。"""
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -340,13 +211,8 @@ def sync_session_to_draft() -> bool:
       - flyer_* → draft.flyer_settings(prefix を strip, transient を除外して merge)
       - grid_* → draft.grid_settings(_GRID_KEY_MAP の通り merge)
 
-    draft_rows は、tt_artists_order / tt_artist_settings / tt_row_settings /
-    tt_has_pre_goods / tt_pre_goods_settings / tt_post_goods_settings から
-    _rebuild_draft_rows_from_legacy() で再構築する
-    (legacy_adapter._expand_rows_to_legacy の逆変換)。
-    tt_artists_order が未初期化のときは既存 draft_rows を維持する。
-    フェーズ2B-2 以降で view を書き換えて draft_rows を直接編集するように
-    したら、この再構築は不要になり削除予定。
+    draft_rows は各 view が session_manager 経由で直接編集する。
+    (2B-2-d 以前は6状態 tt_artists_order 等からの再構築経路があったが撤去済み)
 
     Returns:
         True: draft を更新した
@@ -453,14 +319,6 @@ def sync_session_to_draft() -> bool:
 
     # dataclass は mutable なので set_draft_project は厳密には不要だが、明示的に書き戻す
     set_draft_project(draft)
-
-    # --- draft_rows: レガシーキーから再構築(_expand_rows_to_legacy の逆) ---
-    # tt_artists_order が未初期化なら既存 draft_rows を維持(ロード直後や
-    # TT タブ未表示時に空で上書きしない安全策)。
-    rebuilt_rows = _rebuild_draft_rows_from_legacy()
-    if rebuilt_rows is not None:
-        set_draft_rows(rebuilt_rows)
-        updated_fields.append(f"rows[{len(rebuilt_rows)}]")
 
     logger.info(
         f"sync_session_to_draft: draft.id={draft.id} "

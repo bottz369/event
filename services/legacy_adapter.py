@@ -36,7 +36,6 @@ def sync_draft_to_legacy_session() -> None:
     フェーズ1 ではプロジェクトロード直後に1回だけ呼ぶ。
     """
     draft = session_manager.get_draft_project()
-    rows = session_manager.get_draft_rows()
     if draft is None:
         return
 
@@ -102,9 +101,6 @@ def sync_draft_to_legacy_session() -> None:
         sess_key = f"flyer_{k}"
         st.session_state[sess_key] = v
 
-    # --- タイムテーブル行データを旧 3 分散形式に展開 ---
-    _expand_rows_to_legacy(rows)
-
     # --- 制御フラグの初期化 ---
     # clear_project_session() の直後に views/timetable.py が attribute syntax
     # で参照するキーを setdefault しておく。これが無いと Streamlit Cloud などで
@@ -115,78 +111,3 @@ def sync_draft_to_legacy_session() -> None:
     # 残り 2 つ (request_calc / tt_editor_key) は views/timetable.py から参照あり。
     st.session_state.setdefault("request_calc", False)
     st.session_state.setdefault("tt_editor_key", 0)
-
-
-def _expand_rows_to_legacy(rows) -> None:
-    """
-    draft_rows(TimetableRowDraft のリスト) を、
-    既存 views/timetable.py 等が期待する以下のキーに展開する:
-      - tt_artists_order: List[str]
-      - tt_artist_settings: Dict[str, dict]
-      - tt_row_settings: List[dict]
-      - tt_has_pre_goods: bool
-      - tt_pre_goods_settings: dict
-      - tt_post_goods_settings: dict
-
-    sync_draft_to_legacy_session() と同じ前提(clear 直後にのみ呼ばれる)で
-    常に上書きする。早期 return はしない。
-    """
-    order = []
-    artist_settings = {}
-    row_settings = []
-    has_pre_goods = False
-    pre_settings = {
-        "GOODS_START_MANUAL": "",
-        "GOODS_DURATION": 60,
-        "PLACE": "",
-        "IS_HIDDEN": False,
-    }
-    post_settings = {
-        "GOODS_START_MANUAL": "",
-        "GOODS_DURATION": 60,
-        "PLACE": "",
-        "IS_HIDDEN": False,
-    }
-
-    for r in rows or []:
-        if r.artist_name == PRE_GOODS_ARTIST_NAME:
-            has_pre_goods = True
-            pre_settings = {
-                "GOODS_START_MANUAL": r.goods_start_time,
-                "GOODS_DURATION": r.goods_duration,
-                "PLACE": r.place,
-                "IS_HIDDEN": r.is_hidden,
-            }
-            continue
-        if r.artist_name == POST_GOODS_ARTIST_NAME:
-            post_settings = {
-                "GOODS_START_MANUAL": r.goods_start_time,
-                "GOODS_DURATION": r.goods_duration,
-                "PLACE": r.place,
-                "IS_HIDDEN": r.is_hidden,
-            }
-            continue
-        if not r.artist_name:
-            continue
-
-        order.append(r.artist_name)
-        artist_settings[r.artist_name] = {"DURATION": r.duration}
-        row_settings.append({
-            "ADJUSTMENT": r.adjustment,
-            "GOODS_START_MANUAL": r.goods_start_time,
-            "GOODS_DURATION": r.goods_duration,
-            "PLACE": r.place,
-            "ADD_GOODS_START": r.add_goods_start_time,
-            "ADD_GOODS_DURATION": r.add_goods_duration,
-            "ADD_GOODS_PLACE": r.add_goods_place,
-            "IS_POST_GOODS": r.is_post_goods,
-            "IS_HIDDEN": r.is_hidden,
-        })
-
-    st.session_state.tt_artists_order = order
-    st.session_state.tt_artist_settings = artist_settings
-    st.session_state.tt_row_settings = row_settings
-    st.session_state.tt_has_pre_goods = has_pre_goods
-    st.session_state.tt_pre_goods_settings = pre_settings
-    st.session_state.tt_post_goods_settings = post_settings
-    st.session_state.rebuild_table_flag = True

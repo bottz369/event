@@ -246,69 +246,8 @@ def render_timetable_page():
                 
                 if "tt_columns" not in st.session_state:
                     st.session_state.tt_columns = 2
-
-                if "tt_artists_order" not in st.session_state or not st.session_state.tt_artists_order:
-                    loaded_rows = load_timetable_rows(db, selected_id)
-                    data_source = []
-                    
-                    if loaded_rows:
-                        data_source = loaded_rows 
-                    elif proj.data_json:
-                        try:
-                            data_source = json.loads(proj.data_json) 
-                        except:
-                            data_source = []
-
-                    if data_source:
-                        try:
-                            new_order = []
-                            new_artist_settings = {}
-                            new_row_settings = []
-                            st.session_state.tt_has_pre_goods = False
-                            
-                            for item in data_source:
-                                name = item.get("ARTIST", "")
-                                if name == "開演前物販":
-                                    st.session_state.tt_has_pre_goods = True
-                                    st.session_state.tt_pre_goods_settings = {
-                                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                                        "PLACE": safe_str(item.get("PLACE")),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
-                                    }
-                                    continue
-                                if name == "終演後物販":
-                                    st.session_state.tt_post_goods_settings = {
-                                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                                        "PLACE": safe_str(item.get("PLACE")),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
-                                    }
-                                    continue
-                                
-                                if name:
-                                    new_order.append(name)
-                                    new_artist_settings[name] = {"DURATION": safe_int(item.get("DURATION"), 20)}
-                                    
-                                    new_row_settings.append({
-                                        "ADJUSTMENT": safe_int(item.get("ADJUSTMENT"), 0),
-                                        "GOODS_START_MANUAL": safe_str(item.get("GOODS_START_MANUAL")),
-                                        "GOODS_DURATION": safe_int(item.get("GOODS_DURATION"), 60),
-                                        "PLACE": safe_str(item.get("PLACE")),
-                                        "ADD_GOODS_START": safe_str(item.get("ADD_GOODS_START")),
-                                        "ADD_GOODS_DURATION": safe_int(item.get("ADD_GOODS_DURATION"), None),
-                                        "ADD_GOODS_PLACE": safe_str(item.get("ADD_GOODS_PLACE")),
-                                        "IS_POST_GOODS": bool(item.get("IS_POST_GOODS", False)),
-                                        "IS_HIDDEN": bool(item.get("IS_HIDDEN", False))
-                                    })
-                            
-                            st.session_state.tt_artists_order = new_order
-                            st.session_state.tt_artist_settings = new_artist_settings
-                            st.session_state.tt_row_settings = new_row_settings
-                            st.session_state.rebuild_table_flag = True 
-                        except Exception as e:
-                            st.error(f"データ展開エラー: {e}")
-                
+                # Phase 2B-2-d: 旧6状態のDBロード展開を撤去。draft_rows は reload_project()
+                # 経由 (timetable_repo.load_rows: timetable_rows→data_json) で直接埋まる。
                 st.session_state.tt_current_proj_id = selected_id
                 if "ws_active_project_id" not in st.session_state: st.rerun()
 

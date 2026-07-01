@@ -4,7 +4,6 @@ from datetime import date
 from sqlalchemy import text, inspect
 from database import init_db, engine, TimetableProject
 
-from constants import get_default_row_settings
 from utils.logger import get_logger  # ロガー有効化(except: pass を撲滅する基盤)
 
 # --- 各画面の読み込み ---
@@ -36,14 +35,7 @@ logger.info("App started")
 # ==========================================
 # ★重要: セッションステートの初期化
 # ==========================================
-if "tt_artists_order" not in st.session_state: st.session_state.tt_artists_order = []
-if "tt_artist_settings" not in st.session_state: st.session_state.tt_artist_settings = {}
-if "tt_row_settings" not in st.session_state: st.session_state.tt_row_settings = []
-if "tt_has_pre_goods" not in st.session_state: st.session_state.tt_has_pre_goods = False
-if "tt_pre_goods_settings" not in st.session_state: st.session_state.tt_pre_goods_settings = get_default_row_settings()
-if "tt_post_goods_settings" not in st.session_state: st.session_state.tt_post_goods_settings = get_default_row_settings()
 if "tt_editor_key" not in st.session_state: st.session_state.tt_editor_key = 0
-if "rebuild_table_flag" not in st.session_state: st.session_state.rebuild_table_flag = True
 if "tt_title" not in st.session_state: st.session_state.tt_title = ""
 if "tt_event_date" not in st.session_state: st.session_state.tt_event_date = date.today()
 if "tt_venue" not in st.session_state: st.session_state.tt_venue = ""
