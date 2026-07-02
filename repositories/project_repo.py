@@ -153,10 +153,9 @@ def apply_draft(
     Draft の内容を ORM オブジェクトに反映する(commit はしない)。
     DB スキーマには手を入れない方針なので、JSON カラムへの書き戻しはここで行う。
 
-    rows を渡すと、過渡期互換のため projects_v4.data_json も同時書き出しする
-    (grid.py / overview.py / flyer_helpers.py のフォールバック経路のため、
-     フェーズ4 で削除予定)。
-    rows=None の場合は data_json には触らない(既存値を保持)。
+    rows 引数は過去の data_json 同時書き出しの名残で、現在は未使用
+    (Phase 4 で data_json 書き出しを撤去。引数は呼び出し側互換のため残置、
+     Phase 6 の整理で削除予定)。
 
     flyer_json は既存 JSON と draft.flyer_settings をマージする
     (init_s 由来の動的キーが消失するのを防ぐ)。
@@ -231,7 +230,7 @@ def update_project_from_draft(
 ) -> bool:
     """
     Draft の内容で既存プロジェクトを更新。
-    rows を渡すと apply_draft が data_json も同時書き出しする(過渡期互換)。
+    rows 引数は過去互換の名残で現在は未使用(Phase 4 で data_json 書き出しを撤去)。
     """
     if draft.id is None:
         logger.error("update_project_from_draft: draft.id is None")
