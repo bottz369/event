@@ -33,6 +33,7 @@ def _to_view(artist: Artist) -> ArtistView:
         id=artist.id,
         name=artist.name or "",
         image_filename=artist.image_filename,
+        is_deleted=bool(artist.is_deleted),
         crop_scale=(artist.crop_scale or 1.0),
         crop_x=(artist.crop_x or 0),
         crop_y=(artist.crop_y or 0),
@@ -47,7 +48,8 @@ def list_artists(db: Session, include_deleted: bool = False) -> List[ArtistView]
 
     既定では is_deleted == False のみ(既存 views/artists.py L113 の挙動を厳守。
     うっかり全件返して論理削除済みを復活表示させる事故を防ぐ)。
-    include_deleted=True のときのみ削除済みも含めて全件返す。
+    include_deleted=True のときのみ削除済みも含めて全件返す。その場合でも
+    各要素は ArtistView.is_deleted で生死を判別できる(create-or-restore 判定用)。
     """
     query = db.query(Artist)
     if not include_deleted:

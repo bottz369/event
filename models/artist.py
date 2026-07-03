@@ -19,6 +19,7 @@ class ArtistView:
     id: int
     name: str
     image_filename: Optional[str]
+    is_deleted: bool
     crop_scale: float
     crop_x: int
     crop_y: int
