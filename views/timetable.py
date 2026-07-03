@@ -360,8 +360,6 @@ def render_timetable_page():
             existing_pre = next((r for r in existing_draft if r.is_pre_goods_row), None)
             final_rows = ([existing_pre] if existing_pre else []) + new_rows
             session_manager.set_draft_rows(final_rows)
-            if final_rows:
-                st.session_state["tt_draft_authoritative"] = True
             # 構造変化 (CSV 全置換) なので editor key を bump して editor を強制 reset。
             _bump_editor_seq()
             st.session_state.tt_unsaved_changes = True
@@ -401,12 +399,7 @@ def render_timetable_page():
         # --- エディタ ---
         # Phase 2B-2-b commit 2 まとまり①②:
         # draft_rows を render 全体で 1 回取得し、左右カラムで共有する。
-        # sentinel `tt_draft_authoritative` は draft_rows が空でないときだけ立てる
-        # (空で立てると sync_session_to_draft 側の safety net が skip され、
-        # 空が真実化してデータ消失に見えるため)。
         draft_rows = session_manager.get_draft_rows()
-        if draft_rows:
-            st.session_state["tt_draft_authoritative"] = True
 
         col_ui_left, col_ui_right = st.columns([1, 2.5])
 

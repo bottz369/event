@@ -58,10 +58,6 @@ SESSION_PROJECT_KEYS = [
     "flyer_result_tt",
     "flyer_layout_meta",
     "tt_editor_key",
-    # Phase 2B-2-b sentinel: TT タブが draft_rows を直接編集している間 True。
-    # (旧: _rebuild_draft_rows_from_legacy のスキップ判定に使用。当該関数は
-    #  2B-2-d で撤去済のため、現在は役割が縮小。将来フェーズで棚卸し候補)
-    "tt_draft_authoritative",
     "tt_title",
     "tt_event_date",
     "tt_venue",
