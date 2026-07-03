@@ -183,9 +183,7 @@ def render_artists_page():
                         
                         # 削除ボタン
                         if st.button("🗑️ このアーティストを削除", type="secondary"):
-                            target_artist.is_deleted = True
-                            target_artist.name = f"{target_artist.name}_del_{int(time.time())}"
-                            db.commit()
+                            artist_service.soft_delete_artist(selected_id)
                             st.success("削除しました")
                             time.sleep(1)
                             st.rerun()
