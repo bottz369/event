@@ -160,10 +160,7 @@ def render_artists_page():
                         with col_slide2:
                             # リセットボタン
                             if st.button("位置リセット", key=f"rst_{selected_id}"):
-                                target_artist.crop_scale = 1.0
-                                target_artist.crop_x = 0
-                                target_artist.crop_y = 0
-                                db.commit()
+                                artist_service.update_artist_crop(selected_id, 1.0, 0, 0)
                                 # セッション削除してリロード
                                 for k in [f"sc_{selected_id}", f"sx_{selected_id}", f"sy_{selected_id}"]:
                                     if k in st.session_state: del st.session_state[k]
@@ -177,10 +174,7 @@ def render_artists_page():
                         if has_changed:
                             st.warning("⚠️ 変更されています")
                             if st.button("位置調整を保存", type="primary", key="save_pos"):
-                                target_artist.crop_scale = new_scale
-                                target_artist.crop_x = new_x
-                                target_artist.crop_y = new_y
-                                db.commit()
+                                artist_service.update_artist_crop(selected_id, new_scale, new_x, new_y)
                                 st.success("保存しました！")
                                 time.sleep(0.5)
                                 st.rerun()
