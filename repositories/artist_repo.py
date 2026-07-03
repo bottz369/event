@@ -107,6 +107,31 @@ def restore_artist(db: Session, artist_id: int, image_filename: Optional[str]) -
     return _to_view(artist)
 
 
+def update_artist(
+    db: Session,
+    artist_id: int,
+    name: str,
+    image_filename: Optional[str] = None,
+) -> Optional[ArtistView]:
+    """基本情報(名前/画像)を更新する(commit はしない)。
+
+    name は常に更新。image_filename は None 以外が渡されたときのみ差し替える
+    (既存 views/artists.py L152-157: 名前は常に更新、画像は新規アップロード時のみ、
+     と等価)。対象が無ければ None。
+    """
+    artist = db.query(Artist).filter(Artist.id == artist_id).first()
+    if artist is None:
+        return None
+    artist.name = name
+    if image_filename is not None:
+        artist.image_filename = image_filename
+    logger.info(
+        f"update_artist: id={artist_id} name={name!r} "
+        f"image_changed={image_filename is not None}"
+    )
+    return _to_view(artist)
+
+
 def update_artist_crop(db: Session, artist_id: int, scale: float, x: int, y: int) -> Optional[ArtistView]:
     """画像位置調整(crop_scale/crop_x/crop_y)を更新する(commit はしない)。
 
