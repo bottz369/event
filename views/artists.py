@@ -147,13 +147,7 @@ def render_artists_page():
                             new_file = st.file_uploader("画像変更", type=ALLOWED_EXTENSIONS, key=f"up_{selected_id}")
                             if st.button("基本情報を更新", type="primary"):
                                 if new_name:
-                                    target_artist.name = new_name
-                                    if new_file:
-                                        ext = os.path.splitext(new_file.name)[1].lower()
-                                        fn = f"{uuid.uuid4()}{ext}"
-                                        upload_image_to_supabase(new_file, fn)
-                                        target_artist.image_filename = fn
-                                    db.commit()
+                                    artist_service.update_artist(selected_id, new_name, new_file)
                                     st.success("更新しました")
                                     time.sleep(0.5)
                                     st.rerun()
