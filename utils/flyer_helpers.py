@@ -129,5 +129,3 @@ def format_time_str(t_val):
     if isinstance(t_val, str): return t_val[:5]
     try: return t_val.strftime("%H:%M")
     except: return str(t_val)
-
-# (削除済み: get_day_of_week_jp, get_circled_number は utils.text_generator からインポートして使用)
