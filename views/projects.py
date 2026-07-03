@@ -4,7 +4,6 @@ from utils import create_event_summary_pdf, create_business_pdf, calculate_timet
 from services import project_service
 from repositories.timetable_repo import load_rows
 from models.timetable import draft_rows_to_df
-import io
 
 def render_projects_page():
     st.title("🗂️ プロジェクト管理")

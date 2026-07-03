@@ -13,7 +13,6 @@ from constants import (
     GOODS_DURATION_OPTIONS, PLACE_OPTIONS, FONT_DIR, get_default_row_settings
 )
 from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_flow, create_business_pdf, create_font_specimen_img, get_sorted_font_list
-from logic_project import load_timetable_rows
 
 # Phase 2B-1b: save_active_project 経由に切替
 # Phase 2B-2-b: session_manager + 純粋変換器を追加 (draft_rows 一本化)

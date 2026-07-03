@@ -1,16 +1,10 @@
 import io
 import os
 import requests
-import json
-import pandas as pd
 from datetime import datetime, date
 from PIL import Image
 from constants import FONT_DIR
 from database import Asset, get_image_url
-
-# ★追加: 共通のテキスト生成ロジックとヘルパーをインポート
-# (get_day_of_week_jp, get_circled_number はここで定義せず共通のものを使います)
-from utils.text_generator import build_event_summary_text, get_day_of_week_jp, get_circled_number
 
 # ==========================================
 # 1. 画像・ファイルロード系ヘルパー

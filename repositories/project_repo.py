@@ -13,8 +13,6 @@ from sqlalchemy.orm import Session
 
 from database import TimetableProject
 from models import (
-    PRE_GOODS_ARTIST_NAME,
-    POST_GOODS_ARTIST_NAME,
     FreeTextDraft,
     ProjectDraft,
     TicketDraft,
