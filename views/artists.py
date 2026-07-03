@@ -5,6 +5,7 @@ import time
 import pandas as pd
 from PIL import Image
 from database import get_db, Artist, TimetableRow, upload_image_to_supabase, get_image_url
+from services import artist_service
 
 # 画像処理ロジックの読み込み
 try:
@@ -86,20 +87,17 @@ def render_artists_page():
                 f = st.file_uploader("画像", type=ALLOWED_EXTENSIONS)
                 if st.form_submit_button("登録"):
                     if n:
-                        fname = None
-                        if f:
-                            ext = os.path.splitext(f.name)[1].lower()
-                            fname = f"{uuid.uuid4()}{ext}"
-                            upload_image_to_supabase(f, fname)
-                        
-                        exists = db.query(Artist).filter(Artist.name==n).first()
-                        if exists:
-                            if exists.is_deleted: exists.is_deleted=False; exists.image_filename=fname; st.success("復元しました")
-                            else: st.error("登録済み")
-                        else:
-                            db.add(Artist(name=n, image_filename=fname))
+                        _view, status = artist_service.create_artist(n, f)
+                        if status == "restored":
+                            st.success("復元しました")
+                        elif status == "exists":
+                            st.error("登録済み")
+                        elif status == "created":
                             st.success("登録しました")
-                        db.commit(); st.rerun()
+                        else:  # error
+                            st.error("登録に失敗しました")
+                        if status != "error":
+                            st.rerun()
                     else: st.error("名前必須")
 
         st.divider()
