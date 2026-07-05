@@ -107,8 +107,8 @@ def render_artists_page():
         # ==========================================
         st.subheader("📝 登録済みアーティストの編集")
         
-        # 全リストを取得 (軽量なクエリ)
-        all_artists = db.query(Artist).filter(Artist.is_deleted == False).order_by(Artist.name).all()
+        # 全リストを取得 (service 経由: ArtistView 一覧を名前昇順で返す)
+        all_artists = artist_service.list_artists()
         
         if not all_artists:
             st.info("登録されているアーティストはいません。")
