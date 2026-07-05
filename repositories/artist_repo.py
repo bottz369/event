@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from database import Artist
+from database import Artist, TimetableRow
 from models.artist import ArtistView
 from utils.logger import get_logger
 
@@ -165,12 +165,20 @@ def soft_delete_artist(db: Session, artist_id: int) -> bool:
 def reassign_timetable_rows(db: Session, old_name: str, new_name: str) -> int:
     """アーティスト統合(merge)時に TimetableRow.artist_name を付け替える。
 
-    付け替えた行数を返す。
+    old_name(loser の現名)に一致する TimetableRow を走査し、artist_name を
+    new_name(winner の現名)へ書き換える。付け替えた行数を返す。commit はしない
+    (境界は service)。
 
-    TODO(Phase 5-⑤ merge で実装): 現状はスタブ。
-    既存 views/artists.py L247-250 の
-    `db.query(TimetableRow).filter(artist_name == old).all()` → 付け替え相当を
-    ここへ移す。文字列一致付け替えの意味論(同名衝突・別プロジェクト巻き込み)を
-    ⑤で確認したうえで実装する。今回は何もしない。
+    意味論は既存 views/artists.py L233-237 と bit 一致で踏襲する:
+      - 完全一致(`artist_name == old_name`。like/部分一致・前後空白の正規化はしない)
+      - project_id で絞らない = 全プロジェクト横断
+      - 更新するのは artist_name 列のみ
+    ※ ⑤-a のスコープは TimetableRow のみ。grid_order_json / data_json に残る
+      旧名の付け替えは対象外(⑤-b で別途対応)。
     """
-    return 0
+    rows = db.query(TimetableRow).filter(TimetableRow.artist_name == old_name).all()
+    count = len(rows)
+    for r in rows:
+        r.artist_name = new_name
+    logger.info(f"reassign_timetable_rows: {old_name!r} -> {new_name!r} rows={count}")
+    return count
