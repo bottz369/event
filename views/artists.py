@@ -4,7 +4,7 @@ import os
 import time
 import pandas as pd
 from PIL import Image
-from database import get_db, Artist, TimetableRow, upload_image_to_supabase, get_image_url
+from database import get_db, get_image_url
 from services import artist_service
 
 # 画像処理ロジックの読み込み
