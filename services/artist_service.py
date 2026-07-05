@@ -157,3 +157,47 @@ def soft_delete_artist(artist_id: int) -> bool:
         return False
     finally:
         db.close()
+
+
+def merge_artists(winner_id: int, loser_id: int) -> Tuple[int, str]:
+    """アーティスト統合(名寄せ)。既存 views/artists.py L227-249 の orchestration を
+    bit 一致で service に移す。1 トランザクションで以下を合成する:
+
+      1. winner / loser を取得。どちらか無ければ (0, "not_found")
+      2. count = TimetableRow.artist_name を loser 現名 → winner 現名 に付け替え
+         ※ rename 前の loser 名で付け替える(順序厳守)
+      3. loser を `{loser名}_merged_{int(time.time())}` にリネーム
+         (image_filename は None 渡しで不変)
+      4. loser を is_deleted=True(論理削除)
+      5. commit → (count, "merged")。例外時 rollback → (0, "error")(詳細は log)
+
+    ※ _merged_ リネームは delete の _del_ とは別物のため、service.soft_delete_artist
+      (改名 _del_ 込み)は使わず、repo 単機能(reassign / update_artist / soft_delete_artist)
+      を組み合わせて merge 専用の合成を作る。
+    ※ ⑤-a のスコープは TimetableRow のみ。grid_order_json / data_json に残る旧名は
+      対象外(⑤-b で別途)。
+
+    戻り値: (count, status)。status ∈ {"merged", "not_found", "error"}。
+    """
+    db = SessionLocal()
+    try:
+        winner = artist_repo.get_artist(db, winner_id)
+        loser = artist_repo.get_artist(db, loser_id)
+        if winner is None or loser is None:
+            db.rollback()
+            return (0, "not_found")
+        # 1. TimetableRow の付け替え(rename 前の loser 名で。順序厳守)
+        count = artist_repo.reassign_timetable_rows(db, loser.name, winner.name)
+        # 2. loser をリネーム(衝突回避。image は None 渡しで不変)
+        merged_name = f"{loser.name}_merged_{int(time.time())}"
+        artist_repo.update_artist(db, loser_id, merged_name)
+        # 3. loser を論理削除
+        artist_repo.soft_delete_artist(db, loser_id)
+        db.commit()
+        return (count, "merged")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"merge_artists failed: {e}", exc_info=True)
+        return (0, "error")
+    finally:
+        db.close()
