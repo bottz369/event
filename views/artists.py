@@ -224,31 +224,17 @@ def render_artists_page():
                 if winner_id == loser_id:
                     st.error("同じアーティスト同士は統合できません。")
                 else:
-                    winner_obj = db.query(Artist).get(winner_id)
-                    loser_obj = db.query(Artist).get(loser_id)
-                    
-                    if winner_obj and loser_obj:
-                        try:
-                            # 1. TimetableRowテーブルの名前を書き換え
-                            rows_to_update = db.query(TimetableRow).filter(TimetableRow.artist_name == loser_obj.name).all()
-                            count = len(rows_to_update)
-                            
-                            for r in rows_to_update:
-                                r.artist_name = winner_obj.name
-                            
-                            # 2. 敗者を削除 (名前も変更して衝突回避)
-                            loser_obj.is_deleted = True
-                            loser_obj.name = f"{loser_obj.name}_merged_{int(time.time())}"
-                            
-                            db.commit()
-                            st.toast(f"統合完了！ 過去データの {count} 箇所を修正しました。", icon="✅")
-                            time.sleep(1)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"統合エラー: {e}")
-                            db.rollback()
-                    else:
+                    # Phase 5-⑤a: ORM 直叩き → service へ移譲(bit-parity)。
+                    # commit/rollback・付け替え順序は service が所有。
+                    count, status = artist_service.merge_artists(winner_id, loser_id)
+                    if status == "merged":
+                        st.toast(f"統合完了！ 過去データの {count} 箇所を修正しました。", icon="✅")
+                        time.sleep(1)
+                        st.rerun()
+                    elif status == "not_found":
                         st.error("データが見つかりません。")
+                    else:  # error
+                        st.error("統合エラー: 処理に失敗しました")
 
     finally:
         db.close()
