@@ -90,14 +90,16 @@ def render_artists_page():
                         _view, status = artist_service.create_artist(n, f)
                         if status == "restored":
                             st.success("復元しました")
+                            time.sleep(1)
+                            st.rerun()
                         elif status == "exists":
                             st.error("登録済み")
                         elif status == "created":
                             st.success("登録しました")
+                            time.sleep(1)
+                            st.rerun()
                         else:  # error
                             st.error("登録に失敗しました")
-                        if status != "error":
-                            st.rerun()
                     else: st.error("名前必須")
 
         st.divider()
