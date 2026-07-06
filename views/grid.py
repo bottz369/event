@@ -5,9 +5,9 @@ import io
 import requests # URLダウンロード用
 
 # Asset, AssetFile, get_image_url をインポート
-from database import get_db, TimetableProject, TimetableRow, Artist, IMAGE_DIR, Asset, AssetFile, get_image_url
+from database import get_db, TimetableProject, TimetableRow, IMAGE_DIR, Asset, AssetFile, get_image_url
 from constants import FONT_DIR
-from services import project_service
+from services import project_service, artist_service
 from utils import create_font_specimen_img, get_sorted_font_list
 
 try:
@@ -326,10 +326,7 @@ def render_grid_page():
             # 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", width='stretch', key="btn_grid_generate"):
                 if generate_grid_image:
-                    target_artists = []
-                    for n in st.session_state.grid_order:
-                        a = db.query(Artist).filter(Artist.name == n).first()
-                        if a: target_artists.append(a)
+                    target_artists = artist_service.get_artists_by_names(st.session_state.grid_order)
                     
                     if not target_artists:
                         st.warning("表示するアーティストデータがありません。")
