@@ -208,3 +208,5 @@ __marimo__/
 
 # Streamlit secrets (絶対にコミットしない)
 .streamlit/secrets.toml
+# テスト用 read-only secrets(谷内さんが手動配置・実値はコミットしない)
+.streamlit/secrets.readonly.toml

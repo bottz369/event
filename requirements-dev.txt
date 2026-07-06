@@ -1,0 +1,5 @@
+# 開発・テスト専用の依存(本番 requirements.txt には含めない)。
+# 導入: python3 -m pip install -r requirements-dev.txt
+pytest>=8,<9
+# Python 3.11 未満は標準 tomllib が無いため tomli を使う(secrets.readonly.toml のパース用)
+tomli>=2 ; python_version < "3.11"
