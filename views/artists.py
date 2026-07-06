@@ -226,9 +226,9 @@ def render_artists_page():
                 else:
                     # Phase 5-⑤a: ORM 直叩き → service へ移譲(bit-parity)。
                     # commit/rollback・付け替え順序は service が所有。
-                    count, status = artist_service.merge_artists(winner_id, loser_id)
+                    rows_count, grid_count, status = artist_service.merge_artists(winner_id, loser_id)
                     if status == "merged":
-                        st.toast(f"統合完了！ 過去データの {count} 箇所を修正しました。", icon="✅")
+                        st.toast(f"統合完了！ TT {rows_count} 箇所 / グリッド並び順 {grid_count} プロジェクトを修正しました。", icon="✅")
                         time.sleep(1)
                         st.rerun()
                     elif status == "not_found":

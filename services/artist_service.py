@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple
 
 from database import SessionLocal, upload_image_to_supabase
 from models.artist import ArtistView
-from repositories import artist_repo
+from repositories import artist_repo, project_repo
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -159,25 +159,28 @@ def soft_delete_artist(artist_id: int) -> bool:
         db.close()
 
 
-def merge_artists(winner_id: int, loser_id: int) -> Tuple[int, str]:
-    """アーティスト統合(名寄せ)。既存 views/artists.py L227-249 の orchestration を
-    bit 一致で service に移す。1 トランザクションで以下を合成する:
+def merge_artists(winner_id: int, loser_id: int) -> Tuple[int, int, str]:
+    """アーティスト統合(名寄せ)。1 トランザクションで以下を合成する:
 
-      1. winner / loser を取得。どちらか無ければ (0, "not_found")
-      2. count = TimetableRow.artist_name を loser 現名 → winner 現名 に付け替え
+      1. winner / loser を取得。どちらか無ければ (0, 0, "not_found")
+      2. rows_count = TimetableRow.artist_name を loser 現名 → winner 現名 に付け替え
          ※ rename 前の loser 名で付け替える(順序厳守)
-      3. loser を `{loser名}_merged_{int(time.time())}` にリネーム
+      3. grid_count = 全プロジェクトの grid_order_json 内 order の loser 名を winner 名へ名寄せ
+         (⑤-b で追加。TimetableRow と同じく rename 前の loser 名で。順序: TT → grid → rename)
+      4. loser を `{loser名}_merged_{int(time.time())}` にリネーム
          (image_filename は None 渡しで不変)
-      4. loser を is_deleted=True(論理削除)
-      5. commit → (count, "merged")。例外時 rollback → (0, "error")(詳細は log)
+      5. loser を is_deleted=True(論理削除)
+      6. commit → (rows_count, grid_count, "merged")。例外時 rollback → (0, 0, "error")(詳細は log)
 
     ※ _merged_ リネームは delete の _del_ とは別物のため、service.soft_delete_artist
       (改名 _del_ 込み)は使わず、repo 単機能(reassign / update_artist / soft_delete_artist)
       を組み合わせて merge 専用の合成を作る。
-    ※ ⑤-a のスコープは TimetableRow のみ。grid_order_json / data_json に残る旧名は
-      対象外(⑤-b で別途)。
+    ※ 対応済みの名前保持箇所: timetable_rows.artist_name(⑤-a)/ grid_order_json.order(⑤-b)。
+      未対応(既知の制限): 旧 data_json の ARTIST(書き手ゼロ不変条件を守るため触らない。
+      未移行プロジェクトは一度保存すれば timetable_rows に移行し解消)/ loser の Storage 画像
+      (孤児化は現行仕様。削除は破壊的操作のため非対応)。詳細は開発知見ドキュメント §19 罠26。
 
-    戻り値: (count, status)。status ∈ {"merged", "not_found", "error"}。
+    戻り値: (rows_count, grid_count, status)。status ∈ {"merged", "not_found", "error"}。
     """
     db = SessionLocal()
     try:
@@ -185,19 +188,21 @@ def merge_artists(winner_id: int, loser_id: int) -> Tuple[int, str]:
         loser = artist_repo.get_artist(db, loser_id)
         if winner is None or loser is None:
             db.rollback()
-            return (0, "not_found")
+            return (0, 0, "not_found")
         # 1. TimetableRow の付け替え(rename 前の loser 名で。順序厳守)
-        count = artist_repo.reassign_timetable_rows(db, loser.name, winner.name)
-        # 2. loser をリネーム(衝突回避。image は None 渡しで不変)
+        rows_count = artist_repo.reassign_timetable_rows(db, loser.name, winner.name)
+        # 2. grid_order_json の名寄せ(同一トランザクション・rename 前の loser 名で)
+        grid_count = project_repo.reassign_grid_orders(db, loser.name, winner.name)
+        # 3. loser をリネーム(衝突回避。image は None 渡しで不変)
         merged_name = f"{loser.name}_merged_{int(time.time())}"
         artist_repo.update_artist(db, loser_id, merged_name)
-        # 3. loser を論理削除
+        # 4. loser を論理削除
         artist_repo.soft_delete_artist(db, loser_id)
         db.commit()
-        return (count, "merged")
+        return (rows_count, grid_count, "merged")
     except Exception as e:
         db.rollback()
         logger.error(f"merge_artists failed: {e}", exc_info=True)
-        return (0, "error")
+        return (0, 0, "error")
     finally:
         db.close()
