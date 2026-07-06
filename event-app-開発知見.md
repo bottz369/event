@@ -596,6 +596,38 @@ scratch の python スクリプトで機械実行した(罠27:インデント変
 - ⑤-b E3 では、ガード無し版を一度実行して AST 比較が不一致を**実際に検出**することを確認して
   から(検証が no-op でない証明)、ガードを追加し MATCH を得た。
 
+## 22. ホットフィックス: グリッド「各行の枚数設定」が他プロジェクト値で汚染される(2026-07-06)
+
+✅ 罠3(プロジェクト切替で古い widget 内部状態が残る)の実例。止血のみ実施
+(branch: fix/grid-row-counts-residue、コミット `7379418`)。根治は grid ビュー移行時。
+
+**症状**: グリッドの「各行の枚数設定(カンマ区切り)」で保存した値(例 `5,5,5,6,6`)が、
+後日プロジェクトを開くと `5,5,5,5,5` のように全行同数へ化ける。再現は「時々」で ⑤ 以前から。
+
+**原因(調査で確定)**:
+- `views/grid.py:223-229` の text_input は `key="grid_row_counts_input_widget"`(固定 key)と
+  `value=st.session_state.grid_row_counts_str` を併用(罠18 構造)。Streamlit は key が
+  session_state に既存なら `value=` を無視し key の値を採用する。
+- この widget key は `SESSION_PROJECT_KEYS` にも `clear_project_session()` の dynamic_prefixes
+  にも該当せず、**プロジェクト切替で消えずに残留**。前プロジェクトの枚数設定が入力欄に居座る。
+- reload(`legacy_adapter.py:79` が `grid_order_json.row_counts_str` から正しい値を復元)しても、
+  `grid.py:229` が `grid_row_counts_str = row_counts_input`(= 残留 widget 値)で**上書き**。
+- 保存(`sync_session_to_draft` が `grid_row_counts_str` を拾う)で grid_order_json に**焼き付き恒久破壊**。
+- 直前に既定 `5,5,5,5,5` のプロジェクトを見ていると、次に開いた `5,5,5,6,6` の欄が
+  `5,5,5,5,5` を表示 → 保存で `6,6` が消える。「時々」= 直前に何を開いたかに依存。
+
+**止血(F1)**: `grid_row_counts_input_widget` を `SESSION_PROJECT_KEYS` に追加し、切替時に消す。
+以後 reload 後は text_input が `value=` の正しい値を採用する。
+
+**申し送り(grid ビュー移行時の根治)**:
+- widget key の SSOT 一本化(罠18 パターン): `value=` + 外部 session_state 書き込みの併用を廃し、
+  真の SSOT 1 本にする。固定 key は project_id 込みにするか draft 直結にする。
+- `grid.py:145` の settings_json 旧読み経路の撤去(保存キー `row_counts_str` と読みキー
+  `row_counts` の不一致を内包。新形式では `if grid_conf:` で skip されるが旧データで発火しうる)。
+- `grid.py:212-221` の「空文字/パース不能 → `[5]*new_rows` = 全行 5」pad の防御見直し。
+- **既に壊れたデータは自動修復不可**(正しい元値が DB に残っていない)。気づいたときに
+  手入力で再保存して回復する運用。
+
 ---
 
 ## フェーズ計画 現在地(2026-07-06 時点)
