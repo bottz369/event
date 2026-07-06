@@ -282,3 +282,85 @@ def delete_project(db: Session, project_id: int) -> bool:
     db.commit()
     logger.info(f"Deleted project id={project_id}")
     return True
+
+
+# ---------------------------------------------------------
+# アーティスト統合(merge)時の grid_order_json 名寄せ
+# ---------------------------------------------------------
+def _reassign_grid_json(raw, old_name: str, new_name: str):
+    """1 プロジェクト分の grid_order_json(生文字列 or None)の order 内の old_name を
+    処理し、変更後の JSON 文字列を返す。変更不要なら None を返す(純ロジック・DB 非依存)。
+
+    - order に new_name(winner)が既在 → old_name を削除(重複回避)
+    - 不在 → old_name をその位置で new_name に置換(並び順維持)
+
+    形状保持: grid_order_json は dict({"order":[...], 他キー...})形式と旧来の
+    裸 list([...])形式の両方がありうる。読み込んだ形状のまま書き戻す
+    (dict は order 以外のキーを温存 / 裸 list は裸 list のまま)。
+    照合は完全一致(==)。reassign_timetable_rows と同一の意味論(前後空白の正規化はしない)。
+
+    壊れた JSON は json.loads が json.JSONDecodeError を送出する(呼び出し側で握る)。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        if raw.strip() == "":
+            return None
+        data = json.loads(raw)  # JSONDecodeError は呼び出し側で握る
+    else:
+        data = raw
+
+    if isinstance(data, dict):
+        order = data.get("order")
+        is_bare_list = False
+    elif isinstance(data, list):
+        order = data
+        is_bare_list = True
+    else:
+        return None
+
+    if not isinstance(order, list) or old_name not in order:
+        return None
+
+    if new_name in order:
+        new_order = [n for n in order if n != old_name]  # loser を除去して重複回避
+    else:
+        new_order = [new_name if n == old_name else n for n in order]  # 位置維持で置換
+
+    if new_order == order:
+        return None  # 実質変化なし
+
+    if is_bare_list:
+        return json.dumps(new_order, ensure_ascii=False)
+    data["order"] = new_order  # 他キーは温存
+    return json.dumps(data, ensure_ascii=False)
+
+
+def reassign_grid_orders(db: Session, old_name: str, new_name: str) -> int:
+    """アーティスト統合(merge)時に、全プロジェクトの grid_order_json 内 order リストの
+    old_name(loser 現名)を new_name(winner 現名)へ名寄せする。変更したプロジェクト数を返す。
+
+    commit はしない(境界は service)。※ このモジュールは apply_draft に次ぐ
+    grid_order_json への「2 人目の書き手」。dict 形式の order 以外のキーは温存する。
+
+    null / 空文字 / 壊れた JSON のプロジェクトはスキップして logger.warning(project_id を記録)。
+    実際の付け替えロジックは純関数 _reassign_grid_json に委譲(scratch で単体検証可能)。
+    """
+    changed = 0
+    for proj in db.query(TimetableProject).all():
+        try:
+            updated = _reassign_grid_json(proj.grid_order_json, old_name, new_name)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"reassign_grid_orders: skip project_id={proj.id} "
+                f"(grid_order_json parse failed: {e})"
+            )
+            continue
+        if updated is None:
+            continue
+        proj.grid_order_json = updated
+        changed += 1
+        logger.info(
+            f"reassign_grid_orders: project_id={proj.id} {old_name!r} -> {new_name!r}"
+        )
+    return changed
