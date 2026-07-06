@@ -77,6 +77,40 @@ def get_artist_by_name(db: Session, name: str) -> Optional[ArtistView]:
     return _to_view(artist) if artist else None
 
 
+def get_artists_by_names(db: Session, names) -> List[ArtistView]:
+    """名前のリストに対応する ArtistView を、入力順・重複保持で返す(1 クエリ)。
+
+    既存 views/grid.py L330-332 の N+1
+    (`for n in names: db.query(Artist).filter(name==n).first(); if a: append`)を
+    1 クエリに置き換える。bit-parity の意味論:
+      - 順序保持: 入力 names の順に並べる。
+      - 重複保持: 同じ name が入力に 2 回あれば結果にも 2 回入る。
+      - 見つからない name は skip(旧 `if a:` と同値)。
+      - is_deleted フィルタは付けない(旧クエリと同じ。削除/merge 済みは name が
+        _del_/_merged_ に改名済みのため素の name には一致せず、実質 active のみ拾う)。
+
+    同名 active が複数存在した場合のタイブレークは order_by(Artist.id) で PK 昇順の
+    先頭 1 件を採用(旧 `.first()` は order_by 無しで DB 依存だった。正常系=同名 1 件では
+    出力不変。複数時のみ決定論的になる「旧より厳密」な意図的差分)。
+
+    db を受け取るだけ・commit しない(repo 規律)。
+    """
+    unique_names = list(dict.fromkeys(names))  # 順序保持で重複除去(IN 用)
+    if not unique_names:
+        return []
+    artists = (
+        db.query(Artist)
+        .filter(Artist.name.in_(unique_names))
+        .order_by(Artist.id)
+        .all()
+    )
+    by_name = {}
+    for a in artists:
+        if a.name not in by_name:  # id 昇順の最初の 1 件を採用(旧 .first() 相当)
+            by_name[a.name] = _to_view(a)
+    return [by_name[n] for n in names if n in by_name]
+
+
 # ---------------------------------------------------------
 # 書き込み系(commit は呼び出し側 service が行う)
 # ---------------------------------------------------------

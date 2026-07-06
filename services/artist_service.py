@@ -49,6 +49,15 @@ def list_artists(include_deleted: bool = False) -> List[ArtistView]:
         db.close()
 
 
+def get_artists_by_names(names) -> List[ArtistView]:
+    """名前リストに対応する ArtistView を入力順・重複保持で返す。"""
+    db = SessionLocal()
+    try:
+        return artist_repo.get_artists_by_names(db, names)
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------
 # 書き込み(commit/rollback は service が握る)
 # ---------------------------------------------------------
