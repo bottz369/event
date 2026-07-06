@@ -628,6 +628,53 @@ scratch の python スクリプトで機械実行した(罠27:インデント変
 - **既に壊れたデータは自動修復不可**(正しい元値が DB に残っていない)。気づいたときに
   手入力で再保存して回復する運用。
 
+## 23. テスト自動化基盤(AppTest スモークテスト)(2026-07-06)
+
+✅ ヘッドレスの自動スモークテスト基盤を導入(branch: feat/apptest-smoke、
+コミット `db94f84`、**本番コード変更なし**)。read-only DB 接続で本番データを保護。
+
+### 23.1 概要
+- `streamlit.testing.v1.AppTest` によるヘッドレステスト。`tests/` に配置。
+- スモーク2本:
+  - `test_smoke_all_tabs`: 既存プロジェクトを1件選択し、workspace の全4タブ
+    (概要/TT/グリッド/フライヤー)が例外ゼロで描画される(`at.exception` が空)。
+  - `test_no_value_bleed_on_switch`: row_counts の異なる既存プロジェクト2件を
+    交互選択し、grid の枚数設定が混入しない(ホットフィックス `7379418` / §22 の回帰テスト)。
+
+### 23.2 安全設計(read-only 方式)
+- 本番 Supabase に**読み取り専用ユーザー `event_app_readonly`** を新設(SELECT のみ GRANT。
+  谷内さんが SQL Editor で作成)。
+- テスト用 secrets は `.streamlit/secrets.readonly.toml`(**gitignore 済**・谷内さん手動配置)。
+  雛形は同名 `.example`(ダミー値・コミット済)。DB_URL のユーザーを event_app_readonly にする。
+- **★安全弁**: `tests/conftest.py` の fixture が `SELECT current_user` を実行し、
+  `event_app_readonly` 以外なら `pytest.exit` で**全テスト即中断**。誤って書き込み可能
+  ユーザーで走らせない物理ガード。psycopg2 未導入時に接続不可→即中断する fail-safe も実地確認済み。
+- テスト操作は SELECT のみ(選択・描画)。保存・新規作成・削除は行わない
+  (read-only ユーザーで物理的にも不可)。
+
+### 23.3 技術上の注意(将来の保守者向け)
+- **この Streamlit(1.50.0)の AppTest には secrets 注入口(`at.secrets`)が無い**。代替として
+  `streamlit.runtime.secrets.secrets_singleton._secrets` へ read-only 値を**直接注入**する方式を採用
+  (`config.get_option("secrets.files")` 経路をバイパスし、本番 `secrets.toml` を一切参照させない)。
+  **★内部 API 依存**: Streamlit バージョン更新時は要再確認(将来 `at.secrets` が入れば正攻法へ移行)。
+- **engine は import 時に1回生成**されるため、同一プロセスで複数 DB_URL の切り替えは不可。
+  read-only 単一 URL なら問題なし。将来 write テストを足すなら別プロセス化か engine の DI 化が必要。
+- **`st.tabs` の中身は AppTest で全てツリーに載る**ため、タブ切替操作なしで全タブの widget を
+  検査できる(罠16 の eager 評価がテストでは好都合)。
+
+### 23.4 実行手順(`tests/README.md` 参照)
+```
+python3 -m pip install -r requirements-dev.txt
+python3 -m pytest tests/test_smoke_apptest.py -v --disable-warnings
+```
+前提: `.streamlit/secrets.readonly.toml` の配置(gitignore 済のため clone しても付いてこない)。
+DB ドライバ `psycopg2-binary` が必要(本番 requirements.txt にも記載)。
+
+### 23.5 限界と展望
+- read-only のため**保存フロー(write 経路)は自動テスト不可** → 手動テストを継続。
+- grid / flyer ビュー移行時の回帰検知の土台(特に §22 の grid 根治時に有効)。
+- CI(GitHub Actions)化は将来オプション(read-only secrets の注入設計が必要)。
+
 ---
 
 ## フェーズ計画 現在地(2026-07-06 時点)
@@ -636,4 +683,5 @@ scratch の python スクリプトで機械実行した(罠27:インデント変
   残り = **grid ビュー**、**flyer ビュー**。
 - ⑤-b で対応しなかった項目(既知の制限・§21): data_json 旧名 / loser 画像孤児化 /
   過去 merge の grid_order_json 残留の一括修復。いずれも慎重案件として保留。
+- **テスト基盤**: AppTest スモーク導入済み(§23)。grid/flyer 移行時の回帰土台。
 - 各着手時は main から新ブランチを切る。
