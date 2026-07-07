@@ -677,6 +677,56 @@ DB ドライバ `psycopg2-binary` が必要(本番 requirements.txt にも記載
 
 ---
 
+## 24. Phase 5 grid スライスA: N+1 撤去(バッチ read 窓口の新設)(2026-07-07)
+
+✅ grid 生成の N+1(名前ごとに `db.query(Artist)`)を1クエリのバッチ read に解消。
+本番反映済み(origin/main = `bd50055`、実機テスト合格)。branch: refactor/phase-5-grid-n1。
+
+**背景**: Phase 5 grid ビュー移行の第一スライス。全体 Phase 0 調査で
+grid.py は write ゼロ・read した Artist ORM の下流は画像生成(logic_grid)のみと確定
+(B' 再シーケンス不要=artists の merge と違い read ORM→write の結合が無い)。この N+1 を
+artist_repo/service にバッチ read 窓口を新設し ArtistView のリストで返すことで解消した。
+ArtistView 返却で logic_grid が(生き経路で)ORM 非依存になり、将来の API 化
+(services を画面非依存に戻す件、§11.3)の布石も兼ねる。
+
+**コミット構成(2段)**:
+- **`714c091`**: `artist_repo.get_artists_by_names(db, names) -> list[ArtistView]` +
+  `artist_service.get_artists_by_names(names)` を新設(この時点では誰も呼ばない=inert)。
+  1クエリ `filter(Artist.name.in_(unique_names)).order_by(Artist.id).all()`、
+  `{name: ArtistView}` マップを「未登録 name のみ格納」で構築(id 昇順の先頭採用)、
+  入力 names を順走査して `[by_name[n] for n in names if n in by_name]` で返す。
+  repo は commit しない・db 受け取るだけ、service は SessionLocal open→try→finally close。
+- **`bd50055`**: grid.py の N+1 ループ(旧 L329-332:`target_artists=[]` + `for n: first(); if a: append`)を
+  `target_artists = artist_service.get_artists_by_names(st.session_state.grid_order)` 1行に置換。
+  `Artist` import 撤去(grid.py 内の唯一の参照が消えたため)、`artist_service` import 追加。
+
+**bit-parity の意味論(Phase 0 で確定)**:
+- 順序保持・重複保持・見つからない name は skip(旧 `if a:` と同値)。
+- is_deleted フィルタは付けない。削除/merge 済みは name が `_del_`/`_merged_` に改名済み(罠26/§19/§21)
+  のため素の name には一致せず、実質 active のみ拾う=旧クエリの非フィルタ挙動を踏襲。
+- タイブレーク: 旧 `.first()` は order_by 無し(DB依存)。新窓口は `order_by(Artist.id)` で
+  PK 昇順の先頭1件を明示採用。正常系(同名 active 1件。create-or-restore ガードで担保)は出力不変、
+  複数時のみ決定論的になる「旧より厳密」な意図的差分。
+- crop_*: `_to_view` が `(x or default)` で写し、logic_grid の `(getattr or default)` と二重でも
+  冪等・同値(touched 6属性 {id,name,image_filename,crop_scale,crop_x,crop_y} ⊆ ArtistView)。
+
+**検証**: repo/service py_compile COMPILE_OK。純ロジック5ケース(全ヒット/一部missing/入力重複/
+同名active2件/空入力)を旧ループ相当と name 列で一致 assert(scratch、DB非書き込み・§12.4 方式)。
+grid.py の `db.query(Artist)` / `Artist` 参照ともに grep 0件。logic_grid.py・
+`generate_grid_image_buffer`(dead code)は無変更。実機テスト(既存グリッド生成が
+見た目完全一致=crop 込み / 存在しない名前で枠抜け・クラッシュなし / 2件切替で混ざらない)合格。
+
+**申し送り(grid 残スライス)**:
+- **row_counts SSOT 根治(§22)**: 5015c17 は止血のみ。罠18 の value=/外部書き込み併用の廃止、
+  settings_json 旧読み L145(キー row_counts vs row_counts_str 不一致)の撤去、
+  pad(空文字→全行5)の防御見直し。grid 残スライスで実データ破壊リスクを持つのはここだけ。
+- **project/rows read の service 化**(grid.py L72/103/110/165)、**フォント read の service 化**
+  (L35/49・他ビュー共用の可能性あり要影響範囲確認)。この2つを潰すと grid の db.query 全滅が完成。
+- `generate_grid_image_buffer`(grid.py・呼び出し実体ゼロの dead code)は今回ノータッチ。
+  将来復活時は ArtistView 前提になる。
+
+---
+
 ## 25. Phase 5 grid: row_counts SSOT 根治(§22 の恒久修正)(2026-07-07)
 
 ✅ grid の「各行の枚数設定」がプロジェクト切替後に他プロジェクト値/default で汚染され、
