@@ -187,32 +187,24 @@ def render_grid_page():
                 st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset", on_click=reset_grid_settings)
 
             # --- 行ごとの枚数設定 ---
-            current_counts = []
-            try:
-                current_counts = [int(x.strip()) for x in st.session_state.grid_row_counts_str.split(",") if x.strip()]
-            except:
-                current_counts = [5] * new_rows
-
-            if len(current_counts) < new_rows:
-                current_counts += [5] * (new_rows - len(current_counts))
-            elif len(current_counts) > new_rows:
-                current_counts = current_counts[:new_rows]
-            
-            st.session_state.grid_row_counts_str = ",".join(map(str, current_counts))
-
-            row_counts_input = st.text_input(
-                "各行の枚数設定 (カンマ区切り)", 
-                value=st.session_state.grid_row_counts_str,
+            # widget を SSOT (grid_row_counts_str) に直バインド。value=/手動書き戻しは付けない。
+            st.text_input(
+                "各行の枚数設定 (カンマ区切り)",
                 help="例: 3,4,6 と入力すると、1行目3枚、2行目4枚、3行目6枚になります。",
-                key="grid_row_counts_input_widget"
+                key="grid_row_counts_str"
             )
-            st.session_state.grid_row_counts_str = row_counts_input
-            
+
+            # 生成に渡す値は行数(new_rows)に合わせてローカル整形する（SSOT には焼き戻さない）。
             try:
                 parsed_counts = [int(x.strip()) for x in st.session_state.grid_row_counts_str.split(",") if x.strip()]
             except:
                 st.error("数値とカンマで入力してください")
                 parsed_counts = [5] * new_rows
+
+            if len(parsed_counts) < new_rows:
+                parsed_counts += [5] * (new_rows - len(parsed_counts))
+            elif len(parsed_counts) > new_rows:
+                parsed_counts = parsed_counts[:new_rows]
 
             # --- レイアウト詳細設定 ---
             with st.expander("📐 レイアウト調整 (揃え・モード)", expanded=True):

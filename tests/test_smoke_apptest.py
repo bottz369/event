@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 SELECTOR_KEY = "ws_project_selector_label"
-ROW_COUNTS_WIDGET_KEY = "grid_row_counts_input_widget"
+ROW_COUNTS_WIDGET_KEY = "grid_row_counts_str"
 
 
 def _select_project(at, label):
@@ -45,9 +45,9 @@ def test_smoke_all_tabs(app_test, two_projects_different_row_counts):
 def test_no_value_bleed_on_switch(app_test, two_projects_different_row_counts):
     """プロジェクト切替時に grid の row_counts が他プロジェクトの値で汚染されない。
 
-    回帰対象: 固定 key の text_input(grid_row_counts_input_widget)が切替時に
-    clear されず前プロジェクトの値が残留するバグ(commit 7379418 で修正)。
-    残留していると B 選択時に A の値が表示され v_a == v_b になる。
+    回帰対象: text_input を SSOT (grid_row_counts_str) に直バインドし、切替時は
+    復元経路が各プロジェクトの値を反映する構造(commit2 で Trap 18 を根絶)。
+    汚染していると B 選択時に A の値が表示され v_a == v_b になる。
     """
     (_pid_a, label_a, _rc_a), (_pid_b, label_b, _rc_b) = two_projects_different_row_counts
 

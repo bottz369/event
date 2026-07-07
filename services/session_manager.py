@@ -78,9 +78,6 @@ SESSION_PROJECT_KEYS = [
     "grid_cols",
     "grid_rows",
     "grid_row_counts_str",
-    # 固定 key の text_input widget 残留値。切替時に消さないと前プロジェクトの
-    # 枚数設定が居座り、grid.py L229 が正しい値を上書きして保存で恒久破壊する(罠3)。
-    "grid_row_counts_input_widget",
     "grid_alignment",
     "grid_layout_mode",
     "grid_font",
