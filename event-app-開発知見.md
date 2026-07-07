@@ -677,6 +677,76 @@ DB ドライバ `psycopg2-binary` が必要(本番 requirements.txt にも記載
 
 ---
 
+## 25. Phase 5 grid: row_counts SSOT 根治(§22 の恒久修正)(2026-07-07)
+
+✅ grid の「各行の枚数設定」がプロジェクト切替後に他プロジェクト値/default で汚染され、
+保存で grid_order_json に恒久破壊される問題(§22・罠3/罠18)を根治。本番反映済み
+(origin/main = `ebbd39d`、実機テスト全項目合格)。branch: refactor/phase-5-grid-rowcounts-ssot。
+5015c17(§22)は止血のみだったが、本作業で汚染源を2つとも撤去し構造的に根絶した。
+
+**Phase 0 で確定した汚染機序(3ステップ)**:
+① overview で project 選択 → `load_project_data`(logic_project:161)が正しい row_counts を復元。
+② grid タブ遷移 → `grid_settings_loaded` 未設定 → grid.py の settings_json 旧読みブロックが
+   **間違ったカラム(settings_json)/間違ったキー(row_counts)** で正しい値を default "5,5,5,5,5" に上書き。
+③ pad(session書き戻し)→ widget 手動書き戻し(罠18)→ 保存で grid_order_json に焼き付き恒久破壊。
+   `grid_settings_loaded` は切替時に clear されるため、②は proj 切替のたびに再発火(§22 の残留性の正体)。
+
+**復元経路のキー整合性(Phase 0 調査結果)**:
+- ✅ `load_project_data`(logic_project:161)← grid_order_json / `row_counts_str`(正)
+- ✅ `sync_draft_to_legacy_session`(legacy_adapter:79、reload_project 経由)← grid_order_json / `row_counts_str`(正)
+- ❌ grid.py 旧読みブロック ← settings_json / `row_counts`(唯一の汚染源。撤去対象)
+- 保存も `_GRID_KEY_MAP`(session_manager:174)で session `grid_row_counts_str` → draft `row_counts_str` と対称。
+
+**コミット構成(2段)**:
+- **`d8dbc4c`(commit1)**: settings_json 旧読みブロック(grid.py L136-153)を丸ごと撤去。
+  道連れフラグ `grid_settings_loaded` / `current_proj_id_check`(旧読み専用と grep 確認)と
+  SESSION_PROJECT_KEYS の該当2エントリも撤去。純撤去 -22行、挙動変化なし(死経路)。
+  **read-only SELECT で撤去安全性を本番確認**: grid_order_json が空で settings_json にしか
+  grid データが無い「超旧 project」= 0件、settings_json に grid_settings を持つ project = 0件
+  (§23 の event_app_readonly 経由・SELECT のみ)。→ この旧読みは書き手不在の完全な死経路と確定。
+- **`ebbd39d`(commit2)**: 罠18 を構造的に根絶(方針B)。
+  - widget を `key="grid_row_counts_str"`(真の SSOT)に直バインド。value=・手動書き戻し(旧L205/L209)を撤去。
+  - pad(旧L189-201)の session 書き戻しを撤去し、行数(new_rows)に合わせた長さ整形
+    (不足→5補完/過剰→切落し)を**生成直前の parsed_counts 作成箇所へ移設**。ローカル変数で整形し
+    SSOT には焼き戻さない。→ widget 描画後に SSOT へ外部 write する経路がゼロ = 真の SSOT 一本化。
+  - 5015c17 の止血エントリ(SESSION_PROJECT_KEYS の grid_row_counts_input_widget)を撤去。
+  - スモークテスト(test_smoke_apptest.py)の ROW_COUNTS_WIDGET_KEY を新 key に更新(下記)。
+
+**方針B の意図的な UX 変更(合意済み)**:
+grid_rows(行数)を変えても枚数欄の表示テキストは自動追従しなくなる(pad が session を書かないため)。
+ただし生成時に行数へ整形するので、**生成される画像の行数・枚数は従来どおり正しい**。表示だけの差。
+
+**スモークテストの前倒し統合(commit2 に含めた判断)**:
+widget key 変更で test_smoke_all_tabs と test_no_value_bleed_on_switch が旧 key 直参照で赤化(KeyError)。
+commit2 単体では**回帰網が一時無効**になり本番 merge のリスクになるため、テスト修正を commit2 に前倒し
+(回帰網を割らない原則)。修正は ROW_COUNTS_WIDGET_KEY 定数の1行更新のみ。**アサーション本体は変更せず**、
+「切替で row_counts が混ざらない(§22 の不変条件)」が直バインド構造でも維持されることを緑で実証
+(テスト意図を弱めない形で緑化)。当初想定の commit3 は消滅し、全体は2コミット構成に。
+
+**検証**: 各コミット py_compile COMPILE_OK、grep で旧 key/旧読み経路の実コード0件、スモーク緑(2 passed)。
+実機テスト(①切替でリロードせず正しい枚数表示=表示ラグ解消 / ②編集保存往復で焼き付き破壊なし /
+③reset が直バインド後も有効 / ④行数変更で表示は伸びないが生成は正しい)すべて合格。
+
+**申し送り(grid 残スライス)**:
+- **project/rows read の service 化**(grid.py L72/103/110/165)、**フォント read の service 化**(L35/49)。
+  この2つを潰すと grid ビューの `db.query` 全滅が完成(row_counts のような実データ破壊リスクはなく、
+  純粋な read 移行。artists の型を横展開できる)。
+
+### 罠30(対策パターン): 「リロードで直る」表示バグは DB でなく widget/session の残留を疑う
+「保存値は正しい(リロードすると正しく出る)が、開いた直後は前の値が出る」症状は、DB 破壊ではなく
+表示レイヤー(罠18 の widget 固定 key 残留、罠3 のプロジェクト切替残留)が原因のことが多い。
+→ 対処: まず「リロードで直るか(=DB は無事か)」を切り分ける。直るなら緊急 revert 不要、widget/session の
+SSOT 一本化で根治する。慌てて revert せず、汚染源を1つずつ潰す。
+
+### 罠31(調査手法): 撤去の安全性は read-only SELECT で本番実データを確認してから確定する
+「この旧読み経路を撤去して大丈夫か(=撤去するとデータ復元不能になる project が居ないか)」は、
+コード読解だけでは確定できない。§23 の read-only ユーザー(event_app_readonly)+ セッション readonly 固定で
+本番 DB に SELECT を流し、影響 project 数を実測してから撤去判断する(本番データ保護モードに抵触しない)。
+今回「grid_order_json 空 かつ settings_json に grid データを持つ超旧 project = 0件」を確認して
+丸ごと撤去に踏み切れた。
+
+---
+
 ## フェーズ計画 現在地(2026-07-06 時点)
 
 - **Phase 5(残りビュー移行)**: artists **完了**(⑤-a 本体 + ⑤-b 挙動改善/掃除まで)。
