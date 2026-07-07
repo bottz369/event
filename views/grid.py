@@ -133,26 +133,6 @@ def render_grid_page():
                     except Exception as e:
                         print(f"Initial Load Error: {e}")
 
-                # 2. グリッド設定の復元
-                if "grid_settings_loaded" not in st.session_state or st.session_state.get("current_proj_id_check") != selected_id:
-                    if proj.settings_json:
-                        try:
-                            settings = json.loads(proj.settings_json)
-                            grid_conf = settings.get("grid_settings", {})
-                            if grid_conf:
-                                st.session_state.grid_order = [n.strip() for n in grid_conf.get("order", st.session_state.grid_order)] # ここでも念のためstrip
-                                st.session_state.grid_rows = grid_conf.get("rows", 5)
-                                st.session_state.grid_row_counts_str = grid_conf.get("row_counts", "5,5,5,5,5")
-                                st.session_state.grid_layout_mode = grid_conf.get("layout_mode", "レンガ (サイズ統一)")
-                                st.session_state.grid_alignment = grid_conf.get("alignment", "中央揃え")
-                                st.session_state.grid_font = grid_conf.get("font", "keifont.ttf")
-                        except Exception as e:
-                            print(f"Settings load error: {e}")
-                    
-                    st.session_state.grid_settings_loaded = True
-                    st.session_state.current_proj_id_check = selected_id
-
-
             st.divider()
             
             # --- 設定エリア ---

@@ -85,8 +85,6 @@ SESSION_PROJECT_KEYS = [
     "grid_layout_mode",
     "grid_font",
     "grid_last_generated_params",
-    "grid_settings_loaded",
-    "current_proj_id_check",
     "proj_title",
     "proj_subtitle",
     "proj_venue",
