@@ -1,13 +1,12 @@
 import streamlit as st
 import os
-import json
 import io
 import requests # URLダウンロード用
 
 # Asset, AssetFile, get_image_url をインポート
-from database import get_db, TimetableProject, TimetableRow, IMAGE_DIR, Asset, AssetFile, get_image_url
+from database import get_db, TimetableProject, IMAGE_DIR, Asset, AssetFile, get_image_url
 from constants import FONT_DIR
-from services import project_service, artist_service
+from services import project_service, artist_service, timetable_service
 from utils import create_font_specimen_img, get_sorted_font_list
 
 try:
@@ -97,41 +96,23 @@ def render_grid_page():
         if "grid_font" not in st.session_state: st.session_state.grid_font = "keifont.ttf"
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
-        proj = None # 初期化
-
         if selected_id:
-            proj = db.query(TimetableProject).filter(TimetableProject.id == selected_id).first()
-            
-            # --- DBからの設定復元ロジック (初回ロード時) ---
-            if proj:
-                # 1. アーティストリストの初期化
-                if not st.session_state.grid_order:
-                    try:
-                        rows = db.query(TimetableRow).filter(TimetableRow.project_id == selected_id).order_by(TimetableRow.sort_order).all()
-                        
-                        if rows:
-                            tt_artists = []
-                            for r in rows:
-                                if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
-                                if r.is_hidden: continue
-                                clean_name = r.artist_name.strip() if r.artist_name else ""
-                                if clean_name: tt_artists.append(clean_name)
+            # 1. アーティストリストの初期化(未設定時のみ。rows DTO から構築)
+            #    行取得は service 経由(load_rows が timetable_rows 優先→data_json fallback を内包)。
+            #    フィルタ(物販/転換/調整 除外・非表示 skip・strip・reverse+dedup)は従来どおり DTO の上に残す。
+            if not st.session_state.grid_order:
+                try:
+                    rows = timetable_service.get_rows_for_project(selected_id)
+                    tt_artists = []
+                    for r in rows:
+                        if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
+                        if r.is_hidden: continue
+                        clean_name = r.artist_name.strip() if r.artist_name else ""
+                        if clean_name: tt_artists.append(clean_name)
 
-                            st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                        
-                        elif proj.data_json:
-                            d = json.loads(proj.data_json)
-                            tt_artists = []
-                            for i in d:
-                                name = i.get("ARTIST", "")
-                                if name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
-                                if i.get("IS_HIDDEN", False): continue
-                                clean_name = name.strip() if name else ""
-                                if clean_name: tt_artists.append(clean_name)
-
-                            st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                    except Exception as e:
-                        print(f"Initial Load Error: {e}")
+                    st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
+                except Exception as e:
+                    print(f"Initial Load Error: {e}")
 
             st.divider()
             
@@ -140,10 +121,8 @@ def render_grid_page():
                 current_id_in_cb = st.session_state.get("ws_active_project_id")
                 if not current_id_in_cb: return
 
-                temp_db = next(get_db())
                 try:
-                    rows = temp_db.query(TimetableRow).filter(TimetableRow.project_id == current_id_in_cb).order_by(TimetableRow.sort_order).all()
-                    
+                    rows = timetable_service.get_rows_for_project(current_id_in_cb)
                     if rows:
                         tt_artists = []
                         for r in rows:
@@ -151,34 +130,18 @@ def render_grid_page():
                             if r.is_hidden: continue
                             clean_name = r.artist_name.strip() if r.artist_name else ""
                             if clean_name: tt_artists.append(clean_name)
-                        
+
                         st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
                         st.toast("タイムテーブルから最新の構成を読み込みました（非表示行は除外・スペース除去）", icon="🔄")
-                    
-                    elif temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first().data_json:
-                        proj_temp = temp_db.query(TimetableProject).filter(TimetableProject.id == current_id_in_cb).first()
-                        d = json.loads(proj_temp.data_json)
-                        tt_artists = []
-                        for i in d:
-                            name = i.get("ARTIST", "")
-                            if name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
-                            if i.get("IS_HIDDEN", False): continue
-                            clean_name = name.strip() if name else ""
-                            if clean_name: tt_artists.append(clean_name)
-                            
-                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                        st.toast("JSONから構成を読み込みました（スペース除去）", icon="🔄")
-                    
+
                     st.session_state.grid_rows = 5
                     st.session_state.grid_row_counts_str = "5,5,5,5,5"
                     st.session_state.grid_font = "keifont.ttf"
                     st.session_state.grid_just_reset = True
-                    
+
                 except Exception as e:
                     print(f"Reset Error: {e}")
                     st.error(f"読み込みエラー: {e}")
-                finally:
-                    temp_db.close()
 
             c_set1, c_set2 = st.columns([1, 2])
             with c_set1: 
