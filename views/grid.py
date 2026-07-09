@@ -1,13 +1,10 @@
 import streamlit as st
 import os
 import io
-import requests # URLダウンロード用
 
-# Asset, AssetFile, get_image_url をインポート
-from database import get_db, IMAGE_DIR, Asset, AssetFile, get_image_url
+from database import IMAGE_DIR
 from constants import FONT_DIR
-from services import project_service, artist_service, timetable_service
-from utils import create_font_specimen_img, get_sorted_font_list
+from services import project_service, artist_service, timetable_service, font_service
 
 try:
     from streamlit_sortables import sort_items
@@ -20,46 +17,11 @@ except ImportError:
     generate_grid_image = None
     load_image_from_url = None
 
-# --- フォント確保関数 (URL対応版) ---
-def check_and_download_font(db, font_filename):
-    if not font_filename: return
-    abs_font_dir = os.path.abspath(FONT_DIR)
-    os.makedirs(abs_font_dir, exist_ok=True)
-    file_path = os.path.join(abs_font_dir, font_filename)
-
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-        return
-
-    try:
-        asset = db.query(Asset).filter(Asset.image_filename == font_filename).first()
-        if asset:
-            url = get_image_url(asset.image_filename)
-            if url:
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    with open(file_path, "wb") as f:
-                        f.write(response.content)
-                    st.toast(f"フォント(URL)を準備しました: {font_filename}", icon="🔤")
-                    return
-    except Exception as e:
-        print(f"URL Download Error: {e}")
-
-    try:
-        asset_file = db.query(AssetFile).filter(AssetFile.filename == font_filename).first()
-        if asset_file and asset_file.file_data:
-            with open(file_path, "wb") as f:
-                f.write(asset_file.file_data)
-            st.toast(f"フォント(DB)を準備しました: {font_filename}", icon="🔤")
-            return
-    except Exception as e:
-        print(f"Binary Write Error: {e}")
 
 def render_grid_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("🖼️ アー写グリッド作成")
 
-    db = next(get_db())
-    
     if generate_grid_image is None:
         st.error("⚠️ `logic_grid.py` の読み込みに失敗しています。")
 
@@ -215,7 +177,7 @@ def render_grid_page():
             st.divider()
 
             # --- 画像生成・プレビューエリア ---
-            sorted_fonts = get_sorted_font_list(db)
+            sorted_fonts = font_service.list_sorted_fonts()
             font_file_list = [item["filename"] for item in sorted_fonts]
             font_display_map = {item["filename"]: item["name"] for item in sorted_fonts}
             
@@ -231,7 +193,7 @@ def render_grid_page():
             with st.expander("🔤 フォント一覧見本を表示"):
                 with st.container(height=300):
                     specimen_list = sorted(sorted_fonts, key=lambda x: x["filename"].lower())
-                    specimen_img = create_font_specimen_img(db, specimen_list)
+                    specimen_img = font_service.build_specimen(specimen_list)
                     if specimen_img:
                         st.image(specimen_img, width='stretch')
                     else:
@@ -268,8 +230,12 @@ def render_grid_page():
                     if not target_artists:
                         st.warning("表示するアーティストデータがありません。")
                     else:
-                        # フォント確保
-                        check_and_download_font(db, st.session_state.grid_font)
+                        # フォント確保(service 戻り値に応じて view で toast)
+                        status = font_service.ensure_font_available(st.session_state.grid_font)
+                        if status == "downloaded_url":
+                            st.toast(f"フォント(URL)を準備しました: {st.session_state.grid_font}", icon="🔤")
+                        elif status == "downloaded_db":
+                            st.toast(f"フォント(DB)を準備しました: {st.session_state.grid_font}", icon="🔤")
 
                         with st.spinner("画像を生成＆保存中..."):
                             try:
@@ -323,8 +289,6 @@ def render_grid_page():
 
     except Exception as main_e:
         st.error(f"予期せぬエラー: {main_e}")
-    finally:
-        db.close()
 
 # ★重要: 他のファイルからimportされる関数を定義
 def generate_grid_image_buffer(artists, cols, rows, font_path, alignment, layout_mode, row_counts_str):
