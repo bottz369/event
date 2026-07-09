@@ -6,7 +6,7 @@
 - セクション11: LINE Bot 構想の記録
 - セクション12: フェーズ3 パフォーマンス改善の成果記録(2026-06-29)
 
-最終更新: 2026-07-06
+最終更新: 2026-07-08
 
 ---
 
@@ -794,6 +794,77 @@ SSOT 一本化で根治する。慌てて revert せず、汚染源を1つずつ
 本番 DB に SELECT を流し、影響 project 数を実測してから撤去判断する(本番データ保護モードに抵触しない)。
 今回「grid_order_json 空 かつ settings_json に grid データを持つ超旧 project = 0件」を確認して
 丸ごと撤去に踏み切れた。
+
+---
+
+## 26. Phase 5 grid スライスB1: rows read の service 化(data_json 直読み崩し)(2026-07-08)
+
+✅ grid.py の TimetableRow read(DB rows 経路 + data_json インライン経路の二重実装)を
+timetable_service.get_rows_for_project → load_rows の1本に一元化。本番反映済み
+(origin/main = 6e5ac5d、実機テスト全項目合格)。main 直コミット。
+
+**コミット構成(2段)**:
+- f138e92(コミット1・inert): services/timetable_service.py 新設。
+  get_rows_for_project(project_id) -> List[TimetableRowDraft] が SessionLocal を
+  open→try→finally close で所有し、内部で timetable_repo.load_rows(db, id) を返す
+  (artist_service と同一の session 所有パターン、repo は無変更・commit しない)。inert(誰も呼ばない)。
+- 6e5ac5d(コミット2・置換): grid.py のメイン経路・reset 経路とも rows 取得を
+  get_rows_for_project 1呼び出しに一元化。data_json インライン読み(旧 L122-132 / L158-172)、
+  reset の temp_db=next(get_db()) と finally close、L103 の if proj:(+ proj.data_json 判定)を撤去。
+  未使用化した import json / TimetableRow を撤去。純減 -37行。
+
+**退化防止の要点(合意済み設計)**: load_rows は hidden/物販/転換/調整 をフィルタせず reverse/dedup も
+しない。よって「生の行取得だけ load_rows に一元化し、grid 側のフィルタ変換
+(物販/終演後物販/転換/調整 除外・is_hidden skip・strip・空 skip・reverse+dedup)は DTO
+(draft.artist_name / draft.is_hidden)の上にそのまま残す」統合に限定。フィルタを落とすと
+hidden/物販 混入の退化になるため、フィルタ loop は DTO 側へ移設して維持。
+
+**検証(§12.4 方式・DB 非書き込み)**: scratch/verify_grid_order_parity.py で grid_order 生成の
+新旧 byte パリティを機械証明。(1)-(8) ALL PASS。本命 (7)(8)= data_json を DTO 化する from_dict の
+抽出(IS_HIDDEN の 1/0/None/欠落 の bool 化、ARTIST の欠落/空/前後空白の _to_str+strip)が
+旧インライン抽出と完全一致=罠23(reader/writer スキーマ不一致による静かなデータ欠落)クリア証明。
+併せて各 Edit を diff -w + grep(撤去シンボル0件 / セレクタ・Font・L62 db 温存)で証明、
+py_compile COMPILE_OK。scratch は未 commit(検証手段のため履歴に残さず手元温存)。
+
+**意図的差分3点(退行ではなく整理/頑健化)**:
+1. reset の toast を「JSONから構成を読み込みました」→「タイムテーブルから最新の構成を
+   読み込みました」に統一(load_rows 一元化で source 区別不可、実データ・grid_order 非影響)。
+2. data_json 非 dict 混入時、旧インラインは AttributeError→grid_order 空 / 新は isinstance skip で
+   頑健継続。実データ上 data_json を通すのは load_rows フォールバックのみ(G2)で影響なし。
+3. L103 if proj: 撤去→load_rows 空判定で代替。旧 reset の elif ....first().data_json: は
+   削除済み project で .first()==None→AttributeError で落ちていたが、新は空返しで no-op=クラッシュ解消(頑健化)。
+
+**申し送り(既知の潜在事項・B1 非対応)**: セレクタ/service の sort キー
+(x.event_date or "0000-00-00", reverse=True)は日付あり(date)と日付なし(文字列)混在で
+date と str 比較 TypeError の潜在リスク。grid・service 双方同一挙動のため B1 では触らず、
+B2 でも悪化しない既知事項として記録。
+
+**grid 残スライス**:
+- B2: セレクタ(L72 db.query(TimetableProject).all())を list_projects_for_selector へ。
+  Phase 0(G5)完了済み=日付ありは完全一致、差は日付なしラベル "None …"→"---- …" のみ(改善方向)、
+  id 逆引きはタプルで無改造代替可。
+- スライスC: Font read(L35/49 の Asset/AssetFile、L217/289 等の font helper)+ L62 db=next(get_db())
+  の最終撤去。この2スライスで grid ビューの db.query 全滅が完成。
+
+---
+
+## 27. 運用ルール: main 直コミット運用(2026-07-08 採用)
+
+Phase 5 grid B1 以降、作業ブランチ(refactor/phase-N-XXX)の必須化を解除し、main への
+直コミット運用を正式採用する(§20 の remote-control same-dir・1ブランチ積み上げと整合)。
+
+**直コミット運用の規律(必須)**:
+- 1コミット = 1目的を厳守し、revert 単位を小さく保つ。
+- push は谷内さんの最終 GO 必須。「Don't ask again」は選ばない。
+- 中間状態リスクのある撤去は1コミットで完結させる(§14-6)。
+- Edit/Write は毎回 diff 提示 → 承認 → 適用。読み取り調査は一括可。
+
+**緊急時の切り戻し**: git revert <hash> [--no-edit] → git push origin main
+(Streamlit Cloud 自動デプロイで 3〜5分後に本番復旧)。複数コミットは新しい方から並べる
+(git revert <new> <old> --no-edit)。
+
+※ 本体(プロジェクトナレッジ)側は §8 Git ワークフロー 8.1 に「※ 2026-07-08 更新:
+main 直コミット運用を採用」の注記で同期(ローカル控えは §8 が無いため §27 として独立記録)。
 
 ---
 
