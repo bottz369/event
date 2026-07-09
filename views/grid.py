@@ -4,7 +4,7 @@ import io
 import requests # URLダウンロード用
 
 # Asset, AssetFile, get_image_url をインポート
-from database import get_db, TimetableProject, IMAGE_DIR, Asset, AssetFile, get_image_url
+from database import get_db, IMAGE_DIR, Asset, AssetFile, get_image_url
 from constants import FONT_DIR
 from services import project_service, artist_service, timetable_service
 from utils import create_font_specimen_img, get_sorted_font_list
@@ -68,13 +68,15 @@ def render_grid_page():
         
         # --- (プロジェクト選択ロジック) ---
         if not selected_id:
-            projects = db.query(TimetableProject).all()
-            if projects:
-                projects.sort(key=lambda x: x.event_date or "0000-00-00", reverse=True)
-                p_map = {f"{p.event_date} {p.title}": p.id for p in projects}
-                sel_label = st.selectbox("プロジェクト選択", ["(選択)"] + list(p_map.keys()))
-                if sel_label != "(選択)":
-                    selected_id = p_map[sel_label]
+            pairs = project_service.list_projects_for_selector()
+            if pairs:
+                id_to_label = {pid: label for pid, label in pairs}
+                options = [None] + [pid for pid, _ in pairs]
+                selected_id = st.selectbox(
+                    "プロジェクト選択",
+                    options,
+                    format_func=lambda pid: "(選択)" if pid is None else id_to_label[pid],
+                )
 
         # セッション初期化 (デフォルト値)
         if "grid_order" not in st.session_state: st.session_state.grid_order = []
