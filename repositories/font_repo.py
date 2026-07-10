@@ -23,7 +23,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from database import Asset, AssetFile
+from database import Asset, AssetFile, SystemFontConfig
 
 
 def get_font_asset(db: Session, filename: str) -> Optional[Asset]:
@@ -42,3 +42,8 @@ def get_font_asset_file(db: Session, filename: str) -> Optional[AssetFile]:
         .filter(AssetFile.filename == filename)
         .first()
     )
+
+
+def get_system_font_config(db: Session) -> Optional[SystemFontConfig]:
+    """system_font_config の 1 件(標準フォント設定)。無ければ None。純 read。"""
+    return db.query(SystemFontConfig).first()

@@ -26,6 +26,7 @@ from constants import FONT_DIR
 from database import SessionLocal, get_image_url
 from repositories import font_repo
 from utils import get_sorted_font_list, create_font_specimen_img
+from utils.flyer_helpers import ensure_font_file_exists
 
 
 def list_sorted_fonts():
@@ -42,6 +43,30 @@ def build_specimen(font_dicts):
     db = SessionLocal()
     try:
         return create_font_specimen_img(db, font_dicts)
+    finally:
+        db.close()
+
+
+def ensure_font_path(filename):
+    """フォントを FS に確保し、その絶対パス(str)を返す。無ければ None。
+
+    own_db を共用 helper utils.flyer_helpers.ensure_font_file_exists(db, filename) に
+    渡すだけの透過ラッパ(helper 無改造)。ensure_font_available(状態返し・grid 用)とは
+    別物: こちらはパスを返す(flyer の styles にパスを埋める用途)。
+    """
+    db = SessionLocal()
+    try:
+        return ensure_font_file_exists(db, filename)
+    finally:
+        db.close()
+
+
+def get_default_font_name() -> str:
+    """標準フォントのファイル名を返す。未設定なら "keifont.ttf"(旧 flyer L132-133 と同一)。"""
+    db = SessionLocal()
+    try:
+        sys_conf = font_repo.get_system_font_config(db)
+        return sys_conf.filename if sys_conf else "keifont.ttf"
     finally:
         db.close()
 
