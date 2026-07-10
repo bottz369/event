@@ -12,13 +12,13 @@ try:
 except ImportError:
     HAS_CLICK_COORD = False
 
-from database import get_db, TimetableProject, TimetableRow, Asset, get_image_url, SystemFontConfig, FlyerTemplate
+from database import get_db, TimetableProject, Asset, get_image_url, SystemFontConfig, FlyerTemplate
 from utils import get_sorted_font_list, create_font_specimen_img
 from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str, ensure_font_file_exists
 from utils.flyer_generator import create_flyer_image_shadow
 from models.flyer_keys import FLYER_KEY_REGISTRY
-from services import project_service, session_manager
+from services import project_service, session_manager, timetable_service
 
 # ==========================================
 # 設定データの収集関数
@@ -503,14 +503,14 @@ def render_flyer_editor(project_id):
             
         filtered_artists = []
         try:
-            rows = db.query(TimetableRow).filter(TimetableRow.project_id == project_id).all()
+            rows = timetable_service.get_rows_for_project(project_id)
             hidden_map = {r.artist_name: r.is_hidden for r in rows if r.artist_name}
             raw_order = []
             if st.session_state.get("grid_order"): raw_order = st.session_state.grid_order
             elif proj.grid_order_json:
                 try: raw_order = json.loads(proj.grid_order_json).get("order", [])
                 except: pass
-            if not raw_order and rows: raw_order = [r.artist_name for r in sorted(rows, key=lambda x: x.sort_order)]
+            if not raw_order and rows: raw_order = [r.artist_name for r in rows]
             
             for name in raw_order:
                 if name in ["開演前物販", "終演後物販"]: continue
