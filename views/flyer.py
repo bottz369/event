@@ -12,12 +12,12 @@ try:
 except ImportError:
     HAS_CLICK_COORD = False
 
-from database import get_db, TimetableProject, Asset, get_image_url, FlyerTemplate
+from database import get_db, TimetableProject, get_image_url, FlyerTemplate
 from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str
 from utils.flyer_generator import create_flyer_image_shadow
 from models.flyer_keys import FLYER_KEY_REGISTRY
-from services import project_service, session_manager, timetable_service, font_service
+from services import project_service, session_manager, timetable_service, font_service, asset_service
 
 # ==========================================
 # 設定データの収集関数
@@ -74,8 +74,8 @@ def render_flyer_editor(project_id):
     db = next(get_db())
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
     
-    logos = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
-    bgs = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
+    logos = asset_service.list_assets_by_type("logo")
+    bgs = asset_service.list_assets_by_type("background")
     
     font_list_data = font_service.list_sorted_fonts()
     font_options = [f["filename"] for f in font_list_data]
@@ -562,12 +562,12 @@ def render_flyer_editor(project_id):
 def _generate_preview(db, proj):
     bg_url = None
     if st.session_state.flyer_bg_id:
-        asset = db.query(Asset).get(st.session_state.flyer_bg_id)
+        asset = asset_service.get_asset_view(st.session_state.flyer_bg_id)
         if asset: bg_url = get_image_url(asset.image_filename)
-    
+
     logo_url = None
     if st.session_state.flyer_logo_id:
-        asset = db.query(Asset).get(st.session_state.flyer_logo_id)
+        asset = asset_service.get_asset_view(st.session_state.flyer_logo_id)
         if asset: logo_url = get_image_url(asset.image_filename)
 
     styles = {k.replace("flyer_",""): v for k, v in st.session_state.items() if k.startswith("flyer_")}
