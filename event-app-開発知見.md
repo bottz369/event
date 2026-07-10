@@ -1058,11 +1058,61 @@ service 化、ensure_font_path 新設)。
 
 ---
 
+## 30. Phase 5 flyer スライス F-C: font read の service 化(2026-07-10)
+
+✅ flyer.py の font read 5箇所(L81/L132/L364/L583/L590、移行前の行番号)を font_service 経由に
+一元化。本番反映済み(origin/main = df26219、実機テスト合格)。main 直コミット・inert→replace の2コミット。
+
+決定的発見(F-C/F-db 境界の確定): 生成器 create_flyer_image_shadow(flyer_generator.py:303)の
+db= 引数は本体で完全未使用(grep "\bdb\b" が定義行のみ・db.query 0件)。get_font_path(同:332)は
+FS だけで font を解決し db を使わない。よって F-C は生成器を一切触らず font read だけ移行でき、
+生成器の db= 引数撤去は F-db に確定分離。前 Phase 0 で警戒した「生成器が db を要求するシワ」は
+実在しなかった(デッド引数)。
+
+設計判断(合意済み):
+- ensure_font_path は「ラッパ方式」を採用(移設ではない): font_service.ensure_font_path(filename) は
+  own_db を開き既存 utils.flyer_helpers.ensure_font_file_exists(db, filename) を無改造で呼ぶ透過ラッパ。
+  → parity が透過性の証明だけで済み(4分岐 byte 再証明・撤去作業が不要)、罠19/20 リスクをゼロ化。
+  grid C の get_sorted_font_list ラッパ(§28.2)と完全同型。ensure_font_file_exists は flyer 専用
+  (呼び出し元 L583/590 のみ)だが utils に無改造温存(物理移動は F-db/Phase 6 の掃除に申し送り)。
+- get_default_font_name は専用窓口を新設: font_repo.get_system_font_config(db)(純 read)+
+  font_service.get_default_font_name()(.filename or "keifont.ttf")。SystemFontConfig read を
+  font ドメインに集約(list_sorted_fonts の standard dict から派生させる結合を避けた)。
+- ensure_font_available(grid 用・状態返し)は無改造。ensure_font_path(パス返し)と分岐が似ていても
+  DRY 化せず2メソッド並存(grid の本番稼働メソッドを触らない=罠32)。
+
+コミット構成(2段):
+- 5732f6f(inert): font_repo.get_system_font_config、font_service.ensure_font_path(透過ラッパ)+
+  get_default_font_name を追加。誰も呼ばない。streamlit 非 import 維持。
+- df26219(replace): flyer.py の font read 5箇所を差し替え(→ list_sorted_fonts /
+  get_default_font_name / build_specimen / ensure_font_path ×2)。未使用化した import
+  (get_sorted_font_list / create_font_specimen_img / ensure_font_file_exists / SystemFontConfig)を
+  grep 0件確認後に撤去。font_service import 追加。8+/10−。
+
+検証(§12.4 方式・DB 非書き込み): scratch/verify_flyer_fc_parity.py で
+(A)ensure_font_path の透過性(own_db 素通し・(db,filename) 素通し・戻り値透過・own_db close の7点)、
+(B)get_default_font_name の2分岐(sys_conf あり→.filename / None→"keifont.ttf")が旧 L132-133 と
+byte 一致、を fake 依存でロードして assert・ALL PASS。list_sorted_fonts/build_specimen の透過性は
+grid C で実証済み。py_compile COMPILE_OK、撤去シンボル grep 0件、AppTest スモーク2本緑
+(test_smoke_all_tabs=flyer タブ font 新経路で例外ゼロ描画)。実機テスト合格
+(フォント selectbox / 見本画像 / 生成画像のフォント / fallback 既定 / 他タブ無影響)。意図的差分なし=機能等価。
+
+事前確認4(build_specimen の透過性): flyer は font_list_data を未 sorted で直渡し、grid は
+sorted で渡すが、build_specimen は内部 sort せず素通し(caller 側の差)。よって flyer の並びは不変=機能等価。
+
+F-db への申し送り(F-C では触らない): ①生成器 create_flyer_image_shadow の未使用 db= 引数撤去、
+②呼び出し側 db=db(flyer.py L609/625)除去、③flyer.py L75 next(get_db()) + L561 db.close() 撤去
+(proj/asset/template の各 read が service 化された後)。
+
+flyer 残スライス: F-proj / F-asset / F-tmpl / F-db。
+
+---
+
 ## フェーズ計画 現在地(2026-07-10 時点)
 
 - **Phase 5(残りビュー移行)**: artists **完了** / grid **完全クローズ完了**(§24〜§28)/
-  **flyer 着手・F-rows 完了**(§29、commit b26c2bc、本番反映済み)。
-  flyer 残り = F-C(font)/ F-proj / F-asset / F-tmpl / F-db。
+  **flyer 着手・F-rows(§29)+ F-C(§30)完了**(commit b26c2bc / df26219、本番反映済み)。
+  flyer 残り = F-proj / F-asset / F-tmpl / F-db。
 - flyer の論点(Phase 0 で確定予定): flyer_json の動的キー30+、罠18(widget SSOT・
   flyer_date_format の key 無し radio 等)、罠22(別テーブル flyer_templates.data_json との
   切り分け)、write 有無 / read escape / 既存窓口(list_projects_for_selector /
