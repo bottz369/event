@@ -1108,11 +1108,110 @@ flyer 残スライス: F-proj / F-asset / F-tmpl / F-db。
 
 ---
 
+## 31. Phase 5 flyer スライス F-asset: Asset read の service 化(2026-07-10)
+
+✅ flyer.py の Asset read 4箇所(L77/78 logo/bg 一覧、L565/570 .get(id))を汎用 asset ドメイン
+経由に一元化。本番反映済み(origin/main = 6858785、実機テスト合格)。main 直コミット・
+inert→replace の2コミット。
+
+Phase 0 確定: flyer に Asset write 無し(db.add/commit は FlyerTemplate=F-tmpl 用)、Asset ORM は
+生成器へ escape しない(渡るのは id / URL 文字列)、grid/artists に Asset read 無し。よって grid 型
+(read のみ・B' 再シーケンス不要)。
+
+設計判断(合意済み):
+- 汎用窓口: repositories/asset_repo.py(list_assets_by_type / get_asset)+ services/asset_service.py
+  (同 + AssetView 返し)を汎用設計で新設し、今回 flyer だけ載せ替え(他 view 無波及=罠32)。
+  write(assets.py の Asset CRUD)は将来の assets ビュー移行スコープ。
+- AssetView(id / image_filename / name)= selector と _generate_preview が読む最小集合。
+- get_image_url は view に残す(案B): AssetView は image_filename まで、URL 化は view
+  (render_visual_selector / _generate_preview)が呼ぶ。案A(service で url 解決)は AssetView 生成時に
+  logo/bg 全件分 get_image_url を eager に呼ぶ=パフォーマンス懸念(罠16)+ get_image_url 内部未確認の
+  ため見送り。案B で機能等価・変更最小。
+
+コミット構成(2段):
+- cb7908b(inert): models/asset.py(AssetView)、asset_repo.py、asset_service.py 新設。誰も呼ばない。
+  streamlit 非 import。
+- 6858785(replace): flyer.py L77/78 → asset_service.list_assets_by_type("logo"/"background")、
+  L565/570 → asset_service.get_asset_view(id)。Asset import 撤去・asset_service 追加。get_image_url は
+  view 温存。L74 db・生成器 db=db は温存(F-db 申し送り)。
+
+検証(§12.4 方式・DB 非書き込み): scratch/verify_flyer_fasset_parity.py で (A)_to_view マッピング /
+(B)list_assets_by_type 透過(asset_type 素通し・own_db close)/ (C)get_asset_view の Optional 挙動
+ALL PASS。filter 条件 byte 一致(asset_repo の asset_type==引数, is_deleted==False が旧 flyer
+L77/78 と同条件)を grep 対比。py_compile COMPILE_OK、flyer.py の Asset/db.query(Asset) grep 0件、
+AppTest スモーク2本緑。実機テスト合格(ロゴ/背景 selector・生成画像反映・削除済み非表示・他タブ無影響)。
+
+F-db への申し送り: _generate_preview の db 引数、生成器 db=db(L608/624)、flyer.py L74 db セッションは
+F-db で撤去。F-asset 後に flyer.py が db を使うのは proj read(L75=F-proj)+ FlyerTemplate(F-tmpl)+
+生成器デッド引数のみ。
+
+---
+
+## 32. 別件バグ修正: TT エディタ「2回目の編集が消える」(2026-07-10)
+
+✅ flyer 移行とは別トラックの本番バグ修正。TT タブでセル入力→次のセル入力で2回目が消える
+(出演順の selectbox 選択も同様)問題を根治。本番反映済み(origin/main = 945d422、実機テスト合格)。
+main 直コミット・単一コミット(views/timetable.py +47行)+ 回帰網同梱。
+
+症状: セルA入力→セルB入力(他操作なし)で2回目が消える。設定反映前にリロードで消えるのは
+明示保存型の仕様(問題は2回目消失)。
+
+真因(AppTest で機械再現・切り分け):
+- 真因①(主): timetable.py の editor_df = draft_rows_to_df(draft_rows) を毎 run で作り直すため、
+  前の編集が draft に入ると入力 df が変化 → data_editor が保留 edited_rows をリセット(Streamlit 既知
+  挙動)→ 2つ目のセル編集が後段同期(L511)に届く前に破棄(tt_editor_key の bump は無関係。CASE_A で再現)。
+- 真因②(副): 上流 widget(開演前物販 checkbox=keyless value=罠18、＋/削除/sort_items)が
+  _bump_editor_seq()+st.rerun() を L511 より前に実行し保留編集を破棄(CASE_B で再現)。
+- 明示保存型は守られていた(DB 保存は設定反映ボタンのみ=save_active_project L688)。session 同期の
+  タイミング不具合。
+
+採用方式: on_change 即確定案は AppTest で on_change が発火せず回帰検証不可のため不採用。代替の
+「先取り確定(main-flow pre-read)」を独立 AppTest 実験で成立確認(2連続編集 99→77 が両方残る)→ 採用。
+
+修正(commit 945d422):
+- ヘルパー _apply_editor_state_to_df(edited_rows を positional 差分適用・純 pandas。num_rows="fixed"
+  のため added/deleted は無視)。
+- 「先取り確定」ブロックを draft_rows 取得直後・上流 widget 群(L405)より前に挿入:
+  current_key(=f"tt_editor_{tt_editor_key}")の保留 edited_rows を draft_rows_to_df→_apply→
+  df_to_draft_rows→_normalize_edited_rows で確定、!= ガードで set_draft_rows+mark_dirty。
+  この時点の tt_editor_key は bump 前(前 run の編集を保持する key)。変換順は後段 L511 と同一で冪等。
+  後段 L511 は保険として温存。
+- これで①(再フィードリセット前に確定)②(上流 bump 前に確定)を1箇所で同時に解消。
+
+検証(§12.4 方式・DB 非書き込み): 回帰網 tests/test_tt_editor_repro.py の CASE_A(純 data_editor
+2連続編集)/ CASE_B(保留編集+checkbox toggle)を診断 assert から本物の回帰 assert に転じ、
+修正前 RED(消える)→ 修正後 GREEN(両編集残存)を両ケースで実証。scratch/verify_tt_prewrite_parity.py で
+(A)先取り適用==data_editor 内部適用 / (B)冪等性(2回適用==1回適用=二重適用が drift しない)/
+(C)頑健性(None/空/範囲外/未知col)ALL PASS。§13.1 非回帰(開演前物販 goods_start_time が
+open_time 追従・duration/adjustment=0 固定)OK。既存スモーク2 passed。実機テスト全項目合格。
+
+変更範囲: views/timetable.py +47行のみ。services/models/DB 経路・save_active_project/apply_draft・
+data_json には非接触(明示保存型・draft_rows 一本化・Phase 4 不変条件を維持)。回帰網
+tests/test_tt_editor_repro.py を §23 の AppTest 基盤上に編入。
+
+### 罠33: st.data_editor は「入力 df が変わると保留 edited_rows をリセットする」
+draft を毎 run で df 化して data_editor に食わせ直す構造は、確定した編集が入力 df を変え、
+data_editor が保留中の次の編集を捨てる(=2回目の編集が消える)。
+→ 対処: data_editor 描画の「前」に、保留 edited_rows を SSOT(draft)へ先取り確定する
+(上流 rerun / 再フィードより前)。適用の変換順を後段同期と揃えて冪等にし、後段は保険で残す。
+上流 widget(bump/rerun 経路)より前に置くことで、key bump 由来の消失も同時に防げる。
+
+### 罠34: AppTest(streamlit 1.50)は st.data_editor を操作できず on_change も発火しない
+AppTest には data_editor の widget アクセサが無く、on_change コールバックも発火しない。
+sort_items 等のカスタムコンポーネント(streamlit_sortables)は AppTest で非描画・非操作。
+→ 対処: data_editor 依存の検証は session_state 注入(st.session_state[editor_key]=
+{"edited_rows":{...}})で行う(main-flow の同期は注入で反映される)。on_change を必要とする
+修正方式は AppTest で回帰検証できないため、中核修正では避け、main-flow で検証可能な方式を選ぶ。
+
+---
+
 ## フェーズ計画 現在地(2026-07-10 時点)
 
 - **Phase 5(残りビュー移行)**: artists **完了** / grid **完全クローズ完了**(§24〜§28)/
-  **flyer 着手・F-rows(§29)+ F-C(§30)完了**(commit b26c2bc / df26219、本番反映済み)。
-  flyer 残り = F-proj / F-asset / F-tmpl / F-db。
+  **flyer: F-rows(§29)+ F-C(§30)+ F-asset(§31)完了**(commit b26c2bc / df26219 / 6858785、
+  本番反映済み)。flyer 残り = **F-proj / F-tmpl / F-db**。
+- **別件バグ修正(完了)**: TT エディタ「2回目の編集が消える」を根治(§32、commit 945d422、
+  本番反映済み・実機テスト合格)。flyer 移行とは別トラック。回帰網 tests/test_tt_editor_repro.py 追加。
 - flyer の論点(Phase 0 で確定予定): flyer_json の動的キー30+、罠18(widget SSOT・
   flyer_date_format の key 無し radio 等)、罠22(別テーブル flyer_templates.data_json との
   切り分け)、write 有無 / read escape / 既存窓口(list_projects_for_selector /
