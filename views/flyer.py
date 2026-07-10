@@ -12,13 +12,12 @@ try:
 except ImportError:
     HAS_CLICK_COORD = False
 
-from database import get_db, TimetableProject, Asset, get_image_url, SystemFontConfig, FlyerTemplate
-from utils import get_sorted_font_list, create_font_specimen_img
+from database import get_db, TimetableProject, Asset, get_image_url, FlyerTemplate
 from utils.text_generator import build_event_summary_text
-from utils.flyer_helpers import format_event_date, format_time_str, ensure_font_file_exists
+from utils.flyer_helpers import format_event_date, format_time_str
 from utils.flyer_generator import create_flyer_image_shadow
 from models.flyer_keys import FLYER_KEY_REGISTRY
-from services import project_service, session_manager, timetable_service
+from services import project_service, session_manager, timetable_service, font_service
 
 # ==========================================
 # 設定データの収集関数
@@ -78,7 +77,7 @@ def render_flyer_editor(project_id):
     logos = db.query(Asset).filter(Asset.asset_type == "logo", Asset.is_deleted == False).all()
     bgs = db.query(Asset).filter(Asset.asset_type == "background", Asset.is_deleted == False).all()
     
-    font_list_data = get_sorted_font_list(db)
+    font_list_data = font_service.list_sorted_fonts()
     font_options = [f["filename"] for f in font_list_data]
     font_map = {f["filename"]: f["name"] for f in font_list_data}
     if not font_options: font_options = ["keifont.ttf"]
@@ -129,8 +128,7 @@ def render_flyer_editor(project_id):
     # レジストリ駆動ループより先に明示的に init_s する(順序保護)。
     # レジストリ側エントリの default は静的 "keifont.ttf" だが、ここで先に
     # 動的値で初期化済みなのでループの init_s は no-op となり挙動不変。
-    sys_conf = db.query(SystemFontConfig).first()
-    def_sys = sys_conf.filename if sys_conf else "keifont.ttf"
+    def_sys = font_service.get_default_font_name()
     init_s("flyer_fallback_font", def_sys)
 
     for entry in FLYER_KEY_REGISTRY:
@@ -361,7 +359,7 @@ def render_flyer_editor(project_id):
 
         with st.expander("🔤 フォント一覧見本を表示"):
             with st.container(height=300):
-                specimen_img = create_font_specimen_img(db, font_list_data)
+                specimen_img = font_service.build_specimen(font_list_data)
                 if specimen_img: st.image(specimen_img, width='stretch')
                 else: st.info("フォントが見つかりません")
 
@@ -580,14 +578,14 @@ def _generate_preview(db, proj):
         f_key = f"{t}_font"
         f_name = styles.get(f_key)
         if f_name:
-            valid_path = ensure_font_file_exists(db, f_name)
+            valid_path = font_service.ensure_font_path(f_name)
             if valid_path: styles[f_key] = valid_path 
             
     v_text = getattr(proj, "venue_name", "") or getattr(proj, "venue", "") or ""
     d_text = format_event_date(proj.event_date, st.session_state.flyer_date_format)
     fallback_filename = st.session_state.get("flyer_fallback_font")
     if fallback_filename:
-        valid_fb = ensure_font_file_exists(db, fallback_filename)
+        valid_fb = font_service.ensure_font_path(fallback_filename)
         if valid_fb: fallback_filename = valid_fb
 
     subtitle_text = proj.subtitle or ""
