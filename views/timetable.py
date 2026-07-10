@@ -190,6 +190,35 @@ def _normalize_edited_rows(rows):
     return rows
 
 
+def _apply_editor_state_to_df(df, editor_state):
+    """data_editor の内部 state(edited_rows 差分)を df に適用した新 df を返す。
+
+    真因① 対策の「先取り確定」で使う。data_editor は入力 df が変わると保留中の
+    edited_rows をリセットするため、上流 widget の bump/rerun より前に、前 run の
+    セル編集を draft_rows へ確定するのに使用する。
+
+    num_rows="fixed" のため added_rows/deleted_rows は通常発生しない(行増減は ＋/削除
+    ボタン経由)。ここでは edited_rows(セル値差分)のみを扱う。
+    """
+    if not editor_state:
+        return df
+    edited = editor_state.get("edited_rows") or {}
+    if not edited:
+        return df
+    new_df = df.copy()
+    for row_idx, changes in edited.items():
+        try:
+            ri = int(row_idx)
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= ri < len(new_df)):
+            continue
+        for col, val in changes.items():
+            if col in new_df.columns:
+                new_df.at[ri, col] = val
+    return new_df
+
+
 def render_timetable_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("⏱️ タイムテーブル作成")
@@ -399,6 +428,24 @@ def render_timetable_page():
         # Phase 2B-2-b commit 2 まとまり①②:
         # draft_rows を render 全体で 1 回取得し、左右カラムで共有する。
         draft_rows = session_manager.get_draft_rows()
+
+        # Phase 5 fix(TT編集消失): セル編集の「先取り確定」。
+        # data_editor は入力 df が変わると保留 edited_rows をリセットする(真因①)。
+        # また上流 widget(add/sort/delete/開演前トグル)は _bump_editor_seq()+st.rerun()
+        # を後段同期(L511)より前に走らせて保留編集を破棄する(真因②)。
+        # → 上流 widget 群より前に、前 run の data_editor 編集を draft_rows へ確定しておく。
+        # この時点の tt_editor_key はまだ bump 前(=前 run の編集を保持する key)を指す。
+        # 変換順は後段 L511 と同一(df_to_draft_rows → _normalize)で冪等(二重適用にならない)。
+        _pending_key = f"tt_editor_{st.session_state.get('tt_editor_key', 0)}"
+        _pending = st.session_state.get(_pending_key)
+        if _pending and _pending.get("edited_rows"):
+            _seeded_df = _apply_editor_state_to_df(draft_rows_to_df(draft_rows), _pending)
+            _pending_rows = df_to_draft_rows(_seeded_df)
+            _normalize_edited_rows(_pending_rows)
+            if _pending_rows != draft_rows:
+                session_manager.set_draft_rows(_pending_rows)
+                draft_rows = _pending_rows
+                mark_dirty()
 
         col_ui_left, col_ui_right = st.columns([1, 2.5])
 
