@@ -5,7 +5,6 @@ import io
 import os
 import requests
 from datetime import datetime, date, timedelta
-from sqlalchemy import text # SQL実行用
 
 from database import get_db, SessionLocal, Artist, TimetableProject, AssetFile, Asset, get_image_url
 from constants import (
@@ -36,30 +35,6 @@ try:
 except Exception as e:
     import_error_msg = str(e)
     generate_timetable_image = None
-
-# --- DBマイグレーション（列追加）関数 ---
-def check_and_migrate_add_goods_columns(db):
-    """
-    timetable_rows テーブルに追加物販用のカラムが存在するか確認し、
-    なければ追加する（自動修復）
-    """
-    try:
-        columns_to_add = [
-            ("add_goods_start_time", "TEXT"),
-            ("add_goods_duration", "INTEGER"),
-            ("add_goods_place", "TEXT")
-        ]
-
-        for col_name, col_type in columns_to_add:
-            try:
-                db.execute(text(f"ALTER TABLE timetable_rows ADD COLUMN {col_name} {col_type}"))
-                db.commit()
-            except Exception:
-                db.rollback()
-                pass
-
-    except Exception as e:
-        print(f"Migration check error: {e}")
 
 # --- フォント確保関数 ---
 def ensure_font_exists(db, font_filename):
@@ -96,22 +71,6 @@ def ensure_font_exists(db, font_filename):
         print(f"Binary Font Write Error: {e}")
 
     return None
-
-
-# Phase 3 Fix2: check_and_migrate_add_goods_columns をプロセス 1 回のみに削減。
-# 本体ロジック (ALTER TABLE × 3 を duplicate column で握りつぶす冪等 DDL) は変更しない。
-# render_timetable_page は workspace の eager タブ描画で毎レンダ呼ばれるため、
-# 旧仕様だと 1 rerun あたり 3 DDL のラウンドトリップが発生していた。
-# @st.cache_resource で初回 1 回のみ実行、2 回目以降はキャッシュヒットで ~0ms に。
-# 完全撤去は将来の timetable.py 全面書き換え時に行う(壊さない優先)。
-@st.cache_resource
-def _ensure_goods_columns_migrated():
-    db = SessionLocal()
-    try:
-        check_and_migrate_add_goods_columns(db)
-    finally:
-        db.close()
-    return True
 
 
 # Phase 2B-2-b: editor key bump helper.
@@ -225,8 +184,6 @@ def render_timetable_page():
 
     db = next(get_db())
 
-    _ensure_goods_columns_migrated()
-    
     selected_id = None
     if "ws_active_project_id" in st.session_state and st.session_state.ws_active_project_id:
         selected_id = st.session_state.ws_active_project_id
