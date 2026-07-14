@@ -1317,6 +1317,95 @@ except:pass 撲滅 / 罠7 毎レンダ ALTER TABLE 撤去)。
 
 ---
 
+## 36. 段階A(Web API)事前調査: services の Streamlit 依存棚卸し(2026-07-14)
+
+★読むだけ★調査(コード変更ゼロ)。LINE Bot §11.7 段階A の見積り精度を上げるため、
+「API から services を叩くとき Streamlit(session_state / session_manager)にどこが縛られるか」を棚卸し。
+
+### 最大の発見: session_manager は「壁」でなく API が使わない並行レーン
+API はステートレスなので session_manager(draft/session_state モデル)を経由せず、綺麗な repo 層へ
+直接降りられる。session_manager(st参照49)/ legacy_adapter(28)/ logic_project.py(28・旧世代)は
+すべて UI 専用 → API は一切使わない。これが「見かけの重さ」の正体。
+
+### 仕分け(3バケツ)
+- ① そのまま API 化可(リファクタの成果):
+  - read 系 service 全部(asset / template / timetable / artist / font / project read)= Streamlit 非依存確認
+  - repo の write 全部(project_repo.update_project_from_draft / timetable_repo.save_rows /
+    artist_repo.* / template_repo.*)= db+データのみ・session_state 不使用
+  - grid 画像生成 generate_grid_image = 引数で全パラメータ受領済(パラメータ化済)
+  - 概要テキスト build_event_summary_text / flyer 合成 create_flyer_image_shadow(§35 で db も除去)= 純粋関数
+- ② 軽い手入れ:
+  - TT 画像生成 generate_timetable_image = 中に st.toast(L216)/ st.error(L281)が2つ埋まるのみ
+    (他の "st." は Artist. の grep 誤検出)→ 戻り値化で API 可
+  - project_service.list_projects_for_selector は @st.cache_data 付き → API は素の
+    project_repo.list_projects 直呼びで回避
+- ③ ステートレス再設計が要る(段階A の本当の作業):
+  - write オーケストレーション: save_active_project 等は session_manager 依存 → API は迂回し、
+    リクエスト JSON → ProjectDraft/rows を組んで repo write を直叩きする薄い関数を新設(機械的・中)
+  - flyer 生成オーケストレーション: _generate_preview が session_state から flyer_* を集める →
+    API 版は projects_v4.flyer_json + assets から styles を組む DB 駆動版を新設
+    (段階A 唯一の "新規ロジックらしい新規"・中)
+
+### 結論: 段階A は「中」(想定より軽い)
+リライトではなく「薄いラッパ + flyer 生成オーケストレーター1個」。3層リファクタで
+read / repo write / 画像生成 core が既に API-ready だった。最薄 MVP = read 系 + grid/TT/text
+生成トリガー(①②ほぼ素通し)から出し、write と flyer は後追い。B4(アー写更新・LIFF 不要)を
+最初の実運用機能に前倒しできる(§11.7)。
+
+### 段階A 着手時の Phase 0 で詰める点
+- ステートレス write 関数のシグネチャ(API payload → ProjectDraft/rows 変換の置き場)
+- flyer styles の DB 駆動 gather(FLYER_KEY_REGISTRY を session_state でなく flyer_json 起点に)
+- generate_timetable_image の st.toast/error 除去の可否(views 側へ戻り値で通知)
+- 認証 / 案件ID⇔LINEグループID テーブル / ホスティング(無料枠)選定
+
+---
+
+## 37. Phase 6: 罠7(毎レンダ ALTER TABLE)撤去 = TT 自動マイグレーション削除(2026-07-14)
+
+✅ views/timetable.py の check_and_migrate_add_goods_columns(timetable_rows に
+ALTER TABLE ADD COLUMN ×3 を起動時に走らせる自動マイグレーション)を完全撤去。
+本番反映済み(origin/main = b198ebe、本番3カラム存在を read-only SELECT で確認済み)。
+main 直コミット・単一コミット(純撤去・-43行)。
+
+- 背景: 罠7 は「毎レンダ ALTER TABLE」。Phase 3 Fix2(df1a52c)で @st.cache_resource による
+  プロセス1回化までは済んでいたが、関数自体の撤去は timetable.py 全面書き換え待ちで保留されていた。
+- 撤去(b198ebe): check_and_migrate_add_goods_columns / _ensure_goods_columns_migrated(cache ラッパ)/
+  render_timetable_page L228 の呼び出し / 未使用化した `from sqlalchemy import text` を削除。
+  SessionLocal は別箇所(temp_db)で使うため残置。
+- 安全確認(罠31): 3カラム(add_goods_start_time / add_goods_duration / add_goods_place)は
+  ORM(database.py TimetableRow L103-105)に定義済 → 新規 DB は create_all で作られる。本番は既存 →
+  scratch/check_goods_columns.py の read-only SELECT(information_schema.columns)で3カラム存在を確認
+  → ALTER は本番で既に no-op、撤去は挙動不変。
+- 検証: py_compile / timetable.py の ALTER・check_and_migrate・text grep 0件 / verify.sh スモーク緑
+  (TT タブ描画=撤去経路を直接通る)/ 実機テスト(TT 編集・保存)。冪等 no-op 撤去のため parity 非設置。
+- 残る render 経路の DDL は init_db の Base.metadata.create_all(CREATE TABLE IF NOT EXISTS・冪等・
+  @st.cache_resource で1回)のみ = 正当な初期化で罠7 の対象外。migrate.py(SQLite 手動スクリプト)は
+  render 経路外の旧世代物で今回対象外(別途整理候補)。
+
+---
+
+## 38. Phase 6: 裸 except(`except:`)撲滅 = except Exception 一律化(2026-07-14)
+
+✅ アプリ本体の裸 except 40箇所を `except Exception:` に一律置換。本番反映済み
+(origin/main = 7c6bc3b、verify.sh 緑・実機軽確認)。main 直コミット・単一コミット(12ファイル・40/40)。
+
+- 背景: 裸 except は KeyboardInterrupt/SystemExit/GeneratorExit まで飲み込む(Ctrl+C 無効化・
+  プロセス終了の握り潰し)。40箇所すべて「try: 危険処理 → except: フォールバック」の防御パターンで、
+  バグ隠しや特定例外に絞るべき箇所は無し(全件文脈確認済み)。
+- 方針: `except Exception:` へ一律絞り込み。通常例外(ValueError 等)の捕捉は完全に不変=挙動不変で、
+  KeyboardInterrupt/SystemExit だけ正しく伝播するようになる。ログ(可視化)は hot-path フォールバック
+  (フォント/色/JSON parse)にノイズを増やすため今回は入れず、意味のある失敗箇所だけ後で選別する別パスにする。
+- 実装(罠19/27 準拠: スクリプト+機械証明): scratch/fix_bare_except.py で行頭アンカー正規表現
+  `^(\s*)except\s*:` → `\1except Exception:`(コメント/文字列内の "except:" は行頭 except で始まらず
+  非マッチ=誤爆なし)。冪等(再実行で except Exception: は非マッチ)。
+- 機械証明: 置換前 40 → 後 0、全 .py py_compile 緑、git diff は 40挿入/40削除で「except を含まない
+  変更行=0件」を grep 確認(=except 行のみの変更)。内訳: flyer_generator 9 / flyer 8 / utils/__init__ 6 /
+  timetable 3 / logic_grid 3 / grid 2 / assets 2 / flyer_helpers 2 / logic_project 2 / projects 1 /
+  overview 1 / logic_timetable 1。tests/ は裸 except 0件で対象外。
+- 残タスク(将来・選別式): 意味のある失敗箇所への logger 追加(§11.3 の可視化)。hot-path 以外を対象に。
+
+---
+
 ## フェーズ計画 現在地(2026-07-14 時点)
 
 - **Phase 5(残りビュー移行)= ✅ 完全クローズ(2026-07-14)**: artists / grid(§24〜§28)/
@@ -1334,6 +1423,7 @@ except:pass 撲滅 / 罠7 毎レンダ ALTER TABLE 撤去)。
 - テスト基盤: AppTest スモーク導入済み(§23)。flyer 移行時の回帰土台。
 - 運用: main 直コミット(§27)。1コミット=1目的、Edit/Write は diff 提示→承認、
   push は谷内さんGO必須、本番データ保護モード厳守。
-- flyer 完了後 → Phase 6 残り(型ヒント / キャッシュ最適化 / except:pass 撲滅 /
-  罠7 毎レンダ ALTER TABLE 撤去)→ services 層の Web API 化(§11.7 段階A)→
-  LINE Bot(§11.7 段階B1〜B4)。
+- Phase 6 残り: 型ヒント / キャッシュ最適化(罠17: invalidation 設計とセット)。
+  **罠7 撤去は §37、裸 except 撲滅(40箇所→except Exception)は §38 で完了**。
+- 完了後 → services 層の Web API 化(§11.7 段階A・事前調査 §36 済=session_manager は API 迂回可・
+  「中」規模と判明)→ LINE Bot(§11.7 段階B1〜B4)。
