@@ -1287,11 +1287,42 @@ verify.sh / git add / commit / push は谷内さんの Mac ターミナルで実
 
 ---
 
+## 35. Phase 5 flyer F-db: 生成器デッド db 引数 + flyer db セッション撤去(2026-07-14)= Phase 5 完了
+
+✅ flyer.py の db を完全撤去。これで flyer ビューの db 全滅 → **Phase 5(残りビュー移行)完全クローズ**。
+本番反映済み(origin/main = 30a98d9、実機テスト合格=プレビュー画像 grid/tt 生成確認)。
+main 直コミット・単一コミット(純デッドコード撤去のため inert 不要)。
+
+- 発見: create_flyer_image_shadow(db, ...) の db は signature のみで本体未使用=デッド引数
+  (生成器全体で db grep が def 行1件のみ)。フォントパス解決は F-C(§30)で font_service へ移済み
+  → 生成器に db 依存はもう無かった(§34 申し送りの「font パス事前解決」は F-C で実質完了済みだった)。
+- 撤去(30a98d9):
+  - utils/flyer_generator.py: create_flyer_image_shadow の第1引数 db を削除
+    (呼び出し元は flyer.py のみ・横断 grep 確認)
+  - flyer.py: db=next(get_db())/db.close() 撤去、_generate_preview(db,proj)→(proj)(def+呼び出し3)、
+    生成器呼び出しの db=db 撤去(grid/tt 2箇所)、get_db import 撤去(get_image_url は残置)、
+    stale コメント2件(L73 の残置理由・L413「別 db セッション」)を撤去/DTO 前提に更新(罠24)。
+- 挙動不変: db は誰も読んでいなかったため出力は完全に同一。session の open/close が消え、
+  flyer レンダあたり DB コネクション1本分の固定費が減る副次効果のみ。
+- 検証: py_compile / flyer.py・generator の db grep 0件 / verify.sh スモーク緑 /
+  実機テストでプレビュー生成(グリッド版・TT版)の画像出力を確認。デッドコード撤去のため
+  offline parity は非設置。
+
+### Phase 5 総括(2026-07-14 クローズ)
+残りビュー移行(artists / grid / flyer)を完了。DB=SSOT・3層(view→service→repo→model)・
+read は DTO で返す・repo は commit しない・session と commit/rollback 境界は service が所有、
+の規律を全ビューに適用しきった。flyer は F-rows / F-C / F-asset / F-proj / F-tmpl / F-db の
+6スライスで db.query を全滅。次の主戦場は Phase 6 残り(型ヒント / キャッシュ最適化 /
+except:pass 撲滅 / 罠7 毎レンダ ALTER TABLE 撤去)。
+
+---
+
 ## フェーズ計画 現在地(2026-07-14 時点)
 
-- **Phase 5(残りビュー移行)**: artists **完了** / grid **完全クローズ完了**(§24〜§28)/
-  **flyer: F-rows(§29)+ F-C(§30)+ F-asset(§31)+ F-proj(§33)+ F-tmpl(§34)完了**(commit b26c2bc /
-  df26219 / 6858785 / 61ca4ad / e159c46、本番反映済み)。flyer 残り = **F-db**(db セッション撤去のみ)。
+- **Phase 5(残りビュー移行)= ✅ 完全クローズ(2026-07-14)**: artists / grid(§24〜§28)/
+  flyer 全スライス完了。flyer = F-rows(§29)/ F-C(§30)/ F-asset(§31)/ F-proj(§33)/ F-tmpl(§34)/
+  F-db(§35)(commit b26c2bc / df26219 / 6858785 / 61ca4ad / e159c46 / 30a98d9、本番反映済み)。
+  **flyer ビュー db 全滅。次の主戦場は Phase 6 残り**。
 - **別件バグ修正(完了)**: TT エディタ「2回目の編集が消える」を根治(§32、commit 945d422、
   本番反映済み・実機テスト合格)。flyer 移行とは別トラック。回帰網 tests/test_tt_editor_repro.py 追加。
 - flyer の論点(Phase 0 で確定予定): flyer_json の動的キー30+、罠18(widget SSOT・
