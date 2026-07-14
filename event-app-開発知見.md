@@ -1205,11 +1205,93 @@ sort_items 等のカスタムコンポーネント(streamlit_sortables)は AppTe
 
 ---
 
-## フェーズ計画 現在地(2026-07-10 時点)
+## 33. Phase 5 flyer F-proj: proj read の service 化(2026-07-14)
+
+✅ flyer.py の proj read(TimetableProject 直読み)を service 経由の読み取り専用 DTO へ移行。
+本番反映済み(origin/main = 61ca4ad、実機テスト合格)。main 直コミット・2コミット
+(inert b2bbf98 → replace 61ca4ad)。
+
+- inert(b2bbf98): 生値ミラーの読み取り専用 DTO ProjectView(frozen, 13 フィールド)を
+  models/project.py に新設。project_repo に to_flyer_view(生値 verbatim コピー)+
+  get_project_view(未検出 None・commit しない read)、project_service に
+  get_project_flyer_view(自前セッション open→map→close、ORM を外に出さない・
+  意図的に非キャッシュ=直読みと同じ最新性)を追加。既存経路は無改造 → 動作不変。
+- replace(61ca4ad): flyer.py L75 db.query(TimetableProject).first() →
+  project_service.get_project_flyer_view(project_id)。未使用化した TimetableProject
+  import を撤去(grep 0件)。db=next(get_db()) と _generate_preview(db, proj) は温存
+  (proj は DTO になるだけ・属性 read のみで透過)。
+- 設計判断(合意済み): 既存 ProjectDraft(編集用・to_draft で JSON 展開)は非流用。
+  流用すると event_date が str→date、open_time が二重整形、tickets/grid が decoded 構造に
+  なり byte-parity が崩れるため。ProjectView は「生値素通し」で flyer 側の json.loads /
+  format_time_str / format_event_date をそのまま残し parity を保証(grid B1 §26 / F-rows §29 と同規律)。
+- venue 注意: flyer L584 の getattr(proj,"venue","") は ORM に venue カラムが無く常に ""。
+  DTO も venue フィールドを持たない → getattr 既定値 "" で同挙動(足さない・式を変えない)。
+- read escape: proj は build_event_summary_text へは「値」を渡すだけ(ORM 本体は渡さない)。
+  _generate_preview(db, proj) には proj を渡すが属性 read のみ・書き込み/再クエリ無し
+  = read→write 結合なし(grid と同型)。書き込みは save_active_project(session_state 駆動)で別系。
+- 検証: scratch/verify_flyer_proj_parity.py で消費値 byte 一致を5形状
+  (full / all_none / empty_str / malformed_json / grid_no_order_key)で機械証明・PARITY_ALL_GREEN
+  (DB 非書き込み・DB 非依存 = models/project.py をファイル直ロードし __init__/DB import を回避)。
+  py_compile COMPILE_OK、flyer.py の TimetableProject grep 0件、AppTest スモーク2本緑
+  (test_smoke_all_tabs が flyer タブを新経路で例外ゼロ描画)。実機テスト合格
+  (会場/日付/サブタイトル/チケット/出演者並び/プレビュー/ZIP が従来通り)。
+- F-tmpl / F-db への申し送り: flyer.py L74 の db セッションは FlyerTemplate CRUD(F-tmpl)と
+  _generate_preview→生成器 db=db(F-db)がまだ使うため温存。F-proj 後に flyer.py が db を使うのは
+  この2用途のみ。db 撤去は F-tmpl(write 移行・template.py 同時)→ F-db(生成器 db 依存を
+  font パス事前解決へ)の順。
+
+### 罠35(環境): Cowork/リモートの Linux VM から Mac の .venv・git は直接使えない
+Cowork の device_bash は Linux VM で動くため、(1)macOS ビルドの .venv を exec 不可
+(→ pytest / verify.sh は谷内さんの Mac ターミナルで実行)、(2)VM から接続フォルダの .git へ
+commit するとファイル削除不可で index.lock / tmp オブジェクトが残置し、かつ identity 未設定で
+fail(auto-detect した rcw-... は不正)。→ 対処: ファイル編集は VM 側で行い Mac へ書き戻す。
+verify.sh / git add / commit / push は谷内さんの Mac ターミナルで実行(この分担が正)。
+残置した index.lock は Mac で `rm -f .git/index.lock`、tmp は `find .git/objects -name 'tmp_obj_*' -delete`
+で掃除。DB 非依存の parity 検証は models 単体をファイル直ロードすれば VM の system python3 で回せる。
+
+---
+
+## 34. Phase 5 flyer F-tmpl: テンプレート CRUD の service 化(2026-07-14)
+
+✅ flyer.py と template.py(テンプレート管理ページ)の FlyerTemplate CRUD を新設 template
+ドメイン(3層)へ移行。本番反映済み(origin/main = e159c46、実機テスト合格=create/同名エラー/
+読込/上書き/一覧/名前更新/削除)。main 直コミット・2コミット(inert 87442e3 → replace e159c46)。
+
+- inert(87442e3): template ドメイン3層を新設(誰も呼ばない)。
+  - models/template.py: TemplateView(frozen DTO: id/name/data_json/created_at・data_json は素通し)
+  - repositories/template_repo.py: list_templates(created_at desc)/get_by_name/create(add+flush)/
+    update_data/rename/delete。commit しない・read は DTO で返す。is_deleted 列が無いため delete は
+    物理削除(現行 template.py 挙動を維持)
+  - services/template_service.py: list_templates/create_template(同名 False)/update_template_data
+    (created_at も now 更新)/rename_template/delete_template。SessionLocal 所有・commit/rollback を握る・
+    streamlit 非 import(画面非依存 §11.3)。created_at 形式 "%Y-%m-%d %H:%M:%S" を service で維持
+- replace(e159c46): flyer.py と template.py を同時に service 化(①合意=commit 境界二重化回避)。
+  - flyer.py: 一覧 db.query→list_templates、上書き→update_template_data、新規→create_template
+    (同名チェック内包)。読込は target_t(DTO)の data_json を読むだけで従来通り(DB write 無し)。
+    FlyerTemplate/datetime import 撤去。db は _generate_preview 専用に縮小し L73 コメントも更新(罠24)
+  - template.py: 一覧→list_templates、名前更新→rename_template、削除→delete_template。
+    get_db/FlyerTemplate/json/datetime import を全撤去(db セッションを view から一掃)
+- 意図的差分: flyer.py の一覧順が Python sort(None 末尾)→ SQL ORDER BY created_at DESC(NULL 先頭)に。
+  created_at は create/update 経路で必ず設定されるため実データ差は無く、template.py の既存 SQL 順に整合。
+  新規作成失敗メッセージは「同名が存在します」に集約(旧: 同名は明示チェック・他例外は crash → service で
+  例外も graceful に False+log 化。実質は同名時のみ発火)。
+- 罠22 の再確認: flyer_templates.data_json(再利用プリセット)は projects_v4.flyer_json(F-proj)とは
+  別テーブル・別責務。service は data_json を解釈せず素通し。
+- 検証: py_compile / flyer.py・template.py の FlyerTemplate・db.query grep 0件 / verify.sh スモーク緑
+  (flyer タブのテンプレ一覧が新経路描画。※書き込み・管理ページはスモーク対象外)/ 実機テストで
+  create→同名エラー→読込→上書き→名前更新→削除を通し確認(テスト用テンプレ)。書き込み移行のため
+  offline byte-parity 証明は非設置(DB 依存の commit/dup/delete は実機で検証=②a 合意)。
+- F-db への申し送り: これで flyer.py の db(next(get_db()))は _generate_preview→
+  create_flyer_image_shadow の db=db 専用。F-db = 生成器の db 依存(フォントパス解決等)を事前解決へ
+  置換し、flyer.py の db セッション(next(get_db())/db.close())を撤去=flyer ビュー db 全滅で完了。
+
+---
+
+## フェーズ計画 現在地(2026-07-14 時点)
 
 - **Phase 5(残りビュー移行)**: artists **完了** / grid **完全クローズ完了**(§24〜§28)/
-  **flyer: F-rows(§29)+ F-C(§30)+ F-asset(§31)完了**(commit b26c2bc / df26219 / 6858785、
-  本番反映済み)。flyer 残り = **F-proj / F-tmpl / F-db**。
+  **flyer: F-rows(§29)+ F-C(§30)+ F-asset(§31)+ F-proj(§33)+ F-tmpl(§34)完了**(commit b26c2bc /
+  df26219 / 6858785 / 61ca4ad / e159c46、本番反映済み)。flyer 残り = **F-db**(db セッション撤去のみ)。
 - **別件バグ修正(完了)**: TT エディタ「2回目の編集が消える」を根治(§32、commit 945d422、
   本番反映済み・実機テスト合格)。flyer 移行とは別トラック。回帰網 tests/test_tt_editor_repro.py 追加。
 - flyer の論点(Phase 0 で確定予定): flyer_json の動的キー30+、罠18(widget SSOT・
