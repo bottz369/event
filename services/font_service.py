@@ -28,8 +28,13 @@ from repositories import font_repo
 from utils import get_sorted_font_list, create_font_specimen_img
 from utils.flyer_helpers import ensure_font_file_exists
 
+from typing import TYPE_CHECKING, List, Optional
 
-def list_sorted_fonts():
+if TYPE_CHECKING:
+    from PIL import Image
+
+
+def list_sorted_fonts() -> List[dict]:
     """フォント一覧(dict list)を返す。own_db を共用 helper に渡すだけ(helper 無改造)。"""
     db = SessionLocal()
     try:
@@ -38,7 +43,7 @@ def list_sorted_fonts():
         db.close()
 
 
-def build_specimen(font_dicts):
+def build_specimen(font_dicts: List[dict]) -> "Image.Image":
     """フォント見本画像(PIL.Image)を返す。own_db を共用 helper に渡すだけ(helper 無改造)。"""
     db = SessionLocal()
     try:
@@ -47,7 +52,7 @@ def build_specimen(font_dicts):
         db.close()
 
 
-def ensure_font_path(filename):
+def ensure_font_path(filename: str) -> Optional[str]:
     """フォントを FS に確保し、その絶対パス(str)を返す。無ければ None。
 
     own_db を共用 helper utils.flyer_helpers.ensure_font_file_exists(db, filename) に
