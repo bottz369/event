@@ -3,7 +3,6 @@ import io
 import json
 import zipfile
 import os
-from datetime import datetime
 
 # ★画像座標取得用コンポーネント
 try:
@@ -12,12 +11,12 @@ try:
 except ImportError:
     HAS_CLICK_COORD = False
 
-from database import get_db, get_image_url, FlyerTemplate
+from database import get_db, get_image_url
 from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str
 from utils.flyer_generator import create_flyer_image_shadow
 from models.flyer_keys import FLYER_KEY_REGISTRY
-from services import project_service, session_manager, timetable_service, font_service, asset_service
+from services import project_service, session_manager, timetable_service, font_service, asset_service, template_service
 
 # ==========================================
 # 設定データの収集関数
@@ -71,8 +70,8 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
 # メイン画面描画
 # ==========================================
 def render_flyer_editor(project_id):
-    # db は FlyerTemplate CRUD と _generate_preview 用に残す(F-tmpl / F-db で撤去予定)。
-    # proj の read は service 経由へ移行し、ORM ではなく ProjectView(DTO)を受ける。
+    # db は _generate_preview(生成器 create_flyer_image_shadow の db=db)用にのみ残る
+    # (F-db で font パス事前解決へ移して撤去予定)。proj/template の read・write は service 化済み。
     db = next(get_db())
     proj = project_service.get_project_flyer_view(project_id)
     
@@ -261,8 +260,7 @@ def render_flyer_editor(project_id):
     with c_conf:
         # テンプレート管理
         with st.expander("📂 テンプレート管理 (読込/保存)", expanded=False):
-            templates = db.query(FlyerTemplate).all()
-            templates.sort(key=lambda x: x.created_at or "", reverse=True) 
+            templates = template_service.list_templates()  # created_at 降順(repo が ORDER BY DESC)
             t_options = ["(選択してください)"] + [t.name for t in templates]
             
             sel_template = st.selectbox("保存済みテンプレート", t_options)
@@ -295,13 +293,11 @@ def render_flyer_editor(project_id):
                             except Exception as e: st.error(f"読込エラー: {e}")
                 with c_t2:
                     if st.button("変更を保存 (上書き)", width='stretch'):
-                        target_t = next((t for t in templates if t.name == sel_template), None)
-                        if target_t:
-                            save_data = gather_flyer_settings_from_session()
-                            target_t.data_json = json.dumps(save_data)
-                            target_t.created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            db.commit()
+                        save_data = gather_flyer_settings_from_session()
+                        if template_service.update_template_data(sel_template, json.dumps(save_data)):
                             st.toast(f"テンプレート「{sel_template}」を更新しました！", icon="💾")
+                        else:
+                            st.error("テンプレートの更新に失敗しました")
 
             st.divider()
             c_save1, c_save2 = st.columns([3, 1])
@@ -310,15 +306,12 @@ def render_flyer_editor(project_id):
                 if st.button("新規保存", width='stretch'):
                     if not new_t_name: st.error("名前を入力してください")
                     else:
-                        existing = db.query(FlyerTemplate).filter(FlyerTemplate.name == new_t_name).first()
-                        if existing: st.error("同名のテンプレートが存在します")
-                        else:
-                            save_data = gather_flyer_settings_from_session()
-                            new_tmpl = FlyerTemplate(name=new_t_name, data_json=json.dumps(save_data), created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                            db.add(new_tmpl)
-                            db.commit()
+                        save_data = gather_flyer_settings_from_session()
+                        if template_service.create_template(new_t_name, json.dumps(save_data)):
                             st.toast(f"テンプレート「{new_t_name}」を保存しました！", icon="💾")
                             st.rerun()
+                        else:
+                            st.error("同名のテンプレートが存在します")
 
         with st.expander("🖼️ 基本設定", expanded=True):
             render_visual_selector("背景画像", bgs, "flyer_bg_id", st.session_state.flyer_bg_id)

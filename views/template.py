@@ -1,17 +1,13 @@
 import streamlit as st
-import json
-from datetime import datetime
-from database import get_db, FlyerTemplate
+from services import template_service
 
 def render_template_management_page():
     st.title("📂 テンプレート管理")
     st.caption("保存済みのフライヤーデザイン設定を確認・編集・削除できます。")
 
-    db = next(get_db())
-    
     # テンプレート一覧を取得 (新しい順)
     try:
-        templates = db.query(FlyerTemplate).order_by(FlyerTemplate.created_at.desc()).all()
+        templates = template_service.list_templates()
     except Exception as e:
         st.error(f"データ取得エラー: {e}")
         templates = []
@@ -19,7 +15,6 @@ def render_template_management_page():
     if not templates:
         st.info("保存されたテンプレートはありません。")
         st.markdown("※ フライヤー作成画面から「テンプレートとして保存」を行うとここに表示されます。")
-        db.close()
         return
 
     st.markdown(f"**保存済み: {len(templates)} 件**")
@@ -29,14 +24,14 @@ def render_template_management_page():
         # カード型のデザイン
         with st.container(border=True):
             col_main, col_action = st.columns([3, 1])
-            
+
             with col_main:
                 c1, c2 = st.columns([2, 1])
                 with c1:
                     # 名前編集用の入力欄
                     new_name = st.text_input(
-                        "テンプレート名", 
-                        value=tmpl.name, 
+                        "テンプレート名",
+                        value=tmpl.name,
                         key=f"tmpl_name_{tmpl.id}",
                         label_visibility="collapsed"
                     )
@@ -51,13 +46,14 @@ def render_template_management_page():
                 # 更新ボタン
                 if st.button("名前を更新", key=f"upd_{tmpl.id}", width='stretch'):
                     if new_name:
-                        tmpl.name = new_name
-                        db.commit()
-                        st.toast(f"テンプレート名を「{new_name}」に更新しました！", icon="✅")
-                        # 反映のためにリロード
-                        import time
-                        time.sleep(1)
-                        st.rerun()
+                        if template_service.rename_template(tmpl.id, new_name):
+                            st.toast(f"テンプレート名を「{new_name}」に更新しました！", icon="✅")
+                            # 反映のためにリロード
+                            import time
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("更新に失敗しました")
                     else:
                         st.error("名前を入力してください")
 
@@ -65,11 +61,10 @@ def render_template_management_page():
 
                 # 削除ボタン
                 if st.button("🗑 削除", key=f"del_{tmpl.id}", type="primary", width='stretch'):
-                    db.delete(tmpl)
-                    db.commit()
-                    st.toast("テンプレートを削除しました", icon="🗑")
-                    import time
-                    time.sleep(1)
-                    st.rerun()
-
-    db.close()
+                    if template_service.delete_template(tmpl.id):
+                        st.toast("テンプレートを削除しました", icon="🗑")
+                        import time
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("削除に失敗しました")
