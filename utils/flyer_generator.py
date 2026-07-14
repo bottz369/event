@@ -300,7 +300,7 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
 # ==========================================
 # 3. フライヤー生成関数 (メインロジック)
 # ==========================================
-def create_flyer_image_shadow(db, bg_source, logo_source, main_source, styles,
+def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
                               date_text, venue_text, subtitle_text,
                               open_time, start_time,
                               ticket_info_list, common_notes_list,

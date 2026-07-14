@@ -11,7 +11,7 @@ try:
 except ImportError:
     HAS_CLICK_COORD = False
 
-from database import get_db, get_image_url
+from database import get_image_url
 from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str
 from utils.flyer_generator import create_flyer_image_shadow
@@ -70,9 +70,6 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
 # メイン画面描画
 # ==========================================
 def render_flyer_editor(project_id):
-    # db は _generate_preview(生成器 create_flyer_image_shadow の db=db)用にのみ残る
-    # (F-db で font パス事前解決へ移して撤去予定)。proj/template の read・write は service 化済み。
-    db = next(get_db())
     proj = project_service.get_project_flyer_view(project_id)
     
     logos = asset_service.list_assets_by_type("logo")
@@ -185,7 +182,7 @@ def render_flyer_editor(project_id):
 
                 # Phase 2B-1c-①: 座標クリックによる即時 DB commit を廃止。
                 # 編集は session_state に留め、DB 反映は保存ボタン押下時のみ。
-                _generate_preview(db, proj)
+                _generate_preview(proj)
 
     if HAS_CLICK_COORD:
         process_click_if_exists("coord_grid")
@@ -413,8 +410,8 @@ def render_flyer_editor(project_id):
                 st.toast("設定を保存しました", icon="✅")
                 # 副作用: プレビュー画像生成 (session_state.flyer_result_* に格納)。
                 # _generate_preview は proj.flyer_json を読まず session_state を直接
-                # 参照するので、別 db セッションの proj が stale でも問題なし。
-                _generate_preview(db, proj)
+                # 参照するので、save 前に取得した proj(DTO)が stale でも問題なし。
+                _generate_preview(proj)
             else:
                 st.error("保存に失敗しました")
 
@@ -455,7 +452,7 @@ def render_flyer_editor(project_id):
 
                 # Phase 2B-1c-①: 座標クリックによる即時 DB commit を廃止。
                 # 編集は session_state に留め、DB 反映は保存ボタン押下時のみ。
-                _generate_preview(db, proj)
+                _generate_preview(proj)
 
         if HAS_CLICK_COORD:
             pass
@@ -551,10 +548,8 @@ def render_flyer_editor(project_id):
                         st.download_button("⬇️ ZIPをダウンロード", zip_buffer.getvalue(), f"flyer_assets_{proj.id}.zip", "application/zip")
                     except Exception as e: st.error(f"ZIP生成エラー: {e}")
 
-    db.close()
-
 # プレビュー生成ロジック
-def _generate_preview(db, proj):
+def _generate_preview(proj):
     bg_url = None
     if st.session_state.flyer_bg_id:
         asset = asset_service.get_asset_view(st.session_state.flyer_bg_id)
@@ -600,7 +595,7 @@ def _generate_preview(db, proj):
             s_grid["content_pos_y"] = st.session_state.flyer_grid_pos_y 
             
             img, meta = create_flyer_image_shadow(
-                db=db, bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
+                bg_source=bg_url, logo_source=logo_url, main_source=grid_src,
                 styles=s_grid, date_text=d_text, venue_text=v_text, subtitle_text=subtitle_text,
                 open_time=format_time_str(proj.open_time), start_time=format_time_str(proj.start_time),
                 ticket_info_list=tickets, common_notes_list=notes, system_fallback_filename=fallback_filename 
@@ -616,7 +611,7 @@ def _generate_preview(db, proj):
             s_tt["content_pos_y"] = st.session_state.flyer_tt_pos_y 
             
             img_tt, _ = create_flyer_image_shadow(
-                db=db, bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
+                bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
                 styles=s_tt, date_text=d_text, venue_text=v_text, subtitle_text=subtitle_text,
                 open_time=format_time_str(proj.open_time), start_time=format_time_str(proj.start_time),
                 ticket_info_list=tickets, common_notes_list=notes, system_fallback_filename=fallback_filename 
