@@ -307,7 +307,7 @@ def render_overview_page():
                             raw_order = grid_data.get("order", [])
                         elif isinstance(grid_data, list):
                             raw_order = grid_data
-                    except:
+                    except Exception:
                         pass
             
             if not raw_order and rows:

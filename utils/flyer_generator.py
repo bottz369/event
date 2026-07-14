@@ -40,7 +40,7 @@ def is_glyph_available(font, char):
     try:
         mask = font.getmask(char)
         return not (mask.size[0] == 0 or mask.size[1] == 0)
-    except: return True 
+    except Exception: return True 
 
 def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
     x, y = xy
@@ -62,7 +62,7 @@ def draw_text_mixed(draw, xy, text, primary_font, fallback_font, fill):
             draw.text((current_x, y), char, font=use_font, fill=fill)
         
         try: advance = use_font.getlength(char)
-        except: advance = char_w
+        except Exception: advance = char_w
         
         current_x += advance
         total_w += advance
@@ -101,12 +101,12 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     def load_fonts(size):
         try:
             p_font = ImageFont.truetype(font_path, size) if font_path and os.path.exists(font_path) else ImageFont.load_default()
-        except:
+        except Exception:
             p_font = ImageFont.load_default()
         f_font = p_font 
         if fallback_font_path and os.path.exists(fallback_font_path):
             try: f_font = ImageFont.truetype(fallback_font_path, size)
-            except: pass
+            except Exception: pass
         return p_font, f_font
 
     primary_font, fallback_font = load_fonts(current_size)
@@ -138,7 +138,7 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
     
     if shadow_on:
         try: s_rgb = ImageColor.getrgb(shadow_color)
-        except: s_rgb = (0, 0, 0)
+        except Exception: s_rgb = (0, 0, 0)
         s_color_with_alpha = s_rgb + (int(shadow_opacity),)
         
         shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
@@ -200,11 +200,11 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     shadow_opacity = safe_val(shadow_opacity)
     
     try: primary_font = font
-    except: primary_font = ImageFont.load_default()
+    except Exception: primary_font = ImageFont.load_default()
     fallback_font = primary_font
     if fallback_font_path and os.path.exists(fallback_font_path):
         try: fallback_font = ImageFont.truetype(fallback_font_path, int(font_size_px))
-        except: pass
+        except Exception: pass
 
     dummy = ImageDraw.Draw(Image.new("RGBA", (1,1)))
     w_label, h_label = draw_text_mixed(dummy, (0,0), label, primary_font, fallback_font, fill_color)
@@ -252,7 +252,7 @@ def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, m
     
     if shadow_on:
         try: s_rgb = ImageColor.getrgb(shadow_color)
-        except: s_rgb = (0,0,0)
+        except Exception: s_rgb = (0,0,0)
         s_color_with_alpha = s_rgb + (int(shadow_opacity),)
         
         shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0,0,0,0))
@@ -477,7 +477,7 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
     # (3) Time
     s = get_s("time")
     try: time_font = ImageFont.truetype(s["font_path"], int(s["font_size_px"]))
-    except: time_font = ImageFont.load_default()
+    except Exception: time_font = ImageFont.load_default()
     tri_visible = styles.get("time_tri_visible", True)
     tri_scale = styles.get("time_tri_scale", 1.0)
     line_gap = styles.get("time_line_gap", 0)

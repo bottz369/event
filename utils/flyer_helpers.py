@@ -110,7 +110,7 @@ def format_event_date(dt_obj, mode="EN"):
                     break
                 except ValueError:
                     continue
-        except:
+        except Exception:
             return str(dt_obj)
     try:
         if mode == "JP":
@@ -128,4 +128,4 @@ def format_time_str(t_val):
     if not t_val or t_val == 0 or t_val == "0": return ""
     if isinstance(t_val, str): return t_val[:5]
     try: return t_val.strftime("%H:%M")
-    except: return str(t_val)
+    except Exception: return str(t_val)

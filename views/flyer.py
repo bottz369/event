@@ -88,17 +88,17 @@ def render_flyer_editor(project_id):
     tickets = []
     if getattr(proj, "tickets_json", None):
         try: tickets = json.loads(proj.tickets_json)
-        except: pass
+        except Exception: pass
     
     notes = []
     if getattr(proj, "ticket_notes_json", None):
         try: notes = json.loads(proj.ticket_notes_json)
-        except: pass
+        except Exception: pass
     
     free_texts = []
     if getattr(proj, "free_text_json", None):
         try: free_texts = json.loads(proj.free_text_json)
-        except: pass
+        except Exception: pass
 
     st.subheader("📑 フライヤー生成 (Custom V6 - Click & Move)")
 
@@ -106,7 +106,7 @@ def render_flyer_editor(project_id):
     saved_config = {}
     if getattr(proj, "flyer_json", None):
         try: saved_config = json.loads(proj.flyer_json)
-        except: pass
+        except Exception: pass
 
     # Session State 初期化
     # Phase 2B-1c-②a (P1): None も「未初期化」として扱う。
@@ -499,14 +499,14 @@ def render_flyer_editor(project_id):
             if st.session_state.get("grid_order"): raw_order = st.session_state.grid_order
             elif proj.grid_order_json:
                 try: raw_order = json.loads(proj.grid_order_json).get("order", [])
-                except: pass
+                except Exception: pass
             if not raw_order and rows: raw_order = [r.artist_name for r in rows]
             
             for name in raw_order:
                 if name in ["開演前物販", "終演後物販"]: continue
                 if hidden_map.get(name, False): continue
                 filtered_artists.append(name)
-        except: filtered_artists = st.session_state.get("grid_order", [])
+        except Exception: filtered_artists = st.session_state.get("grid_order", [])
 
         summary_text = build_event_summary_text(
             title=proj.title, subtitle=proj.subtitle, date_val=proj.event_date,
@@ -582,9 +582,9 @@ def _generate_preview(proj):
     
     tickets = []; notes = []
     try: tickets = json.loads(proj.tickets_json)
-    except: pass
+    except Exception: pass
     try: notes = json.loads(proj.ticket_notes_json)
-    except: pass
+    except Exception: pass
 
     with st.spinner("生成中..."):
         grid_src = st.session_state.get("last_generated_grid_image")

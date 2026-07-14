@@ -124,7 +124,7 @@ def render_grid_page():
             # 生成に渡す値は行数(new_rows)に合わせてローカル整形する（SSOT には焼き戻さない）。
             try:
                 parsed_counts = [int(x.strip()) for x in st.session_state.grid_row_counts_str.split(",") if x.strip()]
-            except:
+            except Exception:
                 st.error("数値とカンマで入力してください")
                 parsed_counts = [5] * new_rows
 
@@ -299,7 +299,7 @@ def generate_grid_image_buffer(artists, cols, rows, font_path, alignment, layout
     try:
         try:
             parsed_counts = [int(x.strip()) for x in row_counts_str.split(",") if x.strip()]
-        except:
+        except Exception:
             parsed_counts = [5] * rows
 
         is_brick = (layout_mode == "レンガ (サイズ統一)")

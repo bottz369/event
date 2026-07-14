@@ -15,7 +15,7 @@ def parse_json_safe(data, default_val):
     if isinstance(data, str):
         try:
             return json.loads(data)
-        except:
+        except Exception:
             return default_val
     return default_val
 
@@ -139,7 +139,7 @@ def load_project_data(db, project_id):
                 st.session_state.proj_date = proj.event_date
             else:
                 st.session_state.proj_date = datetime.datetime.strptime(str(proj.event_date), "%Y-%m-%d").date()
-        except:
+        except Exception:
             st.session_state.proj_date = None
     else:
         st.session_state.proj_date = None

@@ -52,7 +52,7 @@ def crop_smart(pil_img):
         open_cv_image = np.array(pil_img.convert('RGB')) 
         open_cv_image = open_cv_image[:, :, ::-1].copy() 
         face_y = get_face_center_y_from_cv_img(open_cv_image)
-    except:
+    except Exception:
         face_y = None
     
     crop_width = TILE_WIDTH
@@ -133,7 +133,7 @@ def create_no_image_placeholder(width, height):
     draw = ImageDraw.Draw(img)
     text = "No Image"
     try: font = ImageFont.load_default()
-    except: pass
+    except Exception: pass
     
     draw.rectangle([(10, 10), (width-10, height-10)], outline=(100, 100, 100), width=2)
     bbox = draw.textbbox((0, 0), text)
@@ -146,7 +146,7 @@ def load_image_from_url(url):
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         return Image.open(BytesIO(response.content)).convert("RGBA")
-    except:
+    except Exception:
         return None
 
 

@@ -57,7 +57,7 @@ def render_projects_page():
                             key=f"dl_tt_{proj.id}",
                             width='stretch'
                         )
-                    except:
+                    except Exception:
                         st.warning("タイムテーブルデータが不完全です")
 
                 # 4. 削除ボタン (確認付き)

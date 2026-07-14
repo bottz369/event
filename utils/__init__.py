@@ -27,7 +27,7 @@ def safe_int(val, default=0):
         if pd.isna(val) or str(val).strip() == "" or str(val).lower() in ["nan", "none"]:
             return default
         return int(float(val))
-    except:
+    except Exception:
         return default
 
 def safe_str(val):
@@ -40,7 +40,7 @@ def add_minutes(time_str, minutes):
         t = datetime.strptime(str(time_str), "%H:%M")
         t += timedelta(minutes=int(minutes))
         return t.strftime("%H:%M")
-    except:
+    except Exception:
         return str(time_str)
 
 def get_duration_minutes(start_str, end_str):
@@ -49,7 +49,7 @@ def get_duration_minutes(start_str, end_str):
         e = datetime.strptime(str(end_str), "%H:%M")
         diff = e - s
         return int(diff.total_seconds() / 60)
-    except:
+    except Exception:
         return 0
 
 # =========================================================
@@ -62,7 +62,7 @@ def create_font_preview(text, font_path, size=50):
         dummy_img = Image.new("RGBA", (10, 10), (0,0,0,0))
         dummy_draw = ImageDraw.Draw(dummy_img)
         try: font = ImageFont.truetype(font_path, size)
-        except: font = ImageFont.load_default()
+        except Exception: font = ImageFont.load_default()
         
         bbox = dummy_draw.textbbox((0, 0), text, font=font)
         width = bbox[2] - bbox[0] + 40
@@ -423,7 +423,7 @@ def create_business_pdf(df, title, event_date, venue):
     elements = []
     font_name = 'HeiseiKakuGo-W5'
     try: pdfmetrics.registerFont(UnicodeCIDFont(font_name))
-    except: font_name = 'Helvetica'
+    except Exception: font_name = 'Helvetica'
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle('Title', parent=styles['Title'], fontName=font_name, fontSize=18, spaceAfter=20)
@@ -475,7 +475,7 @@ def create_event_summary_pdf(project):
     # フォント設定
     font_name = 'HeiseiKakuGo-W5'
     try: pdfmetrics.registerFont(UnicodeCIDFont(font_name))
-    except: font_name = 'Helvetica'
+    except Exception: font_name = 'Helvetica'
     
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle('Title', parent=styles['Title'], fontName=font_name, fontSize=20, spaceAfter=20)

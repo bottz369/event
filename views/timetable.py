@@ -207,7 +207,7 @@ def render_timetable_page():
             if proj:
                 st.session_state.tt_title = proj.title
                 try: st.session_state.tt_event_date = datetime.strptime(proj.event_date, "%Y-%m-%d").date() if proj.event_date else date.today()
-                except: st.session_state.tt_event_date = date.today()
+                except Exception: st.session_state.tt_event_date = date.today()
                 st.session_state.tt_venue = proj.venue_name
                 
                 if "tt_open_time" not in st.session_state:
@@ -227,7 +227,7 @@ def render_timetable_page():
                             st.session_state.tt_font = settings["tt_font"]
                         if "tt_columns" in settings:
                             st.session_state.tt_columns = settings["tt_columns"]
-                    except: pass
+                    except Exception: pass
                 
                 if "tt_columns" not in st.session_state:
                     st.session_state.tt_columns = 2
@@ -289,7 +289,7 @@ def render_timetable_page():
                         h, m = map(int, first_start_time.split(":"))
                         formatted_start = f"{h:02d}:{m:02d}"
                         st.session_state.tt_start_time = formatted_start
-                    except:
+                    except Exception:
                         pass
 
             for i, row in df_csv.iterrows():

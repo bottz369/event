@@ -29,7 +29,7 @@ def get_font(path, size):
     for c in candidates:
         if c and os.path.exists(c):
             try: return ImageFont.truetype(c, size)
-            except: continue
+            except Exception: continue
     return ImageFont.load_default()
 
 def load_image(path_or_url):

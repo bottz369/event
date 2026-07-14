@@ -69,7 +69,7 @@ def create_font_thumbnail(font_path, text="あいうABC", width=300, height=100)
         try:
             font_size = int(height * 0.6)
             font = ImageFont.truetype(font_path, font_size)
-        except:
+        except Exception:
             return None
         
         bbox = draw.textbbox((0, 0), text, font=font)
@@ -80,7 +80,7 @@ def create_font_thumbnail(font_path, text="あいうABC", width=300, height=100)
         
         draw.text((x, y), text, font=font, fill=(50, 50, 50))
         return img
-    except:
+    except Exception:
         return None
 
 # --- ヘルパー関数: 素材カードの描画 (共通化) ---
