@@ -1406,6 +1406,31 @@ main 直コミット・単一コミット(純撤去・-43行)。
 
 ---
 
+## 39. Phase 6 クローズ: 型ヒント(コア公開API)+ キャッシュ現状維持決定(2026-07-14)= Phase 6 完了
+
+✅ Phase 6(残りリファクタ)を honest にクローズ。本番反映済み(origin/main = 066e91d)。
+
+- 型ヒント(commit 066e91d): コア公開 API を実質100%型付け。
+  - 事前調査: repositories 43/43=100%、services 47/42、models は公開 dataclass メソッド全て型付け済
+    (未型付けは private/nested ヘルパーのみ=_to_int / _normalize_cell 等)。
+  - 実施: services の未型付け公開4関数に注釈追加 — font_service.list_sorted_fonts() -> List[dict] /
+    build_specimen() -> PIL Image(TYPE_CHECKING ガードで実行時 import 回避) / ensure_font_path() ->
+    Optional[str] / project_service.list_projects_for_selector() -> List[Tuple[int, str]]。注釈のみ=実行時挙動ゼロ変化。
+  - スコープ外(決定): views / utils(Streamlit UI・PIL 生成層。ほぼ -> None で価値薄・工数大)と
+    private/nested ヘルパーは対象外。将来の該当ファイル書き換え時に随伴で付ける。
+- キャッシュ最適化(コード変更なし・決定を文書化): 効くキャッシュは既に導入済み
+  (init_db=@st.cache_resource / project_service.list_projects_for_selector=@st.cache_data+手動 clear /
+  views/artists.py の一覧)。これ以上の追加は罠17(全 CRUD 経路の invalidation 設計とセット)の
+  リスク > 価値のため defer。「現状で最適」と確定。
+
+### Phase 6 総括(2026-07-14 クローズ)
+Phase 6(残りリファクタ)完了。内訳: 死コード掃除(先行)/ 罠7 撤去(§37)/ 裸 except 撲滅(§38)/
+型ヒント コア公開 API(§39)/ キャッシュ現状維持決定(§39)。→ **リファクタ全体(Phase 1〜6)が完了**。
+次の主戦場は LINE Bot §11.7(段階A: Web API・§36 で「中」規模と判明)。残る低優先(随伴で):
+views/utils の型ヒント・選別式 logger(§38)・型ヒント private ヘルパー。
+
+---
+
 ## フェーズ計画 現在地(2026-07-14 時点)
 
 - **Phase 5(残りビュー移行)= ✅ 完全クローズ(2026-07-14)**: artists / grid(§24〜§28)/
@@ -1423,7 +1448,8 @@ main 直コミット・単一コミット(純撤去・-43行)。
 - テスト基盤: AppTest スモーク導入済み(§23)。flyer 移行時の回帰土台。
 - 運用: main 直コミット(§27)。1コミット=1目的、Edit/Write は diff 提示→承認、
   push は谷内さんGO必須、本番データ保護モード厳守。
-- Phase 6 残り: 型ヒント / キャッシュ最適化(罠17: invalidation 設計とセット)。
-  **罠7 撤去は §37、裸 except 撲滅(40箇所→except Exception)は §38 で完了**。
-- 完了後 → services 層の Web API 化(§11.7 段階A・事前調査 §36 済=session_manager は API 迂回可・
-  「中」規模と判明)→ LINE Bot(§11.7 段階B1〜B4)。
+- **Phase 6(残りリファクタ)= ✅ 完全クローズ(2026-07-14)**: 死コード掃除 / 罠7 撤去(§37)/
+  裸 except 撲滅(§38)/ 型ヒント コア公開 API(§39)/ キャッシュ現状維持決定(§39)。
+  **→ リファクタ Phase 1〜6 完了。次の主戦場は LINE Bot(§11.7 段階A)**。
+- 次アクション → services 層の Web API 化(§11.7 段階A・事前調査 §36 済=session_manager は API 迂回可・
+  「中」規模と判明。着手はホスティング/認証/スコープの業務判断から)→ LINE Bot(§11.7 段階B1〜B4)。
