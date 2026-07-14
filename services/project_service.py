@@ -11,7 +11,7 @@ from typing import Optional
 import streamlit as st
 
 from database import SessionLocal, TimetableProject
-from models import ProjectDraft
+from models import ProjectDraft, ProjectView
 from repositories import project_repo, timetable_repo
 from services import session_manager
 from utils.logger import get_logger
@@ -185,5 +185,20 @@ def list_projects_for_selector():
         projects = project_repo.list_projects(db)
         result = [(p.id, f"{p.event_date or '----'} {p.title}") for p in projects]
         return result
+    finally:
+        db.close()
+
+
+def get_project_flyer_view(project_id: int) -> Optional[ProjectView]:
+    """
+    プロジェクト 1 件の読み取り専用射影(ProjectView)を返す。未検出なら None。
+
+    views/flyer.py の db.query(TimetableProject) 直読みを service 経由へ
+    置き換えるための読み窓口。ORM を view に渡さず DTO を返す。
+    毎レンダの最新値を返すため、意図的にキャッシュしない(現行の直読みと同挙動)。
+    """
+    db = SessionLocal()
+    try:
+        return project_repo.get_project_view(db, project_id)
     finally:
         db.close()

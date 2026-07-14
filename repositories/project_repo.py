@@ -15,6 +15,7 @@ from database import TimetableProject
 from models import (
     FreeTextDraft,
     ProjectDraft,
+    ProjectView,
     TicketDraft,
     TimetableRowDraft,
 )
@@ -80,6 +81,46 @@ def get_project(db: Session, project_id: int) -> Optional[TimetableProject]:
     if project_id is None:
         return None
     return db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+
+
+# ---------------------------------------------------------
+# ORM -> View 変換(読み取り専用・生値ミラー)
+# ---------------------------------------------------------
+def to_flyer_view(proj: TimetableProject) -> ProjectView:
+    """
+    ORM から ProjectView(読み取り専用・生値ミラー)を生成する。
+
+    JSON カラムは展開せず raw 文字列のまま写す。値の正規化・型変換は
+    一切行わない(None もそのまま)。消費側 view の既存挙動を byte 単位で
+    保つための素通し変換。
+    """
+    return ProjectView(
+        id=proj.id,
+        title=proj.title,
+        subtitle=proj.subtitle,
+        event_date=proj.event_date,
+        venue_name=proj.venue_name,
+        venue_url=proj.venue_url,
+        open_time=proj.open_time,
+        start_time=proj.start_time,
+        tickets_json=proj.tickets_json,
+        ticket_notes_json=proj.ticket_notes_json,
+        free_text_json=proj.free_text_json,
+        flyer_json=proj.flyer_json,
+        grid_order_json=proj.grid_order_json,
+    )
+
+
+def get_project_view(db: Session, project_id: int) -> Optional[ProjectView]:
+    """
+    ID 指定で ProjectView(読み取り専用)を返す。未検出なら None。
+
+    ORM を view 層に渡さないための読み窓口。commit はしない(read-only)。
+    """
+    proj = get_project(db, project_id)
+    if proj is None:
+        return None
+    return to_flyer_view(proj)
 
 
 # ---------------------------------------------------------

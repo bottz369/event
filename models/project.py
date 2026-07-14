@@ -82,3 +82,30 @@ class ProjectDraft:
     settings: dict = field(default_factory=dict)
     grid_settings: dict = field(default_factory=dict)
     flyer_settings: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProjectView:
+    """
+    読み取り専用のプロジェクト射影(生値ミラー)。
+
+    ProjectDraft(編集用・JSON 展開済み)とは別物。こちらは DB の
+    TimetableProject の生カラム値を「そのまま」写した読み取り専用の型で、
+    JSON カラムは raw 文字列のまま保持する。消費側(views/flyer.py)が
+    自前で json.loads / format_time_str / format_event_date する既存挙動を
+    byte 単位で保つのが目的なので、ここでは一切変換・正規化しない
+    (event_date も date 化せず str のまま。None もそのまま保持する)。
+    """
+    id: Optional[int] = None
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    event_date: Optional[str] = None
+    venue_name: Optional[str] = None
+    venue_url: Optional[str] = None
+    open_time: Optional[str] = None
+    start_time: Optional[str] = None
+    tickets_json: Optional[str] = None
+    ticket_notes_json: Optional[str] = None
+    free_text_json: Optional[str] = None
+    flyer_json: Optional[str] = None
+    grid_order_json: Optional[str] = None

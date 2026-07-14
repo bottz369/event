@@ -7,6 +7,7 @@
 """
 from models.project import (
     ProjectDraft,
+    ProjectView,
     TicketDraft,
     FreeTextDraft,
 )
@@ -18,6 +19,7 @@ from models.timetable import (
 
 __all__ = [
     "ProjectDraft",
+    "ProjectView",
     "TicketDraft",
     "FreeTextDraft",
     "TimetableRowDraft",
