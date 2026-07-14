@@ -12,7 +12,7 @@ try:
 except ImportError:
     HAS_CLICK_COORD = False
 
-from database import get_db, TimetableProject, get_image_url, FlyerTemplate
+from database import get_db, get_image_url, FlyerTemplate
 from utils.text_generator import build_event_summary_text
 from utils.flyer_helpers import format_event_date, format_time_str
 from utils.flyer_generator import create_flyer_image_shadow
@@ -71,8 +71,10 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
 # メイン画面描画
 # ==========================================
 def render_flyer_editor(project_id):
+    # db は FlyerTemplate CRUD と _generate_preview 用に残す(F-tmpl / F-db で撤去予定)。
+    # proj の read は service 経由へ移行し、ORM ではなく ProjectView(DTO)を受ける。
     db = next(get_db())
-    proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+    proj = project_service.get_project_flyer_view(project_id)
     
     logos = asset_service.list_assets_by_type("logo")
     bgs = asset_service.list_assets_by_type("background")
