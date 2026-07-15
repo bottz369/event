@@ -1,8 +1,12 @@
-# BOTTZ AI LINE Bot 用依存(Railway 等での起動用)。
-# アプリ本体の DB/画像依存(sqlalchemy / psycopg2 / supabase / Pillow / requests 等)は
-# 既存 requirements.txt を再利用する。ここには Bot(Webhook)追加分だけを書く。
--r ../requirements.txt
-
+# BOTTZ AI LINE Bot 用依存(Railway / Docker での起動用)。
+# ★streamlit とは共存不可(fastapi の要求する starlette と streamlit の starlette が衝突し、
+#   本番 Streamlit Cloud を破壊する)。root requirements.txt は読まず、Bot が実 import する物
+#   だけを明示列挙する。import 連鎖 bot.main → services.artist_service →
+#   database / repositories / models が必要とするのは以下のみ(streamlit / opencv / pandas /
+#   numpy / Pillow / reportlab は入れない)。
+sqlalchemy==2.0.51
+psycopg2-binary==2.9.12
+supabase==2.31.0
+requests==2.34.2
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-# requests は ../requirements.txt に含まれるため追記不要(LINE reply/画像DLに使用)。

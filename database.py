@@ -1,20 +1,33 @@
 from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, Float, ForeignKey, LargeBinary
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from supabase import create_client, Client
-import streamlit as st
+import logging
 import os
 import urllib.parse  # URLエンコード用
+
+# streamlit は Streamlit Cloud / ローカル venv にのみ存在する。Bot 実環境(Railway・
+# fastapi のみ)には入れない(starlette バージョン衝突の回避=§Bot 依存分離)。無い環境でも
+# database を import できるよう任意化する。★streamlit がある環境では st は本物のモジュールに
+# なり、従来と完全に同一挙動になること(st=None 分岐は streamlit 非存在時のみ通る)。
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
+logger = logging.getLogger(__name__)
 
 # --- Supabase設定 (Streamlit secrets または 環境変数から読み込み) ---
 # Streamlit 実行時は st.secrets、Bot/CLI(Railway 等・Streamlit ランタイム無し)実行時は
 # 環境変数を使う。これにより database/services 層を Streamlit 非依存で import できる(§11.7 段階0)。
 def _load_supabase_config():
-    # ① Streamlit secrets(アプリ実行時・.streamlit/secrets.toml)
-    try:
-        sec = st.secrets["supabase"]
-        return sec["DB_URL"], sec["URL"], sec["KEY"]
-    except Exception:
-        pass
+    # ① Streamlit secrets(アプリ実行時・.streamlit/secrets.toml)。streamlit が無い
+    #    Bot 実環境では st is None のためこの経路をスキップし、環境変数のみを使う。
+    if st is not None:
+        try:
+            sec = st.secrets["supabase"]
+            return sec["DB_URL"], sec["URL"], sec["KEY"]
+        except Exception:
+            pass
     # ② 環境変数(Bot / Railway 実行時)
     db_url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DB_URL")
     url = os.environ.get("SUPABASE_URL")
@@ -160,8 +173,12 @@ def init_db():
     try:
         Base.metadata.create_all(bind=engine)
     except Exception as e:
-        st.error(f"データベース初期化エラー: {e}")
-        st.stop()
+        if st is not None:
+            st.error(f"データベース初期化エラー: {e}")
+            st.stop()
+        else:
+            logger.error("データベース初期化エラー: %s", e)
+            raise
 
 def get_db():
     db = SessionLocal()
@@ -189,7 +206,10 @@ def upload_image_to_supabase(file_obj, filename):
         )
         return filename
     except Exception as e:
-        st.error(f"画像アップロードエラー: {e}")
+        if st is not None:
+            st.error(f"画像アップロードエラー: {e}")
+        else:
+            logger.error("画像アップロードエラー: %s", e)
         return None
 
 def get_image_url(filename):
