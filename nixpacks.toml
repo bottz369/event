@@ -1,0 +1,13 @@
+# Railway(nixpacks)ビルド設定 — LINE Bot(bot/main.py)をデプロイするための最小構成。
+# 既定の nixpacks はルート requirements.txt(Streamlit アプリ用)だけを入れるため、Bot 追加分
+# (fastapi / uvicorn)を含む bot/requirements.txt を明示インストールする。
+# ※ bot/requirements.txt は先頭で `-r ../requirements.txt` を読むので DB/画像依存もまとめて入る。
+
+[phases.setup]
+nixPkgs = ["python311", "gcc"]
+
+[phases.install]
+cmds = ["pip install -r bot/requirements.txt"]
+
+[start]
+cmd = "uvicorn bot.main:app --host 0.0.0.0 --port $PORT"

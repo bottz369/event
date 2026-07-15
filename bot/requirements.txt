@@ -1,0 +1,8 @@
+# BOTTZ AI LINE Bot 用依存(Railway 等での起動用)。
+# アプリ本体の DB/画像依存(sqlalchemy / psycopg2 / supabase / Pillow / requests 等)は
+# 既存 requirements.txt を再利用する。ここには Bot(Webhook)追加分だけを書く。
+-r ../requirements.txt
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+# requests は ../requirements.txt に含まれるため追記不要(LINE reply/画像DLに使用)。
