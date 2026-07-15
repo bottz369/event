@@ -5,32 +5,43 @@ import streamlit as st
 import os
 import urllib.parse  # URLエンコード用
 
-# --- Supabase設定 (Secretsから読み込み) ---
-try:
-    # URLの形式補正（postgres:// を postgresql:// に変換）
-    raw_db_url = st.secrets["supabase"]["DB_URL"]
-    if raw_db_url.startswith("postgres://"):
-        raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
-    
-    DB_URL = raw_db_url
-    SUPABASE_URL = st.secrets["supabase"]["URL"]
-    SUPABASE_KEY = st.secrets["supabase"]["KEY"]
-except Exception:
-    st.error("SecretsにSupabaseの設定が見つかりません！")
-    st.stop()
+# --- Supabase設定 (Streamlit secrets または 環境変数から読み込み) ---
+# Streamlit 実行時は st.secrets、Bot/CLI(Railway 等・Streamlit ランタイム無し)実行時は
+# 環境変数を使う。これにより database/services 層を Streamlit 非依存で import できる(§11.7 段階0)。
+def _load_supabase_config():
+    # ① Streamlit secrets(アプリ実行時・.streamlit/secrets.toml)
+    try:
+        sec = st.secrets["supabase"]
+        return sec["DB_URL"], sec["URL"], sec["KEY"]
+    except Exception:
+        pass
+    # ② 環境変数(Bot / Railway 実行時)
+    db_url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DB_URL")
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    if db_url and url and key:
+        return db_url, url, key
+    raise RuntimeError(
+        "Supabase 設定が見つかりません。Streamlit の st.secrets['supabase'] か、"
+        "環境変数 SUPABASE_DB_URL(または DB_URL) / SUPABASE_URL / SUPABASE_KEY を設定してください。"
+    )
+
+
+raw_db_url, SUPABASE_URL, SUPABASE_KEY = _load_supabase_config()
+# URLの形式補正（postgres:// を postgresql:// に変換）
+if raw_db_url.startswith("postgres://"):
+    raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
+DB_URL = raw_db_url
 
 # --- データベース接続 (PostgreSQL) ---
-# SSL接続を強制する設定
-try:
-    engine = create_engine(
-        DB_URL,
-        connect_args={"sslmode": "require"}  # Supabase接続に必須
-    )
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base = declarative_base()
-except Exception as e:
-    st.error(f"データベース接続設定エラー: {e}")
-    st.stop()
+# SSL接続を強制する設定。create_engine は遅延接続(ここでは接続しない)なので
+# 例外は基本出ないが、出た場合は Streamlit 非依存のため素の例外として送出する。
+engine = create_engine(
+    DB_URL,
+    connect_args={"sslmode": "require"}  # Supabase接続に必須
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 # --- Supabase Storageクライアント ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
