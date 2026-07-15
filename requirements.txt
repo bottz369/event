@@ -10,3 +10,7 @@ supabase==2.31.0
 opencv-python-headless==4.13.0.92
 requests==2.34.2
 streamlit-image-coordinates==0.4.0
+# LINE Bot(bot/main.py)用。Railway が root requirements を install するため
+# ここに置く(Streamlit アプリでは未使用・無害)。bot/requirements.txt とも重複可。
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
