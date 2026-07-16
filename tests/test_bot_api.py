@@ -199,3 +199,56 @@ def test_list_artists_ok(monkeypatch):
     body = r.json()
     assert body[0]["name"] == "A"
     assert body[0]["is_deleted"] is False
+
+
+# ---------------------------------------------------------------------------
+# GET /api/projects/{id}/summary-text(生成トリガー・§A1)
+# ---------------------------------------------------------------------------
+def test_summary_text_ok(monkeypatch):
+    monkeypatch.setattr(bot_api, "_build_summary_text", lambda pid: "【公演概要】\n...")
+    r = client.get("/api/projects/1/summary-text", headers=_auth())
+    assert r.status_code == 200
+    assert r.json() == {"text": "【公演概要】\n..."}
+
+
+def test_summary_text_404(monkeypatch):
+    monkeypatch.setattr(bot_api, "_build_summary_text", lambda pid: None)
+    assert client.get("/api/projects/999/summary-text", headers=_auth()).status_code == 404
+
+
+def test_summary_text_401():
+    assert client.get("/api/projects/1/summary-text").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /api/projects/{id}/grid-image(生成トリガー・§A1)
+# ---------------------------------------------------------------------------
+def test_grid_image_ok(monkeypatch):
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid: b"\x89PNG\r\n\x1a\nFAKEPNGBYTES")
+    r = client.get("/api/projects/1/grid-image", headers=_auth())
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content == b"\x89PNG\r\n\x1a\nFAKEPNGBYTES"
+    assert len(r.content) > 0
+
+
+def test_grid_image_404_when_project_missing(monkeypatch):
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: None)
+    # project 未検出時は生成に進まない
+    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid: (_ for _ in ()).throw(AssertionError("must not render")))
+    r = client.get("/api/projects/999/grid-image", headers=_auth())
+    assert r.status_code == 404
+    assert r.json()["detail"] == "project not found"
+
+
+def test_grid_image_404_when_no_artists(monkeypatch):
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid: None)
+    r = client.get("/api/projects/1/grid-image", headers=_auth())
+    assert r.status_code == 404
+    assert r.json()["detail"] == "grid has no artists"
+
+
+def test_grid_image_401():
+    assert client.get("/api/projects/1/grid-image").status_code == 401
