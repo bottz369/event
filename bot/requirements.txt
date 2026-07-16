@@ -1,9 +1,12 @@
 # BOTTZ AI LINE Bot 用依存(Railway / Docker での起動用)。
-# ★streamlit とは共存不可(fastapi の要求する starlette と streamlit の starlette が衝突し、
-#   本番 Streamlit Cloud を破壊する)。root requirements.txt は読まず、Bot が実 import する物
-#   だけを明示列挙する。import 連鎖 bot.main → services.artist_service →
-#   database / repositories / models が必要とするのは以下のみ(streamlit / opencv / pandas /
-#   numpy / Pillow / reportlab は入れない)。
+# ここに書くのは Webhook の「追加分」だけで、これ単体では Bot は動かない。
+# bot.main は共有コードを import する(bot.main → services.artist_service → models → pandas 等、
+# database → sqlalchemy / supabase 等)ため、Bot の実行にはアプリ本体の依存一式が必要。
+# よって Dockerfile(python:3.13-slim / 本番 Streamlit Cloud と同じ Python)は
+#   pip install -r requirements.txt -r bot/requirements.txt
+# で root(本体一式)+ 本ファイル(追加分)の両方を install する。ローカル venv も同様に両方入れる。
+# streamlit 1.59.2 と fastapi 0.115.6 は共存可能(クリーン解決で starlette 0.41.3・競合なし、
+# fastapi 0.115.6 は DEFAULT_EXCLUDED_CONTENT_TYPES を参照しない)ので、root の streamlit は無害。
 sqlalchemy==2.0.51
 psycopg2-binary==2.9.12
 supabase==2.31.0

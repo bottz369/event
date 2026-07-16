@@ -49,16 +49,18 @@ DB/画像ロジックは新規に書きません(§40 モノリス Bot)。
 
 ## ローカル起動
 
-> ⚠️ **Bot 用の依存は Streamlit アプリ用の venv とは分けること。**
-> `bot/requirements.txt` は `fastapi` を含み、これを Streamlit(1.59.2)入りの venv に入れると
-> `starlette` のバージョンが衝突して Streamlit が起動不能になる(本番事故の原因)。Bot は必ず
-> **専用の仮想環境**に入れる(Bot 依存に streamlit は含めない・含めてはいけない)。
+> ℹ️ **Bot には root + bot の両方を install する(full install)。**
+> `bot/requirements.txt` は Webhook の追加分だけなので、これ単体では Bot は動かない。
+> `bot.main` は共有コードを import する(`bot.main` → `services.artist_service` → `models` →
+> pandas 等、`database` → sqlalchemy / supabase 等)ため、アプリ本体の依存一式が必要。
+> Docker(Railway)も同じく root + bot を full install する。
+> streamlit 1.59.2 と fastapi 0.115.6 は共存可能なので、root の streamlit が入っていても問題ない。
 
 ```bash
-# Bot 専用の venv を作る(アプリ用 .venv とは別物)
+# venv を作る(アプリ用 .venv をそのまま使ってもよい)
 python3 -m venv .venv-bot
 . .venv-bot/bin/activate
-pip install -r bot/requirements.txt   # 6 依存のみ(streamlit 無し)
+pip install -r requirements.txt -r bot/requirements.txt   # root(本体一式)+ bot(追加分)
 
 # .env を用意(実値は各自)
 cp bot/.env.example bot/.env
