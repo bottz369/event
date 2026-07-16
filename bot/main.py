@@ -33,6 +33,8 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from fastapi import FastAPI, Request, Response
 
+from bot import api  # read 専用 /api ルーター(§11.7 段階A0)。services は遅延 import のため env 非依存。
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bottz_bot")
 
@@ -344,6 +346,7 @@ def handle_event(event: dict, config: BotConfig) -> None:
 # FastAPI アプリ
 # ---------------------------------------------------------------------------
 app = FastAPI(title="BOTTZ AI LINE Bot")
+app.include_router(api.router)  # /api/* read エンドポイント(API キー認証・§11.7 段階A0)
 
 
 @app.get("/")

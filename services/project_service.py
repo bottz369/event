@@ -189,6 +189,21 @@ def list_projects_for_selector() -> List[Tuple[int, str]]:
         db.close()
 
 
+def list_project_summaries() -> List[ProjectView]:
+    """プロジェクト一覧を ProjectView(読み取り専用 DTO)のリストで返す。
+
+    @st.cache_data 付きの list_projects_for_selector とは別に、Bot / Web API から
+    キャッシュ非依存で呼ぶための素の読み窓口(§11.7 段階A0)。ORM を返さず既存の
+    to_flyer_view で ProjectView に写して返す(read-only・commit しない)。
+    並び順は project_repo.list_projects(日付降順)をそのまま踏襲する。
+    """
+    db = SessionLocal()
+    try:
+        return [project_repo.to_flyer_view(p) for p in project_repo.list_projects(db)]
+    finally:
+        db.close()
+
+
 def get_project_flyer_view(project_id: int) -> Optional[ProjectView]:
     """
     プロジェクト 1 件の読み取り専用射影(ProjectView)を返す。未検出なら None。
