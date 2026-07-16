@@ -21,7 +21,7 @@ import os
 from dataclasses import asdict
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,18 @@ def _load_artists():
     return artist_service.list_artists()
 
 
+def _build_summary_text(project_id: int):
+    from services import generation_service
+
+    return generation_service.build_summary_text_for_project(project_id)
+
+
+def _render_grid_png(project_id: int):
+    from services import generation_service
+
+    return generation_service.render_grid_png_for_project(project_id)
+
+
 def _parse_grid(raw: Optional[str]):
     """grid_order_json(生文字列)を JSON パースして返す。None / 空 / 壊れは None。"""
     if not raw:
@@ -133,3 +145,29 @@ def get_project_grid(project_id: int) -> dict:
 def list_artists() -> list:
     """アーティスト一覧(ArtistView 相当・既定 is_deleted==False)。"""
     return [asdict(a) for a in _load_artists()]
+
+
+# ---------------------------------------------------------------------------
+# 生成トリガー(read + generate・書き込みなし。§11.7 段階A1)
+# ---------------------------------------------------------------------------
+@router.get("/projects/{project_id}/summary-text")
+def get_project_summary_text(project_id: int) -> dict:
+    """その project の告知テキストを DB から生成して返す。未検出は 404。"""
+    text = _build_summary_text(project_id)
+    if text is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    return {"text": text}
+
+
+@router.get("/projects/{project_id}/grid-image")
+def get_project_grid_image(project_id: int) -> Response:
+    """その project の grid 画像(PNG・透過)を DB 設定から生成して返す。
+
+    未検出プロジェクトは 404。出演者ゼロで生成不能なら 404(grid has no artists)。
+    """
+    if _load_project_view(project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    png = _render_grid_png(project_id)
+    if png is None:
+        raise HTTPException(status_code=404, detail="grid has no artists")
+    return Response(content=png, media_type="image/png")
