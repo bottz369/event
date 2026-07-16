@@ -46,6 +46,10 @@ DB/画像ロジックは新規に書きません(§40 モノリス Bot)。
 | `LINE_CHANNEL_ACCESS_TOKEN` | reply / 画像 DL |
 | `OWNER_USER_IDS` | 更新を許可する送信者 userId(カンマ区切り) |
 | `ALLOWED_GROUP_IDS` | 反応を許可する groupId(カンマ区切り・空可) |
+| `EVENT_API_KEY` | read 専用 `/api/*` の認証キー(`Authorization: Bearer <key>` / `X-API-Key` で照合。Webhook の LINE 署名検証とは別系統) |
+
+`EVENT_API_KEY` は Railway では他の変数と同じく Variables に設定する。ローカルで `/api` を叩くときは
+`export EVENT_API_KEY='任意の長いランダム文字列'` してから uvicorn を起動する(未設定だと `/api/*` は全て 401)。
 
 ## ローカル起動
 

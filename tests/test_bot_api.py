@@ -155,6 +155,24 @@ def test_get_grid_null_when_absent(monkeypatch):
     assert r.json() == {"grid_order": None}
 
 
+def test_get_grid_null_when_empty_string(monkeypatch):
+    """grid_order_json が空文字のプロジェクトでも 500 にならず 200 + null。"""
+    view = ProjectView(id=1, title="X", grid_order_json="")
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: view)
+    r = client.get("/api/projects/1/grid", headers=_auth())
+    assert r.status_code == 200
+    assert r.json() == {"grid_order": None}
+
+
+def test_get_grid_null_when_broken_json(monkeypatch):
+    """壊れた grid_order_json でも 500 にならず 200 + null(json.loads 例外を握る)。"""
+    view = ProjectView(id=1, title="X", grid_order_json="{not json")
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: view)
+    r = client.get("/api/projects/1/grid", headers=_auth())
+    assert r.status_code == 200
+    assert r.json() == {"grid_order": None}
+
+
 def test_get_grid_404(monkeypatch):
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: None)
     assert client.get("/api/projects/1/grid", headers=_auth()).status_code == 404
