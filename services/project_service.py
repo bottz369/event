@@ -8,15 +8,45 @@ from __future__ import annotations
 import datetime
 from typing import List, Optional, Tuple
 
-import streamlit as st
+# streamlit は Streamlit アプリ / ローカル venv にのみ存在する。Bot 実環境(Railway・
+# fastapi のみ / starlette 版数衝突)では import 不能なため optional 化する(database.py と同一方針)。
+# ★streamlit がある環境では st は本物のモジュールになり、キャッシュ挙動は従来と完全に同一であること。
+try:
+    import streamlit as st
+except Exception:
+    st = None
 
 from database import SessionLocal, TimetableProject
 from models import ProjectDraft, ProjectView
 from repositories import project_repo, timetable_repo
-from services import session_manager
 from utils.logger import get_logger
 
+# session_manager は st.session_state 依存のため、read 経路(list_project_summaries /
+# get_project_flyer_view)が streamlit を間接的に引かないよう top-level import しない。
+# 使用する write/session 系関数の内部で遅延 import する(§11.7 段階0)。
+
 logger = get_logger(__name__)
+
+
+def _noop_cache_data(func=None, **_kwargs):
+    """st 不在時(Bot 実環境)の @st.cache_data 代替(no-op)。
+
+    関数をそのまま返し、Streamlit 版 API と互換の無害な .clear() を生やす
+    (write 系 4 箇所が list_projects_for_selector.clear() を呼ぶため .clear 属性が要る。
+     Bot はそれらを呼ばないので実際には走らない)。引数付き `@_cache_data(ttl=...)`
+     形式も受ける。
+    """
+    def _wrap(f):
+        f.clear = lambda *a, **k: None
+        return f
+
+    if callable(func):
+        return _wrap(func)  # @_cache_data(引数なしのデコレータ適用)
+    return _wrap            # @_cache_data(...)(引数付き)
+
+
+# st 有り時は st.cache_data そのもの → @_cache_data は @st.cache_data と同一挙動。
+_cache_data = st.cache_data if st is not None else _noop_cache_data
 
 
 def create_new_project(
@@ -29,6 +59,8 @@ def create_new_project(
     新規プロジェクトを作成し、その ID を返す。
     作成後はそのプロジェクトを active にセットしてセッションへロード済みにする。
     """
+    from services import session_manager  # 遅延 import(read 経路を streamlit 非依存に保つ)
+
     db = SessionLocal()
     try:
         proj = project_repo.create_project(
@@ -66,6 +98,8 @@ def save_active_project() -> bool:
         True: 成功
         False: 失敗(または対象なし)
     """
+    from services import session_manager  # 遅延 import(read 経路を streamlit 非依存に保つ)
+
     # Phase 3 cache-selector: sync 前にセレクタ label に出る項目を snapshot。
     # 保存成功時に title/event_date が変化していた場合のみ list_projects_for_selector
     # を invalidate する (TT/Grid/Flyer の保存では label が変わらないので無駄な
@@ -114,6 +148,8 @@ def duplicate_active_project() -> Optional[int]:
     現在 active なプロジェクトを複製する。
     複製後は新しい方を active にして読み直す。
     """
+    from services import session_manager  # 遅延 import(read 経路を streamlit 非依存に保つ)
+
     draft = session_manager.get_draft_project()
     if draft is None or draft.id is None:
         logger.warning("duplicate_active_project: no active project")
@@ -147,6 +183,8 @@ def duplicate_active_project() -> Optional[int]:
 
 def delete_project_by_id(project_id: int) -> bool:
     """プロジェクトを削除する。"""
+    from services import session_manager  # 遅延 import(read 経路を streamlit 非依存に保つ)
+
     db = SessionLocal()
     try:
         ok = project_repo.delete_project(db, project_id)
@@ -165,7 +203,7 @@ def delete_project_by_id(project_id: int) -> bool:
 # ---------------------------------------------------------
 # 一覧取得(view から軽く呼ぶ用)
 # ---------------------------------------------------------
-@st.cache_data
+@_cache_data
 def list_projects_for_selector() -> List[Tuple[int, str]]:
     """
     プロジェクト選択 UI 用に、軽量な (id, label) のリストを返す。
