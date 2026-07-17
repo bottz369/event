@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import threading
 from typing import List, Optional
 
 from constants import FONT_DIR
@@ -34,6 +35,11 @@ _SPECIAL_ROW_NAMES = ("開演前物販", "終演後物販")
 # grid 設定の日本語ラベル → 内部値(views/grid.py:242-244 と同一)
 _ALIGN_MAP = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
 _BRICK_LABEL = "レンガ (サイズ統一)"
+
+# OOM 対策: grid 画像生成を API 経路で直列化する(同時に1件だけ生成)。
+# 複数 /grid-image 同時アクセスで full-res 生成のピークが積み上がるのを防ぐ。
+# ※ logic_grid 自体はロックしない(アプリ側の単独利用は直列化しない)。
+_render_lock = threading.Lock()
 
 
 def _loads_list(raw) -> list:
@@ -129,51 +135,54 @@ def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
       - row_counts_str を "," 区切りで int 化(空は None → generate 側で既定 [5]*10)
       - artists は get_artists_by_names(order)。generate_grid_image を直呼び。
     生成物は RGBA 透過なので PNG で bytes 化する(JPEG 不可)。
+
+    OOM 対策: モジュールレベルの _render_lock で全体を囲み、同時に1件だけ生成する。
     """
-    db = SessionLocal()
-    try:
-        proj = project_repo.get_project(db, project_id)  # ORM(settings_json も要るため)
-        if proj is None:
+    with _render_lock:
+        db = SessionLocal()
+        try:
+            proj = project_repo.get_project(db, project_id)  # ORM(settings_json も要るため)
+            if proj is None:
+                return None
+            grid_order_raw = proj.grid_order_json
+            settings_raw = proj.settings_json
+        finally:
+            db.close()
+
+        grid = _loads_dict(grid_order_raw)
+        settings = _loads_dict(settings_raw)
+
+        order = grid.get("order") or []
+        row_counts_str = grid.get("row_counts_str") or ""
+        layout_mode = grid.get("layout_mode")
+        alignment_label = grid.get("alignment")
+
+        alignment = _ALIGN_MAP.get(alignment_label, "center")
+        is_brick = layout_mode == _BRICK_LABEL
+        try:
+            row_counts = [int(x.strip()) for x in row_counts_str.split(",") if x.strip()]
+        except Exception:
+            row_counts = []
+        row_counts = row_counts or None  # 空は None → generate_grid_image が既定 [5]*10 を使う
+
+        grid_font = settings.get("grid_font") or "keifont.ttf"
+        font_path = os.path.join(FONT_DIR, grid_font)
+
+        artists = artist_service.get_artists_by_names(order)
+        if not artists:
             return None
-        grid_order_raw = proj.grid_order_json
-        settings_raw = proj.settings_json
-    finally:
-        db.close()
 
-    grid = _loads_dict(grid_order_raw)
-    settings = _loads_dict(settings_raw)
+        img = generate_grid_image(
+            artists,
+            "",  # image_dir_unused(logic_grid 側で未使用)
+            font_path=font_path,
+            row_counts=row_counts,
+            is_brick_mode=is_brick,
+            alignment=alignment,
+        )
+        if img is None:
+            return None
 
-    order = grid.get("order") or []
-    row_counts_str = grid.get("row_counts_str") or ""
-    layout_mode = grid.get("layout_mode")
-    alignment_label = grid.get("alignment")
-
-    alignment = _ALIGN_MAP.get(alignment_label, "center")
-    is_brick = layout_mode == _BRICK_LABEL
-    try:
-        row_counts = [int(x.strip()) for x in row_counts_str.split(",") if x.strip()]
-    except Exception:
-        row_counts = []
-    row_counts = row_counts or None  # 空は None → generate_grid_image が既定 [5]*10 を使う
-
-    grid_font = settings.get("grid_font") or "keifont.ttf"
-    font_path = os.path.join(FONT_DIR, grid_font)
-
-    artists = artist_service.get_artists_by_names(order)
-    if not artists:
-        return None
-
-    img = generate_grid_image(
-        artists,
-        "",  # image_dir_unused(logic_grid 側で未使用)
-        font_path=font_path,
-        row_counts=row_counts,
-        is_brick_mode=is_brick,
-        alignment=alignment,
-    )
-    if img is None:
-        return None
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
