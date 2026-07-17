@@ -151,6 +151,36 @@ def load_image_from_url(url):
 
 
 # =========================================================
+# OOM 対策: 読み込み時 downscale(最長辺の上限)
+# =========================================================
+# grid 生成で保持する元アー写の最長辺の上限(px)。元画像が高解像度(実測で 22MP 等)
+# だとデコード RGBA と中間コピーがメモリを圧迫し OOM する。タイルは 800px 描画なので
+# 1200px あれば出力画質は不変。縮小のみ(元が小さい画像は拡大しない)。
+# ※ apply_manual_crop の crop_x/crop_y/crop_scale はタイル(800x450)空間基準のため、
+#   元画像を縮小しても座標の再スケールは不要(アスペクト比は維持する)。
+GRID_MAX_LOAD_EDGE = 1200
+
+
+def _downscale_max_edge(img, max_edge=GRID_MAX_LOAD_EDGE):
+    """アスペクト比を維持して最長辺を max_edge 以下へ縮小する(in-place)。
+
+    元画像が max_edge 以下なら何もしない(拡大はしない)。縮小は LANCZOS。
+    """
+    if img is None:
+        return img
+    if max(img.size) <= max_edge:
+        return img
+    img.thumbnail((max_edge, max_edge), Image.LANCZOS)
+    return img
+
+
+def _load_and_downscale(url):
+    """URL 取得 → 即 downscale。worker スレッド内で縮小し、フル解像度を早期解放する
+    (完了済み future にフル解像度が滞留してピークが積み上がるのを防ぐ)。"""
+    return _downscale_max_edge(load_image_from_url(url))
+
+
+# =========================================================
 # Phase 3 P2: アー写画像並列取得ヘルパー
 # =========================================================
 def _fetch_grid_images_parallel(target_artists):
@@ -185,7 +215,10 @@ def _fetch_grid_images_parallel(target_artists):
     image_cache = {}
     if url_jobs:
         with ThreadPoolExecutor(max_workers=8) as executor:
-            future_to_id = {executor.submit(load_image_from_url, url): aid for (aid, url) in url_jobs}
+            # OOM 対策: worker 内で取得直後に最長辺 1200px へ縮小(_load_and_downscale)。
+            # 完了済み future にフル解像度が滞留せず、合成前に保持するのも縮小済み画像のみ。
+            # 縮小のみ・アスペクト比維持なので手動クロップ座標の補正は不要。
+            future_to_id = {executor.submit(_load_and_downscale, url): aid for (aid, url) in url_jobs}
             for fut in future_to_id:
                 aid = future_to_id[fut]
                 try:
