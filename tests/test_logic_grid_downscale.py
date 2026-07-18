@@ -9,9 +9,27 @@ read-only secrets を注入する conftest 前提で .venv 実行を想定。DB/
 """
 from __future__ import annotations
 
+import io
+
 from PIL import Image
 
+import logic_grid
 from logic_grid import GRID_MAX_LOAD_EDGE, _downscale_max_edge
+
+
+class _FakeResp:
+    def __init__(self, content):
+        self.content = content
+
+    def raise_for_status(self):
+        pass
+
+
+def _img_bytes(fmt, size):
+    im = Image.new("RGB", size, (120, 60, 30))
+    b = io.BytesIO()
+    im.save(b, format=fmt)
+    return b.getvalue()
 
 
 def test_downscale_large_landscape_keeps_aspect():
@@ -46,3 +64,34 @@ def test_boundary_exactly_max_edge_untouched():
 
 def test_none_passthrough():
     assert _downscale_max_edge(None) is None
+
+
+# --- _load_and_downscale(draft デコード経路)---
+def test_load_and_downscale_jpeg_draft(monkeypatch):
+    """大きな JPEG は draft 復号 → 最終 1200px 以下・RGBA・アスペクト維持。"""
+    data = _img_bytes("JPEG", (5000, 3000))  # >1200 かつ JPEG → draft 経路
+    monkeypatch.setattr(logic_grid.requests, "get", lambda *a, **k: _FakeResp(data))
+    out = logic_grid._load_and_downscale("http://example/x.jpg")
+    assert out is not None
+    assert out.mode == "RGBA"
+    assert max(out.size) <= GRID_MAX_LOAD_EDGE
+    assert abs(out.size[0] / out.size[1] - 5000 / 3000) < 0.02
+
+
+def test_load_and_downscale_png_noop_draft(monkeypatch):
+    """非 JPEG(PNG)は draft no-op。1200px 以下なら縮小もされず素通り。"""
+    data = _img_bytes("PNG", (800, 450))
+    monkeypatch.setattr(logic_grid.requests, "get", lambda *a, **k: _FakeResp(data))
+    out = logic_grid._load_and_downscale("http://example/x.png")
+    assert out is not None
+    assert out.mode == "RGBA"
+    assert out.size == (800, 450)
+
+
+def test_load_and_downscale_fetch_failure_returns_none(monkeypatch):
+    """取得失敗は None(既存 load_image_from_url と同じ挙動)。"""
+    def _boom(*a, **k):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(logic_grid.requests, "get", _boom)
+    assert logic_grid._load_and_downscale("http://example/x.jpg") is None

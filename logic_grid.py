@@ -175,9 +175,28 @@ def _downscale_max_edge(img, max_edge=GRID_MAX_LOAD_EDGE):
 
 
 def _load_and_downscale(url):
-    """URL 取得 → 即 downscale。worker スレッド内で縮小し、フル解像度を早期解放する
-    (完了済み future にフル解像度が滞留してピークが積み上がるのを防ぐ)。"""
-    return _downscale_max_edge(load_image_from_url(url))
+    """URL 取得 → JPEG draft デコード → downscale。worker スレッド内で縮小する。
+
+    OOM 対策: Image.draft("RGB", (1200,1200)) を load 前に呼び、巨大 JPEG を
+    DCT スケールを落として復号する(22MP をフル復号せず ~1/4 で読む)。フル解像度の
+    RGBA を一度も確保しないため、ピーク一時確保と断片化を大きく抑える。
+    - draft は JPEG のみ有効。PNG 等では no-op(例外時も従来どおり続行)。
+    - draft は load()(=convert)より前に呼ぶ必要がある。draft 後に _downscale_max_edge
+      で最終 1200px へ確定。crop 座標はタイル空間基準のため再スケール不要(不変)。
+    ※ アプリ共有の load_image_from_url は変更しない(この grid 専用経路のみ draft する)。
+    """
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        im = Image.open(BytesIO(response.content))
+        try:
+            im.draft("RGB", (GRID_MAX_LOAD_EDGE, GRID_MAX_LOAD_EDGE))
+        except Exception:
+            pass  # draft 非対応(PNG 等)/失敗時はフル復号にフォールバック
+        im = im.convert("RGBA")
+        return _downscale_max_edge(im)
+    except Exception:
+        return None
 
 
 # =========================================================
