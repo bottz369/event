@@ -25,9 +25,12 @@ from constants import FONT_DIR
 from database import SessionLocal
 from logic_grid import generate_grid_image
 from repositories import project_repo
-from services import artist_service, timetable_service
+from services import artist_service, font_service, timetable_service
 from utils.flyer_helpers import format_time_str
+from utils.logger import get_logger
 from utils.text_generator import build_event_summary_text
+
+logger = get_logger(__name__)
 
 # 物販専用行(出演者一覧から除外する。views/flyer.py:506 と同一)
 _SPECIAL_ROW_NAMES = ("開演前物販", "終演後物販")
@@ -171,6 +174,18 @@ def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
         artists = artist_service.get_artists_by_names(order)
         if not artists:
             return None
+
+        # フォントを DB から FONT_DIR へ materialize する(Railway 等 API/Bot 経路では
+        # Streamlit view の ensure_font_available を通らず FONT_DIR が空のままになり、
+        # generate_grid_image が PIL 既定フォントにフォールバック → 日本語ラベルが豆腐化する)。
+        # grid_font 本体と、resolve_font_path の最終フォールバック先 "keifont.ttf" の両方を確保。
+        # DB read + ローカル一時 FS write のみ(本番 Storage/DB 書き込みは無い)。
+        # 失敗しても生成は続行(従来どおりフォールバックで画像自体は出る)。
+        for _fname in dict.fromkeys([grid_font, "keifont.ttf"]):
+            try:
+                font_service.ensure_font_available(_fname)
+            except Exception as e:
+                logger.warning("ensure_font_available(%r) failed: %s", _fname, e)
 
         img = generate_grid_image(
             artists,
