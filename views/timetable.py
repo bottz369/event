@@ -497,6 +497,27 @@ def render_timetable_page():
                             ]
                             st.rerun()  # session のみ更新 (DB 保存なし)
 
+                st.markdown("")
+                if st.button("追加する", type="primary", key="btn_tt_pending_apply"):
+                    # 予定リストの並び順のまま draft_rows へ一括 append。
+                    # 挿入位置は「＋」(1件追加) と同一 (_append_artist_rows に集約)。
+                    # ここでも DB 保存はしない。反映は「🔄 設定反映」の
+                    # save_active_project() 時にまとめて行われる (明示保存型)。
+                    session_manager.set_draft_rows(
+                        _append_artist_rows(session_manager.get_draft_rows(), pending)
+                    )
+                    st.session_state["tt_pending_add"] = []
+                    _bump_editor_seq()
+                    mark_dirty()
+                    # 罠25: st.success の直後に st.rerun() を置くとメッセージが消えるため
+                    # toast を使う (rerun を跨いで表示される)。
+                    st.toast(
+                        f"{len(pending)} 組を出演順の末尾に追加しました"
+                        "(DB 反映は「🔄 設定反映」で)",
+                        icon="✅",
+                    )
+                    st.rerun()
+
         col_ui_left, col_ui_right = st.columns([1, 2.5])
 
         with col_ui_left:
