@@ -62,6 +62,9 @@ SESSION_PROJECT_KEYS = [
     # プロジェクト切替で残留しないよう必ずここに登録する
     # (§22 / 罠3: 未登録キーは clear_project_session を素通りし、前プロジェクトの値が残る)。
     "tt_pending_add",
+    # 段階③: 一括追加の候補 multiselect (widget key)。プロジェクトを跨いで
+    # 選択が残らないよう切替時に消す (§22 の grid_row_counts_input_widget と同じ理由)。
+    "tt_add_candidates",
     "tt_title",
     "tt_event_date",
     "tt_venue",

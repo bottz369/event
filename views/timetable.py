@@ -149,6 +149,20 @@ def _normalize_edited_rows(rows):
     return rows
 
 
+# 段階③: 「予定に追加」ボタンの on_click コールバック。
+# 候補 multiselect の選択を追加予定リスト(session のみ)へ重複なく追記する。
+# on_click 内なので st.rerun() は呼ばない (Streamlit が自動 rerun。import_csv_callback と同流儀)。
+# また、コールバック内であれば widget key (tt_add_candidates) へ安全に書き戻せるため
+# ここで候補の選択をクリアする。DB 保存・画像再生成は一切行わない。
+def _push_pending_add():
+    pending = list(st.session_state.get("tt_pending_add") or [])
+    for n in (st.session_state.get("tt_add_candidates") or []):
+        if n and n not in pending:
+            pending.append(n)
+    st.session_state["tt_pending_add"] = pending
+    st.session_state["tt_add_candidates"] = []
+
+
 # 段階③: アーティスト行の生成 + insert 位置決めを 1 箇所に集約した純関数。
 # 旧「＋」ボタン(1件追加)のインライン処理と bit 等価:
 #   - TimetableRowDraft(artist_name=name, place="A")
@@ -425,14 +439,68 @@ def render_timetable_page():
                 draft_rows = _pending_rows
                 mark_dirty()
 
+        # 段階③: 追加候補の算出。col_ui_left の「＋」(1件追加)と下の「一括追加」の
+        # 両方で使うため、カラム分割より前で 1 回だけ計算する
+        # (db.query の回数・フィルタ条件は従来どおり。算出結果も同一)。
+        all_artists = db.query(Artist).filter(Artist.is_deleted == False).all()
+        all_artists.sort(key=lambda x: x.name)
+        existing_normal_names = {r.artist_name for r in draft_rows if not r.is_special_row}
+        available_to_add = [a.name for a in all_artists if a.name not in existing_normal_names]
+
+        # ------------------------------------------------------------------
+        # 段階③: アーティストの一括追加 (追加予定リスト)
+        # ------------------------------------------------------------------
+        # 明示保存型: 候補選択 / 予定に追加 / 並べ替え / × 除外 のいずれも
+        # st.session_state["tt_pending_add"] を更新するだけで、DB 保存も画像再生成も
+        # 行わない。DB 反映は従来どおり「🔄 設定反映 (プレビュー生成)」の
+        # save_active_project() のみ。
+        st.session_state.setdefault("tt_pending_add", [])
+
+        with st.expander("➕ アーティストを一括追加", expanded=False):
+            st.multiselect(
+                "追加候補",
+                available_to_add,
+                key="tt_add_candidates",
+                help="複数選べます。「予定に追加」で下の追加予定リストに溜まります(この時点では保存されません)。",
+            )
+            st.button("予定に追加", key="btn_tt_pending_push", on_click=_push_pending_add)
+
+            pending = list(st.session_state.get("tt_pending_add") or [])
+            st.markdown("---")
+            if not pending:
+                st.caption("追加予定リストは空です。上で候補を選び「予定に追加」を押してください。")
+            else:
+                st.caption("並べ替え (ドラッグ&ドロップ) — この順でタイムテーブルの末尾に追加されます")
+                if sort_items:
+                    # ★key を必ず明示する。key なしだと items が変わるたびに
+                    # コンポーネントが再マウントして状態を失い、古い戻り値と新しい値が
+                    # ping-pong して操作不能になる (streamlit_sortables の docstring 明記。
+                    # views/grid.py の grid_just_reset フラグはその場当たり対処)。
+                    sorted_pending = sort_items(
+                        pending, direction="vertical", key="tt_pending_sort"
+                    )
+                    if sorted_pending != pending:
+                        st.session_state["tt_pending_add"] = list(sorted_pending)
+                        st.rerun()  # session のみ更新 (DB 保存なし)
+                else:
+                    st.info("並べ替えコンポーネントが利用できません。選択した順のまま追加されます。")
+
+                st.caption("予定から外す")
+                for _i, _name in enumerate(pending):
+                    c_pend_name, c_pend_rm = st.columns([8, 1])
+                    with c_pend_name:
+                        st.write(f"{_i + 1}. {_name}")
+                    with c_pend_rm:
+                        if st.button("×", key=f"tt_pending_rm_{_i}", help=f"{_name} を予定から外す"):
+                            st.session_state["tt_pending_add"] = [
+                                n for j, n in enumerate(pending) if j != _i
+                            ]
+                            st.rerun()  # session のみ更新 (DB 保存なし)
+
         col_ui_left, col_ui_right = st.columns([1, 2.5])
 
         with col_ui_left:
             st.subheader("出演順")
-            all_artists = db.query(Artist).filter(Artist.is_deleted == False).all()
-            all_artists.sort(key=lambda x: x.name)
-            existing_normal_names = {r.artist_name for r in draft_rows if not r.is_special_row}
-            available_to_add = [a.name for a in all_artists if a.name not in existing_normal_names]
 
             c_add1, c_add2 = st.columns([3, 1])
             with c_add1: new_artist = st.selectbox("追加", [""] + available_to_add, label_visibility="collapsed")
