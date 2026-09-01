@@ -387,3 +387,102 @@ def test_pregoods_normalize_nonregression(app_test, two_projects_different_row_c
     assert pre.goods_start_time == open_time, "goods_start_time が open_time に追従していない"
     assert pre.duration == 0, "開演前物販の duration が 0 固定でない"
     assert pre.adjustment == 0, "開演前物販の adjustment が 0 固定でない"
+
+
+# ---------------------------------------------------------------------------
+# 段階①: 「行の一括削除」の回帰網(DELETE 列 → 先取り確定 → 一括削除)
+# ---------------------------------------------------------------------------
+def _normal_rows(at):
+    """draft_rows のうち通常行(特殊行以外)の名前一覧。"""
+    return [
+        r.artist_name for r in (_sget(at, "draft_rows") or [])
+        if r.artist_name not in ("開演前物販", "終演後物販")
+    ]
+
+
+def _inject_delete_check(at, row_index):
+    """data_editor の内部 state に「DELETE 列のチェック」を注入する(罠34 の回避策)。
+
+    AppTest は data_editor を直接操作できないため、既存の
+    test_editor_state_injection_feasibility と同じ session_state 注入で代替する。
+    """
+    editor_key = f"tt_editor_{_sget(at, 'tt_editor_key')}"
+    at.session_state[editor_key] = {
+        "edited_rows": {row_index: {"DELETE": True}},
+        "added_rows": [],
+        "deleted_rows": [],
+    }
+    at.run()
+    return at
+
+
+def test_bulk_delete_removes_checked_row(app_test, two_projects_different_row_counts):
+    """DELETE 列のチェックが先取り確定を通り、ボタンで実際に行が消えること。
+
+    ★これが RED になるとき疑うのは罠33: DELETE が draft_rows_to_df の出力列で
+    なくなると _apply_editor_state_to_df の `if col in new_df.columns` ガードに
+    弾かれ、チェックが毎 run 捨てられて一括削除が沈黙する。
+    """
+    (_pid_a, label_a, _rc_a), _ = two_projects_different_row_counts
+    at = app_test.run()
+    options = at.selectbox(key=SELECTOR_KEY).options
+    if label_a not in options:
+        pytest.skip(f"selectbox にラベル '{label_a}' 不在")
+    _open_project_tt(at, label_a)
+    assert not at.exception
+
+    rows_before = _sget(at, "draft_rows") or []
+    if len(rows_before) < 2:
+        pytest.skip("行数が足りない(プロジェクト状態依存)")
+
+    # 通常行を1つ選んでチェックを注入する
+    target_idx = next(
+        (i for i, r in enumerate(rows_before)
+         if r.artist_name not in ("開演前物販", "終演後物販")),
+        None,
+    )
+    if target_idx is None:
+        pytest.skip("通常行が無い")
+    target_name = rows_before[target_idx].artist_name
+    names_before = _normal_rows(at)
+
+    _inject_delete_check(at, target_idx)
+    assert not at.exception, f"チェック注入後に例外: {at.exception}"
+
+    dr = _sget(at, "draft_rows") or []
+    assert dr[target_idx].is_delete_marked is True, (
+        "DELETE のチェックが draft_rows に届いていない(罠33 の再発を疑う)"
+    )
+
+    snap_before = _sget(at, "saved_rows_snapshot")
+    at.button(key="btn_tt_bulk_delete").click().run()
+    assert not at.exception, f"一括削除ボタンで例外: {at.exception}"
+
+    names_after = _normal_rows(at)
+    expected = list(names_before)
+    expected.remove(target_name)
+    assert names_after == expected, (
+        f"チェックした行だけが消えていない: before={names_before} after={names_after}"
+    )
+
+    # ★DB 保存は走らない(保存は「🔄 設定反映」のみ)
+    assert _sget(at, "saved_rows_snapshot") == snap_before, (
+        "一括削除で保存スナップショットが更新された = DB 保存が走っている"
+    )
+    assert _sget(at, "tt_unsaved_changes") is True, "mark_dirty されていない"
+
+
+def test_bulk_delete_button_disabled_without_check(app_test, two_projects_different_row_counts):
+    """チェックが1つも無い状態では一括削除ボタンが押せないこと(誤爆防止)。"""
+    (_pid_a, label_a, _rc_a), _ = two_projects_different_row_counts
+    at = app_test.run()
+    options = at.selectbox(key=SELECTOR_KEY).options
+    if label_a not in options:
+        pytest.skip(f"selectbox にラベル '{label_a}' 不在")
+    _open_project_tt(at, label_a)
+    assert not at.exception
+
+    # at.button(key=...) は Button を直接返す(list ではない)
+    btn = at.button(key="btn_tt_bulk_delete")
+    assert btn is not None, "一括削除ボタンが描画されていない"
+    assert btn.disabled is True, "チェック無しでもボタンが有効になっている"

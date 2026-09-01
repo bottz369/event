@@ -123,11 +123,17 @@ def _make_post_goods_row():
 # 終演後物販: goods_start_time / goods_duration / is_hidden はユーザー編集を許容、
 #             その他は仕様で 0/""/None。
 # 注意: 特殊行 itself の is_post_goods は False が仕様 (集約計算から除外するため)。
+# 段階① 追加: 特殊行の is_delete_marked も毎 render で False に倒す
+#             (一括削除の対象外。開演前/終演後物販の増減は専用トグルが唯一の正)。
+#             この 1 点だけ旧 L484-499 に無い挙動。
 def _normalize_edited_rows(rows):
     open_time = st.session_state.get("tt_open_time", "10:00")
     start_time = st.session_state.get("tt_start_time", "10:30")
     pre_dur = get_duration_minutes(open_time, start_time)
     for r in rows:
+        if r.is_special_row:
+            # editor 上でチェックされても、次 render でここで倒す(誤削除防止)。
+            r.is_delete_marked = False
         if r.is_pre_goods_row:
             r.duration = 0
             r.adjustment = 0
@@ -182,6 +188,18 @@ def _append_artist_rows(draft_rows, names):
     else:
         rows[post_idx:post_idx] = new_rows
     return rows
+
+
+# 段階①: 「削除」チェックの付いた通常行を除去する純関数。
+# 特殊行(開演前/終演後物販)はチェックの有無に関わらず必ず残す
+# (増減は専用トグルが唯一の正。_normalize_edited_rows が毎 render で
+#  特殊行の is_delete_marked を False に倒すが、ここでも明示して二重に守る)。
+# 純関数: 引数リストを破壊せず新しい list を返す。
+def _drop_marked_rows(draft_rows):
+    return [
+        r for r in (draft_rows or [])
+        if not (r.is_delete_marked and not r.is_special_row)
+    ]
 
 
 def _apply_editor_state_to_df(df, editor_state):
@@ -597,6 +615,7 @@ def render_timetable_page():
             edited_df = st.data_editor(
                 editor_df, key=current_key, num_rows="fixed", width='stretch',
                 column_config={
+                    "DELETE": st.column_config.CheckboxColumn("削除", width="small"),
                     "IS_HIDDEN": st.column_config.CheckboxColumn("非表示", width="small"),
                     "ARTIST": st.column_config.TextColumn("アーティスト", disabled=True),
                     "DURATION": st.column_config.SelectboxColumn("出演", options=DURATION_OPTIONS, width="small"),
@@ -623,6 +642,32 @@ def render_timetable_page():
                 session_manager.set_draft_rows(edited_rows)
                 draft_rows = edited_rows
                 mark_dirty()
+
+            # 段階①: チェックした行の一括削除。
+            # 「削除」チェックは DELETE 列 → draft_rows[].is_delete_marked に載っており、
+            # 直上の書き戻し(と render 冒頭の先取り確定)でこの時点の draft_rows が最新。
+            # ここでは除去するだけで DB 保存はしない(保存は「🔄 設定反映」に集約)。
+            # 特殊行の扱いは _drop_marked_rows 側に集約(必ず残す)。
+            _marked = [r for r in draft_rows if r.is_delete_marked and not r.is_special_row]
+            if _marked:
+                st.caption(
+                    "🗑 削除対象 %d 行: %s"
+                    % (len(_marked), " / ".join(r.artist_name for r in _marked))
+                )
+            if st.button(
+                "🗑 チェックした行を削除",
+                key="btn_tt_bulk_delete",
+                disabled=not _marked,
+            ):
+                session_manager.set_draft_rows(_drop_marked_rows(draft_rows))
+                _bump_editor_seq()
+                mark_dirty()
+                # 罠25: st.success の直後に st.rerun() を置くとメッセージが消えるため toast。
+                st.toast(
+                    f"{len(_marked)} 行を削除しました(DB 反映は「🔄 設定反映」で)",
+                    icon="🗑",
+                )
+                st.rerun()
 
             # Phase 2B-2-b commit 2 まとまり②: 終演後物販トグルの収束ロジック。
             # editor の IS_POST_GOODS チェック集約 (通常行のみ) と draft_rows 内の
