@@ -6,7 +6,7 @@ import pandas as pd
 
 from database import IMAGE_DIR
 from constants import FONT_DIR
-from models.timetable import build_grid_order_from_rows
+from models.timetable import build_grid_hidden_from_rows, build_grid_order_from_rows
 from services import (
     project_service,
     artist_service,
@@ -138,11 +138,17 @@ def render_grid_page():
             #    その場当たり対処。併せて撤去)。
             # 並び順の唯一の正は TT の「アー写グリッド表示順」列。ここは表示のみで、
             # session_state への書き込みも st.rerun() も行わない。
-            tt_order = build_grid_order_from_rows(session_manager.get_draft_rows())
+            _tt_rows = session_manager.get_draft_rows()
+            tt_order = build_grid_order_from_rows(_tt_rows)
+            tt_grid_hidden = build_grid_hidden_from_rows(_tt_rows)
             st.caption(
                 "並び順はタイムテーブルの「アー写グリッド表示順」列で決まります"
                 "(番号の昇順で左上から詰めます。空欄の人は末尾)。ここは確認用の表示です。"
             )
+            if tt_grid_hidden:
+                st.caption(
+                    "アー写グリッド非表示: %s" % " / ".join(tt_grid_hidden)
+                )
             if not tt_order:
                 st.info("タイムテーブルに表示対象のアーティストがいません。")
             else:
@@ -229,6 +235,7 @@ def render_grid_page():
                     # _GRID_KEY_MAP 経由で draft.grid_settings["order"] に載せる)。
                     # これでプレビュー表示・生成画像・DB 保存の 3 つが必ず一致する。
                     st.session_state.grid_order = tt_order
+                    st.session_state.grid_hidden = tt_grid_hidden
                     target_artists = artist_service.get_artists_by_names(tt_order)
                     
                     if not target_artists:

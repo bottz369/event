@@ -586,3 +586,77 @@ def test_grid_no_edit_reaches_draft_rows(app_test, two_projects_different_row_co
     )
     # 番号を変えたら未保存扱いになる(黙って失われない)
     assert _sget(at, "tt_unsaved_changes") is True
+
+
+# ---------------------------------------------------------------------------
+# アー写グリッド非表示 (GRID_HIDDEN) の回帰網
+# ---------------------------------------------------------------------------
+def test_grid_hidden_edit_reaches_draft_rows(app_test, two_projects_different_row_counts):
+    """GRID_HIDDEN の編集が先取り確定を通って draft_rows に届くこと(罠33)。
+
+    ★RED になるときは GRID_HIDDEN が draft_rows_to_df の出力列から
+    外れていないか疑う。
+    """
+    from models.timetable import build_grid_order_from_rows
+
+    at = app_test.run()
+    assert not at.exception
+    _open_first_project(at)
+
+    rows = _sget(at, "draft_rows") or []
+    target = next(
+        (i for i, r in enumerate(rows)
+         if r.artist_name not in ("開演前物販", "終演後物販")
+         and not r.is_grid_hidden
+         and (r.artist_name or "").strip()),
+        None,
+    )
+    if target is None:
+        pytest.skip("グリッド表示中の通常行が無い")
+    target_name = rows[target].artist_name.strip()
+    assert target_name in build_grid_order_from_rows(rows), "前提: 対象はグリッドに出ている"
+
+    editor_key = f"tt_editor_{_sget(at, 'tt_editor_key')}"
+    at.session_state[editor_key] = {
+        "edited_rows": {target: {"GRID_HIDDEN": True}},
+        "added_rows": [],
+        "deleted_rows": [],
+    }
+    at.run()
+    assert not at.exception, f"GRID_HIDDEN 注入後に例外: {at.exception}"
+
+    dr = _sget(at, "draft_rows") or []
+    assert dr[target].is_grid_hidden is True, (
+        "GRID_HIDDEN の編集が draft_rows に届いていない(罠33 の再発を疑う)"
+    )
+    # グリッドからは消えるが、タイムテーブル非表示(is_hidden)は変わらない
+    assert target_name not in build_grid_order_from_rows(dr), "グリッドから外れていない"
+    assert dr[target].is_hidden == rows[target].is_hidden, (
+        "アー写グリッド非表示がタイムテーブル非表示に波及している(2 つは独立のはず)"
+    )
+    assert _sget(at, "tt_unsaved_changes") is True
+
+
+def test_grid_hidden_migration_preserves_look(app_test, two_projects_different_row_counts):
+    """未移行プロジェクト(grid_hidden キー無し)は is_hidden から引き継がれること。
+
+    = 既存プロジェクトのアー写グリッドの見た目が変わらないことの回帰網。
+    """
+    at = app_test.run()
+    assert not at.exception
+    _open_first_project(at)
+
+    draft = _sget(at, "draft_project")
+    rows = _sget(at, "draft_rows") or []
+    if draft is None or not rows:
+        pytest.skip("draft が取れない")
+
+    gs = draft.grid_settings or {}
+    if "grid_hidden" in gs:
+        pytest.skip("既に移行済みのプロジェクト(このテストは未移行分を見る)")
+
+    normal = [r for r in rows if r.artist_name not in ("開演前物販", "終演後物販")]
+    assert [r.is_grid_hidden for r in normal] == [bool(r.is_hidden) for r in normal], (
+        "未移行プロジェクトで is_grid_hidden が is_hidden から引き継がれていない"
+        "(移行フォールバックの退行を疑う)"
+    )

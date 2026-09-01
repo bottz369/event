@@ -20,6 +20,7 @@ from models.timetable import (
     PRE_GOODS_ARTIST_NAME,
     POST_GOODS_ARTIST_NAME,
     TimetableRowDraft,
+    build_grid_hidden_from_rows,
     build_grid_order_from_rows,
     draft_rows_to_df,
     df_to_draft_rows,
@@ -135,6 +136,10 @@ def _normalize_edited_rows(rows):
         if r.is_special_row:
             # editor 上でチェックされても、次 render でここで倒す(誤削除防止)。
             r.is_delete_marked = False
+            # アー写グリッドに特殊行は元々出ないので、チェックを残さない
+            # (押せてしまうと「効かないチェック」になって紛らわしい)。
+            # ※ is_hidden(タイムテーブル非表示)は終演後物販で編集を許容しているので触らない。
+            r.is_grid_hidden = False
         if r.is_pre_goods_row:
             r.duration = 0
             r.adjustment = 0
@@ -617,12 +622,19 @@ def render_timetable_page():
                 editor_df, key=current_key, num_rows="fixed", width='stretch',
                 column_config={
                     "DELETE": st.column_config.CheckboxColumn("削除", width="small"),
-                    "IS_HIDDEN": st.column_config.CheckboxColumn("非表示", width="small"),
+                    "IS_HIDDEN": st.column_config.CheckboxColumn(
+                        "タイムテーブル非表示", width="small",
+                        help="タイムテーブル画像から消します。アー写グリッドには影響しません。",
+                    ),
                     "ARTIST": st.column_config.TextColumn("アーティスト", disabled=True),
                     "GRID_NO": st.column_config.NumberColumn(
                         "アー写グリッド表示順", width="small", min_value=1, step=1,
                         help="この番号の昇順で、アー写グリッドに左上から詰めて並びます。"
                              "空欄は末尾(出演順)。反映は「🔄 設定反映」を押したときです。",
+                    ),
+                    "GRID_HIDDEN": st.column_config.CheckboxColumn(
+                        "アー写グリッド非表示", width="small",
+                        help="アー写グリッドから消します。タイムテーブル画像には影響しません。",
                     ),
                     "DURATION": st.column_config.SelectboxColumn("出演", options=DURATION_OPTIONS, width="small"),
                     "IS_POST_GOODS": st.column_config.CheckboxColumn("終演後", width="small"),
@@ -850,8 +862,15 @@ def render_timetable_page():
                                 #  grid_order_json へ書き出す)。session の grid_order も
                                 # 更新するので、同 run 内で flyer / overview の
                                 # session 優先参照とも整合する。
+                                _rows_for_grid = session_manager.get_draft_rows()
                                 st.session_state.grid_order = build_grid_order_from_rows(
-                                    session_manager.get_draft_rows()
+                                    _rows_for_grid
+                                )
+                                # 「アー写グリッド非表示」も同時に畳む。該当ゼロでも []
+                                # を書くことが重要で、このキーの存在が「移行済み」の印
+                                # を兼ねる(無いと次回読込で is_hidden を引き継いでしまう)。
+                                st.session_state.grid_hidden = build_grid_hidden_from_rows(
+                                    _rows_for_grid
                                 )
 
                                 # Phase 2B-1b: save_active_project() 経由で保存
