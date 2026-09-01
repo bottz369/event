@@ -471,18 +471,26 @@ def _project_to_comparable(draft: ProjectDraft):
 def _rows_to_comparable(rows: List[TimetableRowDraft]):
     """未保存判定用に行を比較可能なタプルへ落とす。
 
-    ★ ここに載せるのは「DB に永続化されるフィールド」だけ。
-      TimetableRowDraft.is_delete_marked (一括削除の UI 専用チェック) は
-      意図的に含めない。含めるとチェックを入れただけで has_unsaved_changes() が
-      True になり、workspace が「未保存の変更があります」を誤警告する
-      (実際には DB に書かれる情報が何も変わっていない)。
-      行を実際に消したときは行数・内容が変わるので、この一覧のままで差分は検知できる。
+    ★ 載せる基準は「DB に永続化される情報かどうか」。UI 専用フィールドの扱いは
+      2 つに分かれるので、追加時はどちらかを必ず判断すること。
+
+      - is_delete_marked (一括削除チェック) … 含めない。
+        含めるとチェックを入れただけで has_unsaved_changes() が True になり、
+        workspace が「未保存の変更があります」を誤警告する(実際に DB へ書かれる
+        情報は何も変わっていない)。行を実際に消せば行数・内容が変わるので、
+        この一覧のままで差分は検知できる。
+      - grid_no (アー写グリッド表示順) … ★含める。
+        番号そのものは timetable_rows に保存されないが、保存時に
+        build_grid_order_from_rows で grid_order_json["order"] へ畳まれるため、
+        「番号を変えた = DB に書かれる並び順が変わった」で正しい。含めないと
+        番号だけ直して保存し忘れたときに未保存警告が出ず、黙って失われる。
     """
     return tuple(
         (
             r.artist_name, r.duration, r.adjustment, r.is_post_goods, r.is_hidden,
             r.goods_start_time, r.goods_duration, r.place,
             r.add_goods_start_time, r.add_goods_duration, r.add_goods_place,
+            r.grid_no,
         )
         for r in rows
     )

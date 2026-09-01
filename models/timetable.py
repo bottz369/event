@@ -52,6 +52,15 @@ class TimetableRowDraft:
     #   draft_rows_to_df が出す列しか通さないため、別持ちすると毎 run チェックが捨てられる(罠33)。
     is_delete_marked: bool = False
 
+    # UI 専用・非永続: アー写グリッドの表示順(昇順で左上から詰める)。
+    # DB(timetable_rows)に対応カラムは持たない = スキーマ変更なし。
+    # 永続化先は projects_v4.grid_order_json["order"](名前リスト)で、
+    # 「🔄 設定反映」の保存直前に build_grid_order_from_rows が名前列へ変換する。
+    # ★ is_delete_marked と違い grid_no は「保存される並び順」を左右するため、
+    #   session_manager._rows_to_comparable に含める(番号を変えたら未保存扱いにし、
+    #   保存し忘れで黙って失われないようにする)。
+    grid_no: Optional[int] = None
+
     # ----- 判定ヘルパー -----
     @property
     def is_pre_goods_row(self) -> bool:
@@ -108,6 +117,12 @@ class TimetableRowDraft:
             is_hidden=bool(d.get("IS_HIDDEN") or d.get("is_hidden") or False),
             # DELETE を持たない旧 dict (data_json fallback / CSV 取込) は False。
             is_delete_marked=bool(d.get("DELETE") or d.get("is_delete_marked") or False),
+            # GRID_NO は None と 0 を区別する必要があるため、他フィールドのような
+            # truthiness 連鎖 (`A or B`) ではなく明示的な None 判定で拾う。
+            # 列を持たない旧 dict (data_json fallback / CSV 取込) は None。
+            grid_no=_to_int_or_none(
+                d.get("GRID_NO") if d.get("GRID_NO") is not None else d.get("grid_no")
+            ),
             goods_start_time=_to_str(d.get("GOODS_START_MANUAL") or d.get("goods_start_time")),
             goods_duration=_to_int(d.get("GOODS_DURATION") or d.get("goods_duration"), 60),
             place=_to_str(d.get("PLACE") or d.get("place")),
@@ -127,6 +142,9 @@ class TimetableRowDraft:
             # data_editor に渡すためだけに存在する(models の is_delete_marked)。
             "DELETE": self.is_delete_marked,
             "ARTIST": self.artist_name,
+            # UI 専用列。DB へは書き出されず、保存時に
+            # build_grid_order_from_rows で grid_order_json["order"] へ畳まれる。
+            "GRID_NO": self.grid_no,
             "DURATION": self.duration,
             "IS_POST_GOODS": self.is_post_goods,
             "ADJUSTMENT": self.adjustment,
@@ -143,13 +161,16 @@ class TimetableRowDraft:
 # ============================================================
 # Phase 2B-2-a: draft_rows <-> DataFrame 純粋変換
 # ============================================================
-# views/timetable.py の data_editor 列と完全一致(同順 12 列)。
-# 先頭の "DELETE" は一括削除用の UI 専用列(DB 非永続。is_delete_marked に対応)。
+# views/timetable.py の data_editor 列と完全一致(同順 13 列)。
+# UI 専用・DB 非永続の列が 2 つある:
+#   "DELETE"  … 一括削除チェック (is_delete_marked)
+#   "GRID_NO" … アー写グリッド表示順 (grid_no)。保存時に grid_order_json["order"] へ畳む。
 # 将来 views 側がこの定数を import して重複解消する想定 (今フェーズでは views 無変更)。
 TIMETABLE_DF_COLUMNS: list[str] = [
     "DELETE",
     "IS_HIDDEN",
     "ARTIST",
+    "GRID_NO",
     "DURATION",
     "IS_POST_GOODS",
     "ADJUSTMENT",
@@ -199,6 +220,7 @@ def _normalize_cell(v):
 _DF_KEY_TO_DRAFT_KEY = {
     "DELETE": "is_delete_marked",
     "ARTIST": "artist_name",
+    "GRID_NO": "grid_no",
     "DURATION": "duration",
     "IS_POST_GOODS": "is_post_goods",
     "ADJUSTMENT": "adjustment",

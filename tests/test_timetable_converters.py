@@ -32,6 +32,7 @@ _EXPECTED_COLUMNS = [
     "DELETE",
     "IS_HIDDEN",
     "ARTIST",
+    "GRID_NO",
     "DURATION",
     "IS_POST_GOODS",
     "ADJUSTMENT",
@@ -280,6 +281,50 @@ def test_delete_flag_dtype_drift():
     assert all(isinstance(r.is_delete_marked, bool) for r in rebuilt)
 
 
+# ---------- k. GRID_NO 列 (UI 専用・非永続) の往復 ----------
+def test_grid_no_roundtrip():
+    """grid_no が DF を往復して保たれること (None 含む)。
+
+    これが通らないと views/timetable.py の「先取り確定」で毎 run 番号が
+    捨てられ、アー写グリッド表示順の入力が効かない(罠33)。
+    """
+    rows = [_make_normal_row(f"A{i}") for i in range(3)]
+    rows[0].grid_no = 2
+    rows[1].grid_no = None
+    rows[2].grid_no = 1
+
+    df = draft_rows_to_df(rows)
+    assert list(df.columns).index("GRID_NO") == 3, list(df.columns)
+
+    rebuilt = df_to_draft_rows(df)
+    assert [r.grid_no for r in rebuilt] == [2, None, 1]
+    for src, dst in zip(rows, rebuilt):
+        assert src == dst, (src, dst)
+
+
+def test_grid_no_defaults_none_for_legacy_dict():
+    """GRID_NO キーを持たない旧 dict (data_json fallback / CSV 取込) は None。"""
+    r = TimetableRowDraft.from_dict({"ARTIST": "X", "DURATION": 20})
+    assert r.grid_no is None
+
+
+def test_grid_no_dtype_drift():
+    """data_editor 由来の dtype 揺れ (float / numpy.int64 / NaN / 空文字) を吸収。
+
+    NumberColumn は欠損を NaN で返すため、NaN → None の復元が特に重要
+    (None は「番号未入力 = グリッド末尾」を意味するので 0 に化けてはいけない)。
+    """
+    df = draft_rows_to_df([_make_normal_row(f"A{i}") for i in range(4)])
+    df["GRID_NO"] = df["GRID_NO"].astype(object)
+    df.at[0, "GRID_NO"] = 3.0
+    df.at[1, "GRID_NO"] = np.int64(1)
+    df.at[2, "GRID_NO"] = float("nan")
+    df.at[3, "GRID_NO"] = ""
+    rebuilt = df_to_draft_rows(df)
+    assert [r.grid_no for r in rebuilt] == [3, 1, None, None]
+    assert isinstance(rebuilt[0].grid_no, int) and not isinstance(rebuilt[0].grid_no, bool)
+
+
 # ---------- 写経一致確認 ----------
 def test_columns_match_views_timetable():
     """TIMETABLE_DF_COLUMNS が views/timetable.py:409 の写経と完全一致。"""
@@ -299,6 +344,9 @@ _TESTS = [
     test_delete_flag_roundtrip,
     test_delete_flag_defaults_false_for_legacy_dict,
     test_delete_flag_dtype_drift,
+    test_grid_no_roundtrip,
+    test_grid_no_defaults_none_for_legacy_dict,
+    test_grid_no_dtype_drift,
     test_columns_match_views_timetable,
 ]
 
