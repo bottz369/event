@@ -21,17 +21,46 @@ from __future__ import annotations
 import os
 
 import requests
+from PIL import ImageFont
 
 from constants import FONT_DIR
 from database import SessionLocal, get_image_url
 from repositories import font_repo
 from utils import get_sorted_font_list, create_font_specimen_img
 from utils.flyer_helpers import ensure_font_file_exists
+from utils.logger import get_logger
 
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
     from PIL import Image
+
+logger = get_logger(__name__)
+
+
+def _is_usable_font(path: str) -> bool:
+    """FONT_DIR 上のファイルが PIL で実際に開けるフォントかを検査する。
+
+    必要な理由: Storage が 200 を返しつつ本文が HTML/JSON のエラーだった場合、
+    旧実装は「size>0」だけを見て以後ずっと "cached" を返し続けるため、
+    一度壊れたファイルを掴むとコンテナが生きている限り自己修復せず
+    日本語ラベルが豆腐(□)のままになる。書き出し後・cached 判定時の両方で検証する。
+    """
+    try:
+        ImageFont.truetype(path, 12)
+        return True
+    except Exception as e:
+        logger.warning("font file is not usable: path=%s err=%s", path, e)
+        return False
+
+
+def _discard_broken(path: str) -> None:
+    """使えないフォントファイルを消す(次回の再取得を可能にする)。"""
+    try:
+        os.remove(path)
+        logger.warning("removed unusable font file: %s", path)
+    except Exception as e:
+        logger.warning("could not remove unusable font file %s: %s", path, e)
 
 
 def list_sorted_fonts() -> List[dict]:
@@ -78,18 +107,30 @@ def get_default_font_name() -> str:
 
 def ensure_font_available(filename) -> str:
     """
-    フォントファイルを FONT_DIR に確保する。旧 grid.py check_and_download_font の
-    分岐順を厳密踏襲(S0-1)。戻り値で状態を返し、st.toast は書かない(view 戻し)。
+    フォントファイルを FONT_DIR に確保する。分岐の骨格は旧 grid.py
+    check_and_download_font を踏襲(S0-1)しつつ、§42 追撃で「置いたファイルが
+    本当にフォントとして開けるか」の検証を各分岐に足している(下記)。
+    戻り値で状態を返し、st.toast は書かない(view 戻し)。
 
     分岐:
       ① 空入力 → "not_found"(旧は無印 return=無 toast。view 戻しでは状態が要るため
          "not_found" に寄せる。空入力=異常入力も not_found 扱い)
       ② makedirs + file_path 算出
-      ③ 既にローカルに存在(size>0) → "cached"(旧: 早期 return・無 toast)
-      ④ URL 経路: Asset → get_image_url → requests.get 200 → 保存 → "downloaded_url"
-      ⑤ binary 経路: AssetFile.file_data → 保存 → "downloaded_db"
+      ③ 既にローカルに存在(size>0)かつ PIL で開ける → "cached"
+         開けなければ壊れファイルとして削除し、④以降で取り直す
+      ④ URL 経路: Asset → get_image_url → requests.get 200 → 保存 → 検証 → "downloaded_url"
+      ⑤ binary 経路: AssetFile.file_data → 保存 → 検証 → "downloaded_db"
       ⑥ どれも当たらず → "not_found"
-    例外は旧同様 print で握りつぶし(粒度踏襲)。own_db は try/finally で確実に close。
+    戻り値の 4 値は従来と同一(views/grid.py の分岐は無改修)。
+
+    §42 追撃で変更した点(いずれも「materialize の確実化」):
+      - 書き出し後 / cached 判定時に _is_usable_font で検証する。200 応答でも中身が
+        フォントでない場合に size>0 のまま "cached" が固着し、コンテナが生きている
+        限り豆腐が直らない事故を防ぐ。
+      - 例外を print から logger.warning(exc_info) へ。Railway のログで追えるようにする。
+      - timeout=10 → (connect 10s, read 60s)。keifont.ttf は約 4.3MB あり、
+        単一の 10 秒では回線が細いときに read timeout で落ちうる。
+    own_db は try/finally で確実に close。
     """
     if not filename:
         return "not_found"
@@ -99,7 +140,9 @@ def ensure_font_available(filename) -> str:
     file_path = os.path.join(abs_font_dir, filename)
 
     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-        return "cached"
+        if _is_usable_font(file_path):
+            return "cached"
+        _discard_broken(file_path)
 
     db = SessionLocal()
     try:
@@ -109,13 +152,21 @@ def ensure_font_available(filename) -> str:
             if asset:
                 url = get_image_url(asset.image_filename)
                 if url:
-                    response = requests.get(url, timeout=10)
+                    response = requests.get(url, timeout=(10, 60))
                     if response.status_code == 200:
                         with open(file_path, "wb") as f:
                             f.write(response.content)
-                        return "downloaded_url"
+                        if _is_usable_font(file_path):
+                            return "downloaded_url"
+                        # 中身がフォントでない → 消して binary 経路へ落とす
+                        _discard_broken(file_path)
+                    else:
+                        logger.warning(
+                            "font download failed: name=%s status=%s url=%s",
+                            filename, response.status_code, url,
+                        )
         except Exception as e:
-            print(f"URL Download Error: {e}")
+            logger.warning("URL font download error: name=%s err=%s", filename, e, exc_info=True)
 
         # binary 経路(AssetFile)
         try:
@@ -123,10 +174,13 @@ def ensure_font_available(filename) -> str:
             if asset_file and asset_file.file_data:
                 with open(file_path, "wb") as f:
                     f.write(asset_file.file_data)
-                return "downloaded_db"
+                if _is_usable_font(file_path):
+                    return "downloaded_db"
+                _discard_broken(file_path)
         except Exception as e:
-            print(f"Binary Write Error: {e}")
+            logger.warning("binary font write error: name=%s err=%s", filename, e, exc_info=True)
 
+        logger.warning("font not available anywhere: name=%s dir=%s", filename, abs_font_dir)
         return "not_found"
     finally:
         db.close()

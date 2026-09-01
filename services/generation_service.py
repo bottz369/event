@@ -23,7 +23,7 @@ from typing import List, Optional
 
 from constants import FONT_DIR
 from database import SessionLocal
-from logic_grid import generate_grid_image
+from logic_grid import generate_grid_image, resolve_font_path
 from repositories import project_repo
 from services import artist_service, font_service, timetable_service
 from utils.flyer_helpers import format_time_str
@@ -183,9 +183,29 @@ def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
         # 失敗しても生成は続行(従来どおりフォールバックで画像自体は出る)。
         for _fname in dict.fromkeys([grid_font, "keifont.ttf"]):
             try:
-                font_service.ensure_font_available(_fname)
+                _status = font_service.ensure_font_available(_fname)
+                logger.info("ensure_font_available(%r) -> %r", _fname, _status)
             except Exception as e:
-                logger.warning("ensure_font_available(%r) failed: %s", _fname, e)
+                logger.warning("ensure_font_available(%r) failed: %s", _fname, e, exc_info=True)
+
+        # materialize の結果を必ずログに残す。generate_grid_image は font 未解決でも
+        # 黙って PIL 既定フォント(= 日本語が豆腐)にフォールバックして画像を返すため、
+        # ここで警告を出さないと本番で豆腐が出ていることに誰も気づけない
+        # (§42 の 6 週間見逃しの実因)。判定は logic_grid と同じ resolve_font_path を使う。
+        _resolved = resolve_font_path(font_path) or resolve_font_path("keifont.ttf")
+        if _resolved:
+            logger.info("grid font resolved: %s", _resolved)
+        else:
+            try:
+                _listing = sorted(os.listdir(FONT_DIR))
+            except Exception:
+                _listing = None
+            logger.warning(
+                "grid font NOT resolved (font_path=%r FONT_DIR=%r listing=%r). "
+                "generate_grid_image will fall back to the PIL default font and "
+                "Japanese labels will render as tofu.",
+                font_path, FONT_DIR, _listing,
+            )
 
         img = generate_grid_image(
             artists,
