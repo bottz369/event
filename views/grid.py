@@ -2,14 +2,21 @@ import streamlit as st
 import os
 import io
 
+import pandas as pd
+
 from database import IMAGE_DIR
 from constants import FONT_DIR
-from services import project_service, artist_service, timetable_service, font_service
+from models.timetable import build_grid_order_from_rows
+from services import (
+    project_service,
+    artist_service,
+    font_service,
+    session_manager,
+)
 
-try:
-    from streamlit_sortables import sort_items
-except ImportError:
-    sort_items = None
+# 段階②: streamlit_sortables のドラッグ&ドロップ並べ替えは廃止した。
+# 並び順の唯一の正はタイムテーブルの「アー写グリッド表示順」列(番号)で、
+# ここは build_grid_order_from_rows の結果を表示するだけ。
 
 try:
     from logic_grid import generate_grid_image, load_image_from_url
@@ -61,23 +68,10 @@ def render_grid_page():
         if "grid_last_generated_params" not in st.session_state: st.session_state.grid_last_generated_params = None
         
         if selected_id:
-            # 1. アーティストリストの初期化(未設定時のみ。rows DTO から構築)
-            #    行取得は service 経由(load_rows が timetable_rows 優先→data_json fallback を内包)。
-            #    フィルタ(物販/転換/調整 除外・非表示 skip・strip・reverse+dedup)は従来どおり DTO の上に残す。
-            if not st.session_state.grid_order:
-                try:
-                    rows = timetable_service.get_rows_for_project(selected_id)
-                    tt_artists = []
-                    for r in rows:
-                        if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
-                        if r.is_hidden: continue
-                        clean_name = r.artist_name.strip() if r.artist_name else ""
-                        if clean_name: tt_artists.append(clean_name)
-
-                    st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                except Exception as e:
-                    print(f"Initial Load Error: {e}")
-
+            # 段階②: 旧「grid_order が空なら TT の逆順で埋める」初期化を撤去。
+            # 並び順は build_grid_order_from_rows(draft_rows) から毎 render 導出するため、
+            # ここで session の grid_order を書くと TT の番号と競合する writer になる
+            # (他タブの保存で sync_session_to_draft が拾い、DB の order が TT と食い違う)。
             st.divider()
             
             # --- 設定エリア ---
@@ -86,32 +80,24 @@ def render_grid_page():
                 if not current_id_in_cb: return
 
                 try:
-                    rows = timetable_service.get_rows_for_project(current_id_in_cb)
-                    if rows:
-                        tt_artists = []
-                        for r in rows:
-                            if r.artist_name in ["開演前物販", "終演後物販", "転換", "調整"]: continue
-                            if r.is_hidden: continue
-                            clean_name = r.artist_name.strip() if r.artist_name else ""
-                            if clean_name: tt_artists.append(clean_name)
-
-                        st.session_state.grid_order = list(dict.fromkeys(reversed(tt_artists)))
-                        st.toast("タイムテーブルから最新の構成を読み込みました（非表示行は除外・スペース除去）", icon="🔄")
-
+                    # 段階②: 並び順(grid_order)の書き戻しは撤去。順序は TT の
+                    # 「アー写グリッド表示順」が唯一の正なので、ここで上書きすると
+                    # TT と食い違う。リセットするのはレイアウト設定だけ。
+                    # grid_just_reset も撤去(sort_items の stale 戻り値対策専用だった)。
                     st.session_state.grid_rows = 5
                     st.session_state.grid_row_counts_str = "5,5,5,5,5"
                     st.session_state.grid_font = "keifont.ttf"
-                    st.session_state.grid_just_reset = True
+                    st.toast("レイアウト設定を初期値に戻しました", icon="🔄")
 
                 except Exception as e:
                     print(f"Reset Error: {e}")
-                    st.error(f"読み込みエラー: {e}")
+                    st.error(f"リセットエラー: {e}")
 
             c_set1, c_set2 = st.columns([1, 2])
             with c_set1: 
                 new_rows = st.number_input("行数", min_value=1, key="grid_rows")
             with c_set2:
-                st.button("リセット (タイムテーブルから再読込)", key="btn_grid_reset", on_click=reset_grid_settings)
+                st.button("レイアウト設定をリセット", key="btn_grid_reset", on_click=reset_grid_settings)
 
             # --- 行ごとの枚数設定 ---
             # widget を SSOT (grid_row_counts_str) に直バインド。value=/手動書き戻しは付けない。
@@ -142,37 +128,48 @@ def render_grid_page():
                     disabled = (st.session_state.grid_layout_mode == "両端揃え (拡大縮小)")
                     st.radio("行の配置 (レンガモード時)", ["左揃え", "中央揃え", "右揃え"], key="grid_alignment", horizontal=True, disabled=disabled)
 
-            # --- 並び替えエリア ---
-            st.caption("ドラッグ&ドロップで配置調整")
-            order_changed = False
-            if sort_items:
-                grid_ui = []
+            # --- 並び順プレビュー(読み取り専用) ---
+            # 段階②: ドラッグ&ドロップ並べ替えを撤去した。理由:
+            #  - 1 ドラッグごとに component の値返し + st.rerun() で 2 回スクリプトが
+            #    走り、workspace の st.tabs が全 4 タブを毎回 eager 描画するため重い。
+            #  - sort_items を key 無しで呼んでいたため、items が変わるたびに
+            #    コンポーネントが再マウントして状態を失い、古い戻り値と新しい値が
+            #    ping-pong して操作不能になることがあった(grid_just_reset は
+            #    その場当たり対処。併せて撤去)。
+            # 並び順の唯一の正は TT の「アー写グリッド表示順」列。ここは表示のみで、
+            # session_state への書き込みも st.rerun() も行わない。
+            tt_order = build_grid_order_from_rows(session_manager.get_draft_rows())
+            st.caption(
+                "並び順はタイムテーブルの「アー写グリッド表示順」列で決まります"
+                "(番号の昇順で左上から詰めます。空欄の人は末尾)。ここは確認用の表示です。"
+            )
+            if not tt_order:
+                st.info("タイムテーブルに表示対象のアーティストがいません。")
+            else:
+                # 行分割は logic_grid.generate_grid_image と同じ規則にする
+                # (row_counts を順に消費し、余りは 5 枚ずつの「予備」行)。
+                preview_rows = []
                 curr = 0
                 for r_idx, count in enumerate(parsed_counts):
-                    items = []
-                    for c in range(count):
-                        if curr < len(st.session_state.grid_order):
-                            items.append(st.session_state.grid_order[curr])
-                            curr += 1
-                    grid_ui.append({"header": f"行{r_idx+1} ({len(items)}/{count})", "items": items})
-                
-                while curr < len(st.session_state.grid_order):
-                    grid_ui.append({"header": "予備", "items": [st.session_state.grid_order[curr]]})
-                    curr += 1
-                
-                res = sort_items(grid_ui, multi_containers=True)
-                new_flat = []
-                for g in res: new_flat.extend(g["items"])
-                
-                if st.session_state.get("grid_just_reset"):
-                    # リセット直後の1回は sort_items の古い戻り値を無視する
-                    st.session_state.grid_just_reset = False
-                    order_changed = True
-                elif new_flat != st.session_state.grid_order:
-                    st.session_state.grid_order = new_flat
-                    order_changed = True
-
-            if order_changed: st.rerun()
+                    cap = count if count > 0 else 1
+                    items = tt_order[curr:curr + cap]
+                    curr += len(items)
+                    preview_rows.append({
+                        "行": f"行{r_idx + 1}",
+                        "枚数": f"{len(items)}/{cap}",
+                        "並び (左 → 右)": " / ".join(items),
+                    })
+                    if curr >= len(tt_order):
+                        break
+                while curr < len(tt_order):
+                    items = tt_order[curr:curr + 5]
+                    curr += len(items)
+                    preview_rows.append({
+                        "行": "予備",
+                        "枚数": f"{len(items)}/5",
+                        "並び (左 → 右)": " / ".join(items),
+                    })
+                st.dataframe(pd.DataFrame(preview_rows), width='stretch', hide_index=True)
 
             st.divider()
 
@@ -209,7 +206,9 @@ def render_grid_page():
             
             # 現在の設定パラメータ
             current_params = {
-                "order": st.session_state.grid_order,
+                # 段階②: TT の番号を変えたら「設定が変更されています」が出るよう、
+                # session の grid_order ではなく TT 由来の順序で比較する。
+                "order": tt_order,
                 "row_counts": st.session_state.grid_row_counts_str,
                 "layout_mode": st.session_state.grid_layout_mode,
                 "alignment": st.session_state.grid_alignment,
@@ -225,7 +224,12 @@ def render_grid_page():
             # 設定反映・保存ボタン
             if st.button("🔄 設定反映 (プレビュー生成)", type="primary", width='stretch', key="btn_grid_generate"):
                 if generate_grid_image:
-                    target_artists = artist_service.get_artists_by_names(st.session_state.grid_order)
+                    # 段階②: 生成・保存の直前に session の grid_order を TT 由来の順序へ
+                    # 揃える(TT タブの「設定反映」と同じ反映。sync_session_to_draft が
+                    # _GRID_KEY_MAP 経由で draft.grid_settings["order"] に載せる)。
+                    # これでプレビュー表示・生成画像・DB 保存の 3 つが必ず一致する。
+                    st.session_state.grid_order = tt_order
+                    target_artists = artist_service.get_artists_by_names(tt_order)
                     
                     if not target_artists:
                         st.warning("表示するアーティストデータがありません。")

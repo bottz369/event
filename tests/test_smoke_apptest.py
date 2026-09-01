@@ -83,3 +83,40 @@ def test_no_value_bleed_on_switch(app_test, two_projects_different_row_counts):
     assert v_a == v_a2, (
         f"A の再選択で row_counts 表示が変動: 初回={v_a!r} 再選択={v_a2!r}"
     )
+
+
+def test_grid_tab_does_not_write_order_on_render(app_test, two_projects_different_row_counts):
+    """段階②: グリッドタブは描画だけでは grid_order を書き換えないこと。
+
+    ドラッグ&ドロップ撤去前は sort_items の戻り値で毎 run 書き換えが起き、
+    さらに「grid_order が空なら TT の逆順で埋める」初期化と
+    リセットボタンも session の grid_order を書いていた。
+    並び順の唯一の正を TT の「アー写グリッド表示順」にしたので、
+    grid_order を書くのは各タブの「🔄 設定反映」(保存)だけであるべき。
+    競合 writer が復活すると DB の order が TT の番号と食い違う。
+    """
+    (_pid_a, label_a, _rc_a), _ = two_projects_different_row_counts
+
+    at = app_test.run()
+    assert not at.exception, f"初期描画で例外: {at.exception}"
+    options = at.selectbox(key=SELECTOR_KEY).options
+    if label_a not in options:
+        pytest.skip(f"selectbox にラベル '{label_a}' が見つからない")
+
+    _select_project(at, label_a)
+    assert not at.exception, f"プロジェクト選択後に例外: {at.exception}"
+
+    def _order():
+        try:
+            return list(at.session_state["grid_order"] or [])
+        except (KeyError, AttributeError):
+            return None
+
+    first = _order()
+    for _ in range(2):
+        at.run()
+        assert not at.exception, f"再描画で例外: {at.exception}"
+        assert _order() == first, (
+            "グリッドタブの描画だけで grid_order が変化した"
+            f"(競合 writer の復活を疑う): {first} -> {_order()}"
+        )
