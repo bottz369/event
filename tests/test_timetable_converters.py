@@ -33,6 +33,7 @@ _EXPECTED_COLUMNS = [
     "IS_HIDDEN",
     "ARTIST",
     "GRID_NO",
+    "GRID_HIDDEN",
     "DURATION",
     "IS_POST_GOODS",
     "ADJUSTMENT",
@@ -325,6 +326,52 @@ def test_grid_no_dtype_drift():
     assert isinstance(rebuilt[0].grid_no, int) and not isinstance(rebuilt[0].grid_no, bool)
 
 
+# ---------- l. GRID_HIDDEN 列 (UI 専用・非永続) の往復 ----------
+def test_grid_hidden_roundtrip():
+    """is_grid_hidden が DF を往復して保たれ、is_hidden とは独立であること。
+
+    往復が壊れると views/timetable.py の「先取り確定」で毎 run チェックが
+    捨てられ、アー写グリッド非表示が効かない(罠33)。
+    """
+    rows = [_make_normal_row(f"A{i}") for i in range(3)]
+    rows[0].is_hidden = True                       # TT だけ非表示
+    rows[1].is_grid_hidden = True                  # グリッドだけ非表示
+    rows[2].is_hidden = rows[2].is_grid_hidden = True  # 両方
+
+    df = draft_rows_to_df(rows)
+    assert df["IS_HIDDEN"].tolist() == [True, False, True]
+    assert df["GRID_HIDDEN"].tolist() == [False, True, True]
+
+    rebuilt = df_to_draft_rows(df)
+    assert [r.is_hidden for r in rebuilt] == [True, False, True]
+    assert [r.is_grid_hidden for r in rebuilt] == [False, True, True]
+    for src, dst in zip(rows, rebuilt):
+        assert src == dst, (src, dst)
+
+
+def test_grid_hidden_defaults_false_for_legacy_dict():
+    """GRID_HIDDEN キーを持たない旧 dict は False。
+
+    既存プロジェクトの移行(is_hidden からの引き継ぎ)は
+    session_manager.reload_project の seed が担うので、ここでは False でよい。
+    """
+    r = TimetableRowDraft.from_dict({"ARTIST": "X", "IS_HIDDEN": True})
+    assert r.is_hidden is True
+    assert r.is_grid_hidden is False
+
+
+def test_grid_hidden_dtype_drift():
+    """data_editor 由来の dtype 揺れ (numpy.bool_ / 0,1 / NaN) を吸収すること。"""
+    df = draft_rows_to_df([_make_normal_row(f"A{i}") for i in range(3)])
+    df["GRID_HIDDEN"] = df["GRID_HIDDEN"].astype(object)
+    df.at[0, "GRID_HIDDEN"] = np.bool_(True)
+    df.at[1, "GRID_HIDDEN"] = 1
+    df.at[2, "GRID_HIDDEN"] = float("nan")
+    rebuilt = df_to_draft_rows(df)
+    assert [r.is_grid_hidden for r in rebuilt] == [True, True, False]
+    assert all(isinstance(r.is_grid_hidden, bool) for r in rebuilt)
+
+
 # ---------- 写経一致確認 ----------
 def test_columns_match_views_timetable():
     """TIMETABLE_DF_COLUMNS が views/timetable.py:409 の写経と完全一致。"""
@@ -347,6 +394,9 @@ _TESTS = [
     test_grid_no_roundtrip,
     test_grid_no_defaults_none_for_legacy_dict,
     test_grid_no_dtype_drift,
+    test_grid_hidden_roundtrip,
+    test_grid_hidden_defaults_false_for_legacy_dict,
+    test_grid_hidden_dtype_drift,
     test_columns_match_views_timetable,
 ]
 

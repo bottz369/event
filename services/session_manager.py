@@ -491,6 +491,8 @@ def _rows_to_comparable(rows: List[TimetableRowDraft]):
         build_grid_order_from_rows で grid_order_json["order"] へ畳まれるため、
         「番号を変えた = DB に書かれる並び順が変わった」で正しい。含めないと
         番号だけ直して保存し忘れたときに未保存警告が出ず、黙って失われる。
+      - is_grid_hidden (アー写グリッド非表示) … ★含める。理由は grid_no と同じで、
+        保存時に grid_order_json["grid_hidden"] / ["order"] の中身を変えるため。
     """
     return tuple(
         (
@@ -498,6 +500,7 @@ def _rows_to_comparable(rows: List[TimetableRowDraft]):
             r.goods_start_time, r.goods_duration, r.place,
             r.add_goods_start_time, r.add_goods_duration, r.add_goods_place,
             r.grid_no,
+            r.is_grid_hidden,
         )
         for r in rows
     )

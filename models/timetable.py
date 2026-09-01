@@ -32,7 +32,7 @@ class TimetableRowDraft:
     duration: int = 20            # 出演時間(分)
     adjustment: int = 0            # 転換時間(分)
     is_post_goods: bool = False    # 「終演後物販」扱いするか
-    is_hidden: bool = False        # 画像生成時に非表示にするか
+    is_hidden: bool = False        # ★タイムテーブル画像から消すフラグ(グリッドには効かない)
 
     # 物販(メイン)
     goods_start_time: str = ""
@@ -60,6 +60,15 @@ class TimetableRowDraft:
     #   session_manager._rows_to_comparable に含める(番号を変えたら未保存扱いにし、
     #   保存し忘れで黙って失われないようにする)。
     grid_no: Optional[int] = None
+
+    # UI 専用・非永続: アー写グリッドから消すフラグ。
+    # is_hidden(タイムテーブル画像から消す)とは独立した別のフラグで、
+    # 片方を立ててももう片方には影響しない。
+    # DB(timetable_rows)に対応カラムは持たない = スキーマ変更なし。
+    # 永続化先は projects_v4.grid_order_json["grid_hidden"](名前リスト)で、
+    # 「🔄 設定反映」の保存直前に build_grid_hidden_from_rows が名前列へ変換する。
+    # ★ grid_no と同じく保存内容を左右するため _rows_to_comparable に含める。
+    is_grid_hidden: bool = False
 
     # ----- 判定ヘルパー -----
     @property
@@ -115,6 +124,10 @@ class TimetableRowDraft:
             adjustment=_to_int(d.get("ADJUSTMENT") or d.get("adjustment"), 0),
             is_post_goods=bool(d.get("IS_POST_GOODS") or d.get("is_post_goods") or False),
             is_hidden=bool(d.get("IS_HIDDEN") or d.get("is_hidden") or False),
+            # 列を持たない旧 dict (data_json fallback / CSV 取込) は False。
+            # 既存プロジェクトの移行は session_manager.reload_project の seed が担う
+            # (grid_hidden キーが無ければ is_hidden から引き継ぐ)。
+            is_grid_hidden=bool(d.get("GRID_HIDDEN") or d.get("is_grid_hidden") or False),
             # DELETE を持たない旧 dict (data_json fallback / CSV 取込) は False。
             is_delete_marked=bool(d.get("DELETE") or d.get("is_delete_marked") or False),
             # GRID_NO は None と 0 を区別する必要があるため、他フィールドのような
@@ -145,6 +158,9 @@ class TimetableRowDraft:
             # UI 専用列。DB へは書き出されず、保存時に
             # build_grid_order_from_rows で grid_order_json["order"] へ畳まれる。
             "GRID_NO": self.grid_no,
+            # UI 専用列。DB へは書き出されず、保存時に
+            # build_grid_hidden_from_rows で grid_order_json["grid_hidden"] へ畳まれる。
+            "GRID_HIDDEN": self.is_grid_hidden,
             "DURATION": self.duration,
             "IS_POST_GOODS": self.is_post_goods,
             "ADJUSTMENT": self.adjustment,
@@ -165,12 +181,16 @@ class TimetableRowDraft:
 # UI 専用・DB 非永続の列が 2 つある:
 #   "DELETE"  … 一括削除チェック (is_delete_marked)
 #   "GRID_NO" … アー写グリッド表示順 (grid_no)。保存時に grid_order_json["order"] へ畳む。
+#   "GRID_HIDDEN" … アー写グリッド非表示 (is_grid_hidden)。保存時に
+#                   grid_order_json["grid_hidden"] へ畳む。IS_HIDDEN
+#                   (タイムテーブル非表示・DB 永続)とは独立した別フラグ。
 # 将来 views 側がこの定数を import して重複解消する想定 (今フェーズでは views 無変更)。
 TIMETABLE_DF_COLUMNS: list[str] = [
     "DELETE",
     "IS_HIDDEN",
     "ARTIST",
     "GRID_NO",
+    "GRID_HIDDEN",
     "DURATION",
     "IS_POST_GOODS",
     "ADJUSTMENT",
@@ -289,6 +309,7 @@ _DF_KEY_TO_DRAFT_KEY = {
     "DELETE": "is_delete_marked",
     "ARTIST": "artist_name",
     "GRID_NO": "grid_no",
+    "GRID_HIDDEN": "is_grid_hidden",
     "DURATION": "duration",
     "IS_POST_GOODS": "is_post_goods",
     "ADJUSTMENT": "adjustment",
