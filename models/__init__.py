@@ -17,6 +17,7 @@ from models.timetable import (
     POST_GOODS_ARTIST_NAME,
     build_grid_hidden_from_rows,
     build_grid_order_from_rows,
+    seed_grid_hidden_from_settings,
     seed_grid_no_from_order,
 )
 
@@ -30,5 +31,6 @@ __all__ = [
     "POST_GOODS_ARTIST_NAME",
     "build_grid_hidden_from_rows",
     "build_grid_order_from_rows",
+    "seed_grid_hidden_from_settings",
     "seed_grid_no_from_order",
 ]

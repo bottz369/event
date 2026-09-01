@@ -30,6 +30,7 @@ from models import (
     ProjectDraft,
     TicketDraft,
     TimetableRowDraft,
+    seed_grid_hidden_from_settings,
     seed_grid_no_from_order,
 )
 from models.flyer_keys import non_persisted_session_keys
@@ -83,6 +84,7 @@ SESSION_PROJECT_KEYS = [
     "tt_last_generated_params",
     "tt_last_check_times_",
     "grid_order",
+    "grid_hidden",
     "grid_cols",
     "grid_rows",
     "grid_row_counts_str",
@@ -172,6 +174,9 @@ _FLYER_EXCLUDED_KEYS = _FLYER_TRANSIENT_KEYS | non_persisted_session_keys()
 # session_state のキーから draft.grid_settings のキーへの写像
 _GRID_KEY_MAP = {
     "grid_order": "order",
+    # 段階②/③: アー写グリッド非表示にした行の名前リスト。grid_settings は
+    # apply_draft で json.dumps 全置換されるので、キーを足すだけで永続化される。
+    "grid_hidden": "grid_hidden",
     "grid_cols": "cols",
     "grid_rows": "rows",
     "grid_row_counts_str": "row_counts_str",
@@ -375,6 +380,10 @@ def reload_project(project_id: int) -> bool:
         #   has_unsaved_changes() が True になり誤警告が出る
         #   (grid_no は _rows_to_comparable に含まれるため)。
         seed_grid_no_from_order(rows, (draft.grid_settings or {}).get("order") or [])
+        # 同上: アー写グリッド非表示(is_grid_hidden)を grid_settings["grid_hidden"]
+        # から復元する。キーが無い未移行プロジェクトは is_hidden を引き継いで
+        # 変更前の見た目を保つ(詳細は seed_grid_hidden_from_settings の docstring)。
+        seed_grid_hidden_from_settings(rows, draft.grid_settings)
         set_draft_rows(rows)
         _save_snapshot(draft, rows)
         set_active_project_id(project_id)

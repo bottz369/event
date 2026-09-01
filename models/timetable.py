@@ -240,6 +240,51 @@ def seed_grid_no_from_order(rows: list["TimetableRowDraft"], order: list) -> Non
         r.grid_no = pos.get((r.artist_name or "").strip())
 
 
+def seed_grid_hidden_from_settings(rows: list["TimetableRowDraft"], grid_settings) -> None:
+    """保存済み grid_settings から is_grid_hidden を復元する(移行フォールバック付き)。
+
+    is_grid_hidden は timetable_rows に持たない(非永続)ため、読み込み直後は
+    必ず False。grid_order_json("grid_settings")から復元する。
+
+    ★ 判定は「grid_hidden キーの【存在】」で行う(値の真偽ではない):
+      - キーが存在する(空リストを含む) = 移行済み
+          → is_grid_hidden = (名前 in grid_hidden)
+          空リストは「誰もグリッド非表示にしていない」という確定した状態であり、
+          未移行とは別物。`or` の truthiness で判定すると空リストが未移行に
+          化けて、下の is_hidden 引き継ぎが誤発火する。
+      - キーが無い = 未移行の既存プロジェクト
+          → is_grid_hidden = is_hidden
+          変更前は is_hidden がグリッドの除外条件だったので、これで
+          既存プロジェクトの見た目が変わらない(移行フォールバック)。
+
+    ★ 呼び出しは session_manager.reload_project() の _save_snapshot() より前。
+      後で呼ぶとプロジェクトを開いただけで has_unsaved_changes() が True になり
+      誤警告が出る(is_grid_hidden は _rows_to_comparable に含まれるため)。
+    特殊行は常に対象外。rows を破壊的に更新する。
+    """
+    if not isinstance(grid_settings, dict):
+        grid_settings = {}
+
+    if "grid_hidden" in grid_settings:
+        raw = grid_settings.get("grid_hidden")
+        raw = raw if isinstance(raw, (list, tuple)) else []
+        hidden = {
+            str(n).strip() for n in raw
+            if n is not None and str(n).strip()
+        }
+        for r in (rows or []):
+            if r.is_special_row:
+                continue
+            r.is_grid_hidden = (r.artist_name or "").strip() in hidden
+        return
+
+    # 未移行: 変更前の挙動(グリッドの除外条件 = is_hidden)を引き継ぐ
+    for r in (rows or []):
+        if r.is_special_row:
+            continue
+        r.is_grid_hidden = bool(r.is_hidden)
+
+
 def build_grid_hidden_from_rows(rows: list["TimetableRowDraft"]) -> list[str]:
     """draft_rows から grid_order_json["grid_hidden"](名前リスト)を組み立てる。
 
