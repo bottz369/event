@@ -4,7 +4,8 @@
 検証内容:
   (A) 番号昇順で並ぶ / 未入力は末尾(TT出演順を保つ)
   (B) 番号重複は TT出演順(行index)でタイブレーク
-  (C) 特殊行(開演前/終演後物販) と is_hidden 行と空名を除外
+  (C) 特殊行(開演前/終演後物販) と is_grid_hidden 行と空名を除外
+      ★is_hidden(タイムテーブル非表示)では除外しないことも確認する
   (D) 同名重複は先頭のみ残す
   (E) ★現状 grid_order から採番したら現状 order を再現する(初期表示で見た目が変わらない)
   (F) ★TT にいない登録アーティストは出力に含まれない(仕様変更・合意済み)
@@ -19,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.timetable import (  # noqa: E402
     POST_GOODS_ARTIST_NAME,
+    build_grid_hidden_from_rows,
     PRE_GOODS_ARTIST_NAME,
     TimetableRowDraft,
     build_grid_order_from_rows,
@@ -34,8 +36,11 @@ def _chk(ok, label, extra=""):
         fails += 1
 
 
-def _n(name, grid_no=None, hidden=False):
-    return TimetableRowDraft(artist_name=name, place="A", grid_no=grid_no, is_hidden=hidden)
+def _n(name, grid_no=None, grid_hidden=False, tt_hidden=False):
+    return TimetableRowDraft(
+        artist_name=name, place="A", grid_no=grid_no,
+        is_grid_hidden=grid_hidden, is_hidden=tt_hidden,
+    )
 
 
 def _pre():
@@ -76,15 +81,26 @@ _chk(all(build_grid_order_from_rows(rows) == out for _ in range(5)), "何度呼�
 
 print()
 print("=" * 68)
-print("(C) 除外: 特殊行 / is_hidden / 空名")
+print("(C) 除外: 特殊行 / is_grid_hidden / 空名")
 print("=" * 68)
 rows = [_pre(), _n("A", 2), _n("B", 1), _post()]
 out = build_grid_order_from_rows(rows)
 _chk(out == ["B", "A"], "特殊行は番号が付いていても除外", "-> %s" % out)
 
-rows = [_n("A", 1), _n("B", 2, hidden=True), _n("C", 3)]
+rows = [_n("A", 1), _n("B", 2, grid_hidden=True), _n("C", 3)]
 out = build_grid_order_from_rows(rows)
-_chk(out == ["A", "C"], "is_hidden 行は除外", "-> %s" % out)
+_chk(out == ["A", "C"], "is_grid_hidden 行は除外", "-> %s" % out)
+
+# ★2 つのフラグが独立であること
+rows = [_n("A", 1, tt_hidden=True), _n("B", 2), _n("C", 3, grid_hidden=True)]
+out = build_grid_order_from_rows(rows)
+_chk(out == ["A", "B"],
+     "is_hidden(タイムテーブル非表示)では除外しない / is_grid_hidden でのみ除外",
+     "-> %s" % out)
+
+rows = [_n("A", 1, tt_hidden=True, grid_hidden=True), _n("B", 2)]
+out = build_grid_order_from_rows(rows)
+_chk(out == ["B"], "両方立っていればグリッドからも消える", "-> %s" % out)
 
 rows = [_n("A", 1), _n("", 2), _n("   ", 3), _n("C", 4)]
 out = build_grid_order_from_rows(rows)
@@ -154,6 +170,36 @@ _chk(build_grid_order_from_rows([]) == [] and build_grid_order_from_rows(None) =
      "空 / None 入力で例外を出さず [] を返す")
 _chk(build_grid_order_from_rows([_pre(), _post()]) == [],
      "特殊行しか無ければ空リスト")
+
+print()
+print("=" * 68)
+print("(H) build_grid_hidden_from_rows (保存用の名前リスト)")
+print("=" * 68)
+rows = [_n("A", 1, grid_hidden=True), _n("B", 2), _n("C", 3, grid_hidden=True)]
+out = build_grid_hidden_from_rows(rows)
+_chk(out == ["A", "C"], "グリッド非表示の通常行の名前だけを返す", "-> %s" % out)
+
+rows = [_pre(), _n("A", 1), _n("B", 2)]
+rows[0].is_grid_hidden = True
+out = build_grid_hidden_from_rows(rows)
+_chk(out == [], "特殊行は対象外", "-> %s" % out)
+
+rows = [_n("A", 1, tt_hidden=True), _n("B", 2)]
+_chk(build_grid_hidden_from_rows(rows) == [],
+     "is_hidden(タイムテーブル非表示)だけでは grid_hidden に入らない")
+
+rows = [_n("  A  ", 1, grid_hidden=True), _n("A", 2, grid_hidden=True), _n("", 3, grid_hidden=True)]
+out = build_grid_hidden_from_rows(rows)
+_chk(out == ["A"], "strip + 重複除去 + 空名スキップ", "-> %s" % out)
+
+_chk(build_grid_hidden_from_rows([]) == [] and build_grid_hidden_from_rows(None) == [],
+     "空 / None 入力で [] を返す")
+_chk(isinstance(build_grid_hidden_from_rows([_n("A", 1, grid_hidden=True)]), list),
+     "戻り値は list[str]")
+
+# ★キーの存在が移行済みフラグを兼ねるので、該当ゼロでも [] を返すこと
+_chk(build_grid_hidden_from_rows([_n("A", 1), _n("B", 2)]) == [],
+     "該当ゼロでも [] を返す(キー存在=移行済みの印になる)")
 
 print()
 print("BUILD_GRID_ORDER_ALL_PASS" if fails == 0 else "BUILD_GRID_ORDER_FAILED (%d)" % fails)

@@ -240,6 +240,28 @@ def seed_grid_no_from_order(rows: list["TimetableRowDraft"], order: list) -> Non
         r.grid_no = pos.get((r.artist_name or "").strip())
 
 
+def build_grid_hidden_from_rows(rows: list["TimetableRowDraft"]) -> list[str]:
+    """draft_rows から grid_order_json["grid_hidden"](名前リスト)を組み立てる。
+
+    is_grid_hidden は timetable_rows に持たない(非永続)ため、保存時に
+    「アー写グリッド非表示にした通常行の名前」の一覧として grid_settings に畳む。
+    読み戻しは session_manager.reload_project の seed が行う。
+
+    ★ このキーの「存在」が移行済みフラグを兼ねる。空リストは
+      「誰も非表示にしていない」を意味し、キー自体が無い(未移行)とは別物なので、
+      該当ゼロでも必ず [] を返して書き出すこと。
+    特殊行は対象外。名前は strip し、重複は除去する。
+    """
+    names = []
+    for r in (rows or []):
+        if r.is_special_row or not r.is_grid_hidden:
+            continue
+        name = (r.artist_name or "").strip()
+        if name:
+            names.append(name)
+    return list(dict.fromkeys(names))
+
+
 def build_grid_order_from_rows(rows: list["TimetableRowDraft"]) -> list[str]:
     """draft_rows から アー写グリッドの order(名前リスト)を組み立てる純関数。
 
@@ -250,7 +272,11 @@ def build_grid_order_from_rows(rows: list["TimetableRowDraft"]) -> list[str]:
 
     除外(views/grid.py の従来フィルタと同じ意味):
       - 特殊行(開演前物販 / 終演後物販): アー写を持たない
-      - is_hidden 行: 画像生成から外す指定
+      - is_grid_hidden 行: 「アー写グリッド非表示」チェック
+        ★ is_hidden(タイムテーブル非表示)ではないことに注意。2 つは独立した
+          フラグで、タイムテーブル画像から消してもグリッドには出る(逆も同様)。
+          既存プロジェクトの見た目は session_manager 側の seed が
+          「grid_hidden キーが無ければ is_hidden を引き継ぐ」ことで保たれる。
       - 名前が空 / 空白のみの行(strip して判定)
 
     並び:
@@ -268,7 +294,7 @@ def build_grid_order_from_rows(rows: list["TimetableRowDraft"]) -> list[str]:
     """
     indexed: list[tuple[bool, int, int, str]] = []
     for i, r in enumerate(rows or []):
-        if r.is_special_row or r.is_hidden:
+        if r.is_special_row or r.is_grid_hidden:
             continue
         name = (r.artist_name or "").strip()
         if not name:
