@@ -15,6 +15,7 @@ from models.timetable import (
     TimetableRowDraft,
     PRE_GOODS_ARTIST_NAME,
     POST_GOODS_ARTIST_NAME,
+    build_grid_order_from_rows,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "TimetableRowDraft",
     "PRE_GOODS_ARTIST_NAME",
     "POST_GOODS_ARTIST_NAME",
+    "build_grid_order_from_rows",
 ]

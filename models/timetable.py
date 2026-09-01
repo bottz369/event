@@ -194,6 +194,48 @@ def draft_rows_to_df(rows: list["TimetableRowDraft"]) -> pd.DataFrame:
     return pd.DataFrame(records, columns=TIMETABLE_DF_COLUMNS)
 
 
+def build_grid_order_from_rows(rows: list["TimetableRowDraft"]) -> list[str]:
+    """draft_rows から アー写グリッドの order(名前リスト)を組み立てる純関数。
+
+    ★ grid_order_json["order"] は「アーティスト名の list」という契約で、消費者が
+      views/grid.py / views/flyer.py / views/overview.py /
+      services/generation_service.py / bot/api.py / project_repo.reassign_grid_orders
+      と多岐にわたる。よって返すのは必ず名前の list[str](契約を変えない)。
+
+    除外(views/grid.py の従来フィルタと同じ意味):
+      - 特殊行(開演前物販 / 終演後物販): アー写を持たない
+      - is_hidden 行: 画像生成から外す指定
+      - 名前が空 / 空白のみの行(strip して判定)
+
+    並び:
+      - grid_no の昇順で左上から詰める。
+      - 未入力(None)は末尾へ回し、その中では TT の出演順を保つ
+        (除外にはしない。番号の振り忘れで人が黙って消えるのを避けるため)。
+      - grid_no が重複したら TT の出演順(行 index)でタイブレークする。
+      - 同名が複数行あるときは先に現れた方だけ残す(grid は名前で画像を引くので
+        同名を 2 度並べても同じ画像が 2 枚出るだけ)。
+
+    ★ 仕様変更(合意済み): rows(= TT)だけを見て組むので、TT にいない登録
+      アーティストは order から落ちる。TT を並び順の唯一の正とするための意図的な挙動。
+
+    streamlit / DB に非依存の純関数(scratch で機械検証できる形に保つこと)。
+    """
+    indexed: list[tuple[bool, int, int, str]] = []
+    for i, r in enumerate(rows or []):
+        if r.is_special_row or r.is_hidden:
+            continue
+        name = (r.artist_name or "").strip()
+        if not name:
+            continue
+        # None と int を直接比較できないので、(未入力か, 番号, 行index) の
+        # 3 段キーにする。sorted は安定だが行 index を明示して決定性を担保する。
+        no_input = r.grid_no is None
+        indexed.append((no_input, 0 if no_input else int(r.grid_no), i, name))
+
+    indexed.sort(key=lambda t: (t[0], t[1], t[2]))
+    return list(dict.fromkeys(name for _, _, _, name in indexed))
+
+
 def _normalize_cell(v):
     """
     pandas / st.data_editor 経由の値を Python ネイティブ型に正規化する。
