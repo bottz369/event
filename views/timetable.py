@@ -149,6 +149,27 @@ def _normalize_edited_rows(rows):
     return rows
 
 
+# 段階③: アーティスト行の生成 + insert 位置決めを 1 箇所に集約した純関数。
+# 旧「＋」ボタン(1件追加)のインライン処理と bit 等価:
+#   - TimetableRowDraft(artist_name=name, place="A")
+#     place="A" は旧 get_default_row_settings() の "PLACE": "A" と等価。
+#     他フィールドは TimetableRowDraft のデフォルト (duration=20 等) で旧と一致。
+#   - 終演後物販行があればその直前 (= 通常行末尾) に挿入、なければ末尾。
+# 複数 names は「1件ずつ順に insert した結果」と同一 (終演後物販の直前に names 順で連続配置)。
+# 純関数: 引数リストを破壊せず新しい list を返す (呼び出し側で set_draft_rows する)。
+def _append_artist_rows(draft_rows, names):
+    rows = list(draft_rows or [])
+    new_rows = [TimetableRowDraft(artist_name=n, place="A") for n in (names or [])]
+    if not new_rows:
+        return rows
+    post_idx = next((i for i, r in enumerate(rows) if r.is_post_goods_row), None)
+    if post_idx is None:
+        rows.extend(new_rows)
+    else:
+        rows[post_idx:post_idx] = new_rows
+    return rows
+
+
 def _apply_editor_state_to_df(df, editor_state):
     """data_editor の内部 state(edited_rows 差分)を df に適用した新 df を返す。
 
@@ -418,16 +439,11 @@ def render_timetable_page():
             with c_add2:
                 if st.button("＋"):
                     if new_artist:
-                        # place="A" は旧 get_default_row_settings() の "PLACE": "A" と等価。
-                        # 他フィールドは TimetableRowDraft のデフォルト (duration=20 等) で旧と一致。
-                        new_row = TimetableRowDraft(artist_name=new_artist, place="A")
-                        # 終演後物販行があればその直前 (= 通常行末尾) に挿入、なければ末尾。
-                        post_idx = next((i for i, r in enumerate(draft_rows) if r.is_post_goods_row), None)
-                        if post_idx is None:
-                            draft_rows.append(new_row)
-                        else:
-                            draft_rows.insert(post_idx, new_row)
-                        session_manager.set_draft_rows(draft_rows)
+                        # 行生成 + insert 位置決めは _append_artist_rows に集約
+                        # (一括追加と同一関数。1件追加は names=[1件] と等価)。
+                        session_manager.set_draft_rows(
+                            _append_artist_rows(draft_rows, [new_artist])
+                        )
                         _bump_editor_seq()
                         mark_dirty()
                         st.rerun()

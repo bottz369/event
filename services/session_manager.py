@@ -58,6 +58,10 @@ SESSION_PROJECT_KEYS = [
     "flyer_result_tt",
     "flyer_layout_meta",
     "tt_editor_key",
+    # 段階③: 「追加予定リスト」(一括追加 UI の下書き)。DB には保存せず session のみ。
+    # プロジェクト切替で残留しないよう必ずここに登録する
+    # (§22 / 罠3: 未登録キーは clear_project_session を素通りし、前プロジェクトの値が残る)。
+    "tt_pending_add",
     "tt_title",
     "tt_event_date",
     "tt_venue",
