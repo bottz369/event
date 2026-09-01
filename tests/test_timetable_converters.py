@@ -26,8 +26,10 @@ from models.timetable import (  # noqa: E402
 )
 
 
-# views/timetable.py:409 の column_order と完全一致確認用 (写経)
+# views/timetable.py の data_editor 列と完全一致確認用 (写経)
+# 先頭 "DELETE" は一括削除の UI 専用列 (DB 非永続)。
 _EXPECTED_COLUMNS = [
+    "DELETE",
     "IS_HIDDEN",
     "ARTIST",
     "DURATION",
@@ -241,6 +243,43 @@ def test_dtype_drift_recovery():
     assert r1.add_goods_duration is None
 
 
+# ---------- j. DELETE 列 (UI 専用・非永続) の往復 ----------
+def test_delete_flag_roundtrip():
+    """is_delete_marked が DF を往復して保たれること。
+
+    これが通らないと views/timetable.py の「先取り確定」で毎 run チェックが
+    捨てられ、一括削除のチェックが効かない(罠33)。
+    """
+    rows = [_make_normal_row("A"), _make_normal_row("B"), _make_normal_row("C")]
+    rows[1].is_delete_marked = True
+
+    df = draft_rows_to_df(rows)
+    assert list(df.columns)[0] == "DELETE"
+    assert df["DELETE"].tolist() == [False, True, False]
+
+    rebuilt = df_to_draft_rows(df)
+    assert [r.is_delete_marked for r in rebuilt] == [False, True, False]
+    for src, dst in zip(rows, rebuilt):
+        assert src == dst, (src, dst)
+
+
+def test_delete_flag_defaults_false_for_legacy_dict():
+    """DELETE キーを持たない旧 dict (data_json fallback / CSV 取込) は False。"""
+    r = TimetableRowDraft.from_dict({"ARTIST": "X", "DURATION": 20})
+    assert r.is_delete_marked is False
+
+
+def test_delete_flag_dtype_drift():
+    """data_editor 由来の dtype 揺れ (numpy.bool_ / 0,1 / NaN) を吸収すること。"""
+    df = draft_rows_to_df([_make_normal_row("A") for _ in range(3)])
+    df.at[0, "DELETE"] = np.bool_(True)
+    df.at[1, "DELETE"] = 1
+    df.at[2, "DELETE"] = float("nan")
+    rebuilt = df_to_draft_rows(df)
+    assert [r.is_delete_marked for r in rebuilt] == [True, True, False]
+    assert all(isinstance(r.is_delete_marked, bool) for r in rebuilt)
+
+
 # ---------- 写経一致確認 ----------
 def test_columns_match_views_timetable():
     """TIMETABLE_DF_COLUMNS が views/timetable.py:409 の写経と完全一致。"""
@@ -257,6 +296,9 @@ _TESTS = [
     test_add_goods_duration_none_roundtrip,
     test_types_preserved,
     test_dtype_drift_recovery,
+    test_delete_flag_roundtrip,
+    test_delete_flag_defaults_false_for_legacy_dict,
+    test_delete_flag_dtype_drift,
     test_columns_match_views_timetable,
 ]
 

@@ -44,6 +44,14 @@ class TimetableRowDraft:
     add_goods_duration: Optional[int] = None
     add_goods_place: str = ""
 
+    # UI 専用・非永続: 一括削除の「削除」チェック。
+    # DB(timetable_rows)に対応カラムは持たない = スキーマ変更なし。
+    # timetable_repo._draft_to_row は書き出さず、_row_to_draft は常に False で復元する。
+    # ★ session_state に別持ちせず draft_rows に載せる理由: views/timetable.py の
+    #   「先取り確定」(_apply_editor_state_to_df の `if col in new_df.columns` ガード)は
+    #   draft_rows_to_df が出す列しか通さないため、別持ちすると毎 run チェックが捨てられる(罠33)。
+    is_delete_marked: bool = False
+
     # ----- 判定ヘルパー -----
     @property
     def is_pre_goods_row(self) -> bool:
@@ -98,6 +106,8 @@ class TimetableRowDraft:
             adjustment=_to_int(d.get("ADJUSTMENT") or d.get("adjustment"), 0),
             is_post_goods=bool(d.get("IS_POST_GOODS") or d.get("is_post_goods") or False),
             is_hidden=bool(d.get("IS_HIDDEN") or d.get("is_hidden") or False),
+            # DELETE を持たない旧 dict (data_json fallback / CSV 取込) は False。
+            is_delete_marked=bool(d.get("DELETE") or d.get("is_delete_marked") or False),
             goods_start_time=_to_str(d.get("GOODS_START_MANUAL") or d.get("goods_start_time")),
             goods_duration=_to_int(d.get("GOODS_DURATION") or d.get("goods_duration"), 60),
             place=_to_str(d.get("PLACE") or d.get("place")),
@@ -113,6 +123,9 @@ class TimetableRowDraft:
         その互換のために用意する。
         """
         return {
+            # UI 専用列。DB へは書き出されず、draft_rows_to_df 経由で
+            # data_editor に渡すためだけに存在する(models の is_delete_marked)。
+            "DELETE": self.is_delete_marked,
             "ARTIST": self.artist_name,
             "DURATION": self.duration,
             "IS_POST_GOODS": self.is_post_goods,
@@ -130,9 +143,11 @@ class TimetableRowDraft:
 # ============================================================
 # Phase 2B-2-a: draft_rows <-> DataFrame 純粋変換
 # ============================================================
-# views/timetable.py:409 の column_order と完全一致(同順 11 列)。
+# views/timetable.py の data_editor 列と完全一致(同順 12 列)。
+# 先頭の "DELETE" は一括削除用の UI 専用列(DB 非永続。is_delete_marked に対応)。
 # 将来 views 側がこの定数を import して重複解消する想定 (今フェーズでは views 無変更)。
 TIMETABLE_DF_COLUMNS: list[str] = [
+    "DELETE",
     "IS_HIDDEN",
     "ARTIST",
     "DURATION",
@@ -182,6 +197,7 @@ def _normalize_cell(v):
 # DURATION=0 が消える既存挙動があるため、ここで snake_case 単一キーに正規化して
 # from_dict に渡し、第一項が None、第二項に 0 等の正値が入る形にする。
 _DF_KEY_TO_DRAFT_KEY = {
+    "DELETE": "is_delete_marked",
     "ARTIST": "artist_name",
     "DURATION": "duration",
     "IS_POST_GOODS": "is_post_goods",
