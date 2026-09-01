@@ -469,6 +469,15 @@ def _project_to_comparable(draft: ProjectDraft):
 
 
 def _rows_to_comparable(rows: List[TimetableRowDraft]):
+    """未保存判定用に行を比較可能なタプルへ落とす。
+
+    ★ ここに載せるのは「DB に永続化されるフィールド」だけ。
+      TimetableRowDraft.is_delete_marked (一括削除の UI 専用チェック) は
+      意図的に含めない。含めるとチェックを入れただけで has_unsaved_changes() が
+      True になり、workspace が「未保存の変更があります」を誤警告する
+      (実際には DB に書かれる情報が何も変わっていない)。
+      行を実際に消したときは行数・内容が変わるので、この一覧のままで差分は検知できる。
+    """
     return tuple(
         (
             r.artist_name, r.duration, r.adjustment, r.is_post_goods, r.is_hidden,
