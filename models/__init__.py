@@ -16,6 +16,7 @@ from models.timetable import (
     PRE_GOODS_ARTIST_NAME,
     POST_GOODS_ARTIST_NAME,
     build_grid_order_from_rows,
+    seed_grid_no_from_order,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "PRE_GOODS_ARTIST_NAME",
     "POST_GOODS_ARTIST_NAME",
     "build_grid_order_from_rows",
+    "seed_grid_no_from_order",
 ]

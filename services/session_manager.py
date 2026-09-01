@@ -30,6 +30,7 @@ from models import (
     ProjectDraft,
     TicketDraft,
     TimetableRowDraft,
+    seed_grid_no_from_order,
 )
 from models.flyer_keys import non_persisted_session_keys
 from repositories import project_repo, timetable_repo
@@ -368,6 +369,12 @@ def reload_project(project_id: int) -> bool:
         rows = timetable_repo.load_rows(db, project_id)
 
         set_draft_project(draft)
+        # 段階②: アー写グリッド表示順(grid_no)は timetable_rows に持たないため、
+        # 保存済み grid_order_json["order"] 内の位置から復元する。
+        # ★ _save_snapshot より前に行うこと。後にすると、プロジェクトを開いただけで
+        #   has_unsaved_changes() が True になり誤警告が出る
+        #   (grid_no は _rows_to_comparable に含まれるため)。
+        seed_grid_no_from_order(rows, (draft.grid_settings or {}).get("order") or [])
         set_draft_rows(rows)
         _save_snapshot(draft, rows)
         set_active_project_id(project_id)

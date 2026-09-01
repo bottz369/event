@@ -486,3 +486,103 @@ def test_bulk_delete_button_disabled_without_check(app_test, two_projects_differ
     btn = at.button(key="btn_tt_bulk_delete")
     assert btn is not None, "一括削除ボタンが描画されていない"
     assert btn.disabled is True, "チェック無しでもボタンが有効になっている"
+
+
+# ---------------------------------------------------------------------------
+# 段階②: 「アー写グリッド表示順」(GRID_NO) の回帰網
+# ---------------------------------------------------------------------------
+UNSAVED_WARNING_TEXT = "未保存の変更があります"
+
+
+def _open_first_project(at):
+    """selectbox で最初の実プロジェクトを開く。無ければ skip。"""
+    options = [
+        o for o in at.selectbox(key=SELECTOR_KEY).options
+        if o not in ("(選択してください)", "➕ 新規プロジェクト作成")
+    ]
+    if not options:
+        pytest.skip("選択できるプロジェクトが無い")
+    at.selectbox(key=SELECTOR_KEY).select(options[0]).run()
+    assert not at.exception, f"プロジェクト選択で例外: {at.exception}"
+    return options[0]
+
+
+def test_grid_no_seeded_from_saved_order(app_test, two_projects_different_row_counts):
+    """読込時に grid_no が保存済み grid_order の位置から復元され、
+    build_grid_order_from_rows がその並びを再現すること。
+
+    = 番号列を足しても初期表示のグリッド並びが変わらないことの回帰網。
+    """
+    from models.timetable import build_grid_order_from_rows
+
+    at = app_test.run()
+    assert not at.exception
+    _open_first_project(at)
+
+    rows = _sget(at, "draft_rows") or []
+    order = [str(n).strip() for n in (_sget(at, "grid_order") or []) if str(n).strip()]
+    if not order:
+        pytest.skip("保存済み grid_order が無いプロジェクト")
+
+    assert any(r.grid_no is not None for r in rows), (
+        "grid_no が復元されていない(seed_grid_no_from_order の退行を疑う)"
+    )
+
+    tt_names = {(r.artist_name or "").strip() for r in rows}
+    expected = [n for n in dict.fromkeys(order) if n in tt_names]
+    rebuilt = build_grid_order_from_rows(rows)
+    assert rebuilt[: len(expected)] == expected, (
+        f"保存済み order の並びを再現していない: expected={expected[:5]} got={rebuilt[:5]}"
+    )
+
+
+def test_no_false_unsaved_warning_on_open(app_test, two_projects_different_row_counts):
+    """プロジェクトを開いただけで「未保存の変更があります」が出ないこと。
+
+    grid_no は _rows_to_comparable に含まれるため、採番を
+    session_manager.reload_project() の _save_snapshot() より後で行うと
+    開いた瞬間に誤警告が出る。その退行を止める回帰網。
+    """
+    at = app_test.run()
+    assert not at.exception
+    _open_first_project(at)
+
+    warnings = [w.value for w in at.warning]
+    assert not any(UNSAVED_WARNING_TEXT in str(w) for w in warnings), (
+        f"開いただけで未保存警告が出ている: {warnings}"
+    )
+
+
+def test_grid_no_edit_reaches_draft_rows(app_test, two_projects_different_row_counts):
+    """GRID_NO の編集が先取り確定を通って draft_rows に届くこと(罠33)。
+
+    ★RED になるときは GRID_NO が draft_rows_to_df の出力列から外れていないか疑う。
+    """
+    at = app_test.run()
+    assert not at.exception
+    _open_first_project(at)
+
+    rows = _sget(at, "draft_rows") or []
+    target = next(
+        (i for i, r in enumerate(rows)
+         if r.artist_name not in ("開演前物販", "終演後物販")),
+        None,
+    )
+    if target is None:
+        pytest.skip("通常行が無い")
+
+    editor_key = f"tt_editor_{_sget(at, 'tt_editor_key')}"
+    at.session_state[editor_key] = {
+        "edited_rows": {target: {"GRID_NO": 99}},
+        "added_rows": [],
+        "deleted_rows": [],
+    }
+    at.run()
+    assert not at.exception, f"GRID_NO 注入後に例外: {at.exception}"
+
+    dr = _sget(at, "draft_rows") or []
+    assert dr[target].grid_no == 99, (
+        "GRID_NO の編集が draft_rows に届いていない(罠33 の再発を疑う)"
+    )
+    # 番号を変えたら未保存扱いになる(黙って失われない)
+    assert _sget(at, "tt_unsaved_changes") is True

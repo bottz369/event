@@ -20,6 +20,7 @@ from models.timetable import (
     PRE_GOODS_ARTIST_NAME,
     POST_GOODS_ARTIST_NAME,
     TimetableRowDraft,
+    build_grid_order_from_rows,
     draft_rows_to_df,
     df_to_draft_rows,
 )
@@ -618,6 +619,11 @@ def render_timetable_page():
                     "DELETE": st.column_config.CheckboxColumn("削除", width="small"),
                     "IS_HIDDEN": st.column_config.CheckboxColumn("非表示", width="small"),
                     "ARTIST": st.column_config.TextColumn("アーティスト", disabled=True),
+                    "GRID_NO": st.column_config.NumberColumn(
+                        "アー写グリッド表示順", width="small", min_value=1, step=1,
+                        help="この番号の昇順で、アー写グリッドに左上から詰めて並びます。"
+                             "空欄は末尾(出演順)。反映は「🔄 設定反映」を押したときです。",
+                    ),
                     "DURATION": st.column_config.SelectboxColumn("出演", options=DURATION_OPTIONS, width="small"),
                     "IS_POST_GOODS": st.column_config.CheckboxColumn("終演後", width="small"),
                     "ADJUSTMENT": st.column_config.SelectboxColumn("転換", options=ADJUSTMENT_OPTIONS, width="small"),
@@ -835,6 +841,18 @@ def render_timetable_page():
                                 img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
                                 st.session_state.last_generated_tt_image = img
                                 st.session_state.tt_last_generated_params = current_tt_params
+
+                                # 段階②: TT の「アー写グリッド表示順」を保存直前に
+                                # grid_order へ畳む(TT → グリッドの一方向反映)。
+                                # 新しい保存境界は作らず既存の save_active_project() に相乗りする
+                                # (sync_session_to_draft が _GRID_KEY_MAP 経由で
+                                #  draft.grid_settings["order"] に載せ、apply_draft が
+                                #  grid_order_json へ書き出す)。session の grid_order も
+                                # 更新するので、同 run 内で flyer / overview の
+                                # session 優先参照とも整合する。
+                                st.session_state.grid_order = build_grid_order_from_rows(
+                                    session_manager.get_draft_rows()
+                                )
 
                                 # Phase 2B-1b: save_active_project() 経由で保存
                                 # sync_session_to_draft が tt_open_time / tt_start_time / tt_goods_offset /

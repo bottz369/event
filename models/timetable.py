@@ -194,6 +194,32 @@ def draft_rows_to_df(rows: list["TimetableRowDraft"]) -> pd.DataFrame:
     return pd.DataFrame(records, columns=TIMETABLE_DF_COLUMNS)
 
 
+def seed_grid_no_from_order(rows: list["TimetableRowDraft"], order: list) -> None:
+    """保存済み grid_order["order"] における位置から各行の grid_no を復元する。
+
+    grid_no は timetable_rows に持たない(非永続)ため、プロジェクトを読み込んだ
+    直後は必ず None になる。そのままだと「番号列を足したら初期表示のグリッド並びが
+    変わってしまう」ので、既存 order 内の位置 + 1 を番号として与えて見た目を保つ。
+    order に無い行は None のまま(= 末尾へ回る)。
+
+    ★ 呼び出しは session_manager.reload_project() の _save_snapshot() より前。
+      後で呼ぶと、プロジェクトを開いただけで has_unsaved_changes() が True になり
+      誤警告が出る(grid_no は _rows_to_comparable に含まれるため)。
+    既に番号が入っている行は上書きしない(ユーザー入力が正)。rows を破壊的に更新する。
+    """
+    pos: dict[str, int] = {}
+    for i, name in enumerate(order or []):
+        clean = (name or "").strip() if isinstance(name, str) else ""
+        if clean and clean not in pos:
+            pos[clean] = i + 1
+    if not pos:
+        return
+    for r in (rows or []):
+        if r.grid_no is not None or r.is_special_row:
+            continue
+        r.grid_no = pos.get((r.artist_name or "").strip())
+
+
 def build_grid_order_from_rows(rows: list["TimetableRowDraft"]) -> list[str]:
     """draft_rows から アー写グリッドの order(名前リスト)を組み立てる純関数。
 
