@@ -25,12 +25,14 @@ if TYPE_CHECKING:  # 型注釈専用(実行時に PIL を import しない)
     from PIL import Image
 
 from constants import FONT_DIR
-from database import SessionLocal
+from database import SessionLocal, get_image_url
+from models.flyer_keys import FLYER_KEY_REGISTRY
 from logic_grid import generate_grid_image, resolve_font_path
 from logic_timetable import generate_timetable_image
 from repositories import project_repo
-from services import artist_service, font_service, timetable_service
-from utils.flyer_helpers import format_time_str
+from services import artist_service, asset_service, font_service, timetable_service
+from utils.flyer_generator import create_flyer_image_shadow
+from utils.flyer_helpers import format_event_date, format_time_str
 from utils.logger import get_logger
 from utils.text_generator import build_event_summary_text
 
@@ -354,3 +356,127 @@ def render_timetable_png_for_project(project_id: int) -> Optional[bytes]:
     """
     with _render_lock:
         return _to_png_bytes(_render_tt_image_for_project(project_id))
+
+
+# =========================================================
+# 段階B B-2: フライヤー画像
+# =========================================================
+# 「フライヤーセットの 2 枚」は create_flyer_image_shadow を variant 違いで 2 回呼ぶだけ。
+# 差分は main_source(グリッド画像 / TT 画像)と content_scale・pos の 3 キーのみで、
+# 他の引数は完全に同一(views/flyer.py:552 _generate_preview)。
+_FLYER_VARIANTS = ("grid", "tt")
+
+# styles のうち「フォントファイル名」を持つキー。生成前に実パスへ解決する必要がある
+# (views/flyer.py の targets と同一)。
+_FLYER_FONT_STYLE_KEYS = (
+    "subtitle_font", "date_font", "venue_font",
+    "time_font", "ticket_name_font", "ticket_note_font",
+)
+
+
+def build_flyer_kwargs_for_project(project_id: int, variant: str = "grid") -> Optional[dict]:
+    """フライヤー生成の引数一式を DB から組む(main_source 以外)。未検出は None。
+
+    views/flyer.py:552 _generate_preview の引数組み立てを streamlit フリーに移植したもの。
+    session_state ではなく projects_v4 の各カラム + flyer_json から組む。
+
+    styles:
+      FLYER_KEY_REGISTRY(models/flyer_keys.py)が SSOT。persist=True の全キーについて
+      flyer_json の値、無ければレジストリの default を採る。create_flyer_image_shadow は
+      styles.get(key, default) で読むので欠損には強いが、view と同じ値を渡すためここで埋める。
+      フォント名のキーは font_service.ensure_font_path で実パスへ解決する(view と同じ)。
+
+    variant:
+      "grid" → content_scale_w/h = grid_scale_w/h、content_pos_y = grid_pos_y
+      "tt"   → content_scale_w/h = tt_scale_w/h、  content_pos_y = tt_pos_y
+    """
+    if variant not in _FLYER_VARIANTS:
+        raise ValueError("variant must be one of %r" % (_FLYER_VARIANTS,))
+
+    db = SessionLocal()
+    try:
+        proj = project_repo.get_project(db, project_id)
+        if proj is None:
+            return None
+        flyer_raw = proj.flyer_json
+        subtitle = getattr(proj, "subtitle", "") or ""
+        venue_name = proj.venue_name or ""
+        event_date = proj.event_date
+        open_time_raw = proj.open_time
+        start_time_raw = proj.start_time
+        tickets_raw = proj.tickets_json
+        notes_raw = proj.ticket_notes_json
+    finally:
+        db.close()
+
+    flyer = _loads_dict(flyer_raw)
+
+    # --- styles: レジストリ駆動で全キーを埋める(欠損は default) ---
+    styles = {
+        e.short_key: flyer.get(e.short_key, e.default)
+        for e in FLYER_KEY_REGISTRY
+        if e.persist
+    }
+
+    # --- ★view の「🔗 縦横比を固定」の再現(views/flyer.py:366 / 374) ---
+    # grid_link / tt_link は FLYER_KEY_REGISTRY で persist=False = DB に保存されない
+    # UI 専用フラグで既定 True。view は毎 render で
+    #   if st.session_state.flyer_grid_link: st.session_state.flyer_grid_scale_h = new_w
+    # を実行するため、リンク ON のときは「高さ % = 幅 %」になる。
+    # API にはセッションが無く、常に「アプリを開き直した直後」= リンク ON 相当なので
+    # ここで同じ写像を行う。これをしないと、DB に scale_h が別値で残っている
+    # プロジェクトでアプリ画面と API 出力が食い違う(実データで検出済み)。
+    # ※ DB の scale_h が開くだけで潰れる件はアプリ側の別バグ。ここでは「view と同じ
+    #   出力を返す」ことを優先し、挙動を勝手に変えない。
+    if flyer.get("grid_link", True):
+        styles["grid_scale_h"] = styles.get("grid_scale_w")
+    if flyer.get("tt_link", True):
+        styles["tt_scale_h"] = styles.get("tt_scale_w")
+
+    # --- variant 差分(view の s_grid / s_tt と同じ 3 キー) ---
+    prefix = "grid" if variant == "grid" else "tt"
+    styles["content_scale_w"] = styles.get("%s_scale_w" % prefix)
+    styles["content_scale_h"] = styles.get("%s_scale_h" % prefix)
+    styles["content_pos_y"] = styles.get("%s_pos_y" % prefix)
+
+    # --- 背景 / ロゴ: asset id → AssetView → 公開 URL(view と同じ手順) ---
+    def _asset_url(asset_id):
+        if not asset_id:
+            return None
+        view = asset_service.get_asset_view(asset_id)
+        return get_image_url(view.image_filename) if view else None
+
+    bg_source = _asset_url(styles.get("bg_id"))
+    logo_source = _asset_url(styles.get("logo_id"))
+
+    # --- フォント: 実パスへ解決(view の targets ループと同じ) ---
+    for key in _FLYER_FONT_STYLE_KEYS:
+        name = styles.get(key)
+        if name:
+            valid = font_service.ensure_font_path(name)
+            if valid:
+                styles[key] = valid
+
+    fallback = styles.get("fallback_font") or font_service.get_default_font_name()
+    if fallback:
+        valid_fb = font_service.ensure_font_path(fallback)
+        if valid_fb:
+            fallback = valid_fb
+
+    # --- チケット / 共通備考(view と同じく壊れていても落ちない) ---
+    tickets = _loads_list(tickets_raw)
+    notes = _loads_list(notes_raw)
+
+    return {
+        "bg_source": bg_source,
+        "logo_source": logo_source,
+        "styles": styles,
+        "date_text": format_event_date(event_date, styles.get("date_format")),
+        "venue_text": venue_name,
+        "subtitle_text": subtitle,
+        "open_time": format_time_str(open_time_raw),
+        "start_time": format_time_str(start_time_raw),
+        "ticket_info_list": tickets,
+        "common_notes_list": notes,
+        "system_fallback_filename": fallback,
+    }
