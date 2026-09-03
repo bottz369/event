@@ -1,10 +1,21 @@
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+import logging
 import math
 import os
 import requests
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
-import streamlit as st
+
+# streamlit は Streamlit アプリ / ローカル venv にのみ存在する。Bot 実環境(Railway・
+# fastapi のみ / starlette 版数衝突=罠39)では import 不能なため任意化する
+# (database.py / services/project_service.py と同一方針)。
+# ★streamlit がある環境では st は本物のモジュールになり、トースト/エラー表示は従来と
+#   完全に同一。st=None 分岐は streamlit 非存在時(= Bot / API 経路)のみ通る。
+#   段階B B-1: TT 画像を API から生成するために追加(描画ロジックは無変更・画像 parity 維持)。
+try:
+    import streamlit as st
+except Exception:
+    st = None
 
 # ================= 設定エリア =================
 # 1mm = 10px の高解像度で設定し、印刷時(300dpi等)に綺麗に出るようにします
@@ -213,7 +224,8 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
 def generate_timetable_image(timetable_data, font_path=None, columns=2):
     if not timetable_data: return Image.new('RGBA', (COL1_CANVAS_WIDTH, CANVAS_HEIGHT), (0,0,0,255))
     
-    st.toast("画像生成完了！", icon="✅")
+    if st is not None:
+        st.toast("画像生成完了！", icon="✅")
     
     from database import SessionLocal
     db = SessionLocal()
@@ -278,7 +290,12 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
         return canvas
 
     except Exception as e:
-        st.error(f"エラー: {e}")
+        if st is not None:
+            st.error(f"エラー: {e}")
+        else:
+            # API / Bot 経路では画面が無いのでログに出す(黙って赤画像を返さない)。
+            logging.getLogger(__name__).error("generate_timetable_image failed: %s", e, exc_info=True)
+        # 戻り値は従来どおり赤いダミー画像(呼び出し側の分岐を変えないため)。
         return Image.new('RGBA', (COL1_CANVAS_WIDTH, CANVAS_HEIGHT), (255,0,0,255))
     finally:
         db.close()
