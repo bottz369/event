@@ -15,6 +15,7 @@ gather は既存 view(views/flyer.py:490-516 / views/grid.py の設定マッピ�
 """
 from __future__ import annotations
 
+import gc
 import io
 import json
 import os
@@ -480,3 +481,108 @@ def build_flyer_kwargs_for_project(project_id: int, variant: str = "grid") -> Op
         "common_notes_list": notes,
         "system_fallback_filename": fallback,
     }
+
+
+def render_flyer_png_for_project(project_id: int, variant: str = "grid") -> Optional[bytes]:
+    """project_id のフライヤー画像(PNG)を DB 設定から生成して返す。
+
+    variant="grid" → main_source にアー写グリッド画像、"tt" → タイムテーブル画像。
+    未検出 project / main_source を作れない(出演者ゼロ・行ゼロ等)場合は None。
+
+    アプリの「フライヤーセット」2 枚と同じもので、views/flyer.py:552 _generate_preview が
+    create_flyer_image_shadow を variant 違いで 2 回呼ぶのを 1 回分ずつ API 化したもの。
+    出力は 1080x1350 の RGBA なので PNG で bytes 化する。
+
+    OOM 対策:
+      - _render_lock(RLock)で直列化。内側の grid/TT 生成も同じロックを取るが再入可。
+      - main_source(grid は 4000x3000 級 / TT は 3600x2400)は合成後すぐ解放して gc する。
+        variant ごとに別リクエストなので grid 画像と TT 画像を同時に保持することはない。
+    """
+    if variant not in _FLYER_VARIANTS:
+        raise ValueError("variant must be one of %r" % (_FLYER_VARIANTS,))
+
+    with _render_lock:
+        kwargs = build_flyer_kwargs_for_project(project_id, variant=variant)
+        if kwargs is None:
+            return None
+
+        # フォント materialize(§45 A2 と同型)。styles には ensure_font_path で解決済みの
+        # 実パスが入っているが、解決できなかったものはファイル名のまま残るので、
+        # ここで DB → FONT_DIR の materialize をもう一度試みる。
+        _wanted = []
+        for key in _FLYER_FONT_STYLE_KEYS:
+            v = kwargs["styles"].get(key)
+            if v and not os.path.isabs(str(v)):
+                _wanted.append(str(v))
+        fb = kwargs.get("system_fallback_filename")
+        if fb and not os.path.isabs(str(fb)):
+            _wanted.append(str(fb))
+        _wanted.append("keifont.ttf")  # create_flyer_image_shadow の最終フォールバック
+        for _fname in dict.fromkeys(_wanted):
+            try:
+                _status = font_service.ensure_font_available(_fname)
+                logger.info("ensure_font_available(%r) -> %r", _fname, _status)
+            except Exception as e:
+                logger.warning("ensure_font_available(%r) failed: %s", _fname, e, exc_info=True)
+
+        # materialize 後にもう一度パス解決を試みる(初回リクエストで DL された分を拾う)。
+        for key in _FLYER_FONT_STYLE_KEYS:
+            v = kwargs["styles"].get(key)
+            if v and not os.path.isabs(str(v)):
+                resolved = font_service.ensure_font_path(str(v))
+                if resolved:
+                    kwargs["styles"][key] = resolved
+        if fb and not os.path.isabs(str(fb)):
+            resolved_fb = font_service.ensure_font_path(str(fb))
+            if resolved_fb:
+                kwargs["system_fallback_filename"] = resolved_fb
+
+        # 未解決が残るなら豆腐警告(create_flyer_image_shadow の get_font_path は
+        # FONT_DIR を見ないため、実パスでないと PIL 既定フォントに落ちる)。
+        _unresolved = [
+            key for key in _FLYER_FONT_STYLE_KEYS
+            if kwargs["styles"].get(key) and not os.path.exists(str(kwargs["styles"][key]))
+        ]
+        if _unresolved or (kwargs.get("system_fallback_filename")
+                           and not os.path.exists(str(kwargs["system_fallback_filename"]))):
+            try:
+                _listing = sorted(os.listdir(FONT_DIR))
+            except Exception:
+                _listing = None
+            logger.warning(
+                "flyer font(s) NOT resolved (keys=%r fallback=%r FONT_DIR=%r listing=%r). "
+                "create_flyer_image_shadow will fall back to the PIL default font and "
+                "Japanese text will render as tofu.",
+                _unresolved, kwargs.get("system_fallback_filename"), FONT_DIR, _listing,
+            )
+        else:
+            logger.info("flyer fonts resolved (variant=%s)", variant)
+
+        # --- main_source(中間画像)を生成 → 合成 → すぐ解放 ---
+        if variant == "grid":
+            main_img = _render_grid_image_for_project(project_id)
+        else:
+            main_img = _render_tt_image_for_project(project_id)
+        if main_img is None:
+            logger.warning(
+                "flyer main_source not available (project=%s variant=%s)", project_id, variant
+            )
+            return None
+
+        # 生成フェーズの一時確保(アー写バッファ等)を合成前に回収してから合成に入る。
+        gc.collect()
+
+        try:
+            img, _meta = create_flyer_image_shadow(main_source=main_img, **kwargs)
+        finally:
+            # 4000x3000 級 RGBA を合成後に抱えたままにしない
+            main_img = None
+            gc.collect()
+
+        if img is None:
+            return None
+
+        png = _to_png_bytes(img)
+        img = None
+        gc.collect()
+        return png
