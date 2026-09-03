@@ -17,6 +17,26 @@ try:
 except Exception:
     st = None
 
+logger = logging.getLogger(__name__)
+
+# =========================================================
+# §5: 素材(アー写 / 背景 / ロゴ)取得失敗の可観測化
+# =========================================================
+# 従来は取得失敗を静かに None にして「素材なし」で描画継続していたため、
+# どの素材が落ちたか誰にも分からなかった(Bot 経由だと追跡不能)。
+#   - ログ: failures 引数の有無に関わらず【常に】WARNING を出す(純粋な可観測性)
+#   - failures: 任意 out-param。list を渡したときだけ構造化エントリを append する。
+#     None(= 既存 views 経路)のときは今日と完全に同一挙動(parity)。
+# エントリ形式:
+#   {"kind": "artist_photo"|"flyer_bg"|"flyer_logo",
+#    "name": <str|None>, "url": <str|None>, "reason": <str>}
+# ★スレッド安全: worker 内では logging のみ(logging はスレッド安全)。
+#   構造化エントリの収集は必ずメインスレッドで、全 future 解決後に
+#   name_to_url と image_cache を突合して行う(contextvars は executor へ
+#   伝播しないので使わない)。
+# ★空 URL / 空パス由来の None は失敗ではない(ログも failure も出さない)。
+# =========================================================
+
 # ================= 設定エリア =================
 # 1mm = 10px の高解像度で設定し、印刷時(300dpi等)に綺麗に出るようにします
 CANVAS_HEIGHT = 2400       # 全体の高さ (240mm) 固定
@@ -44,16 +64,28 @@ def get_font(path, size):
     return ImageFont.load_default()
 
 def load_image(path_or_url):
-    if not path_or_url: return None
+    """パス/URL から画像を読む。失敗は None(挙動不変)だが §5 で WARNING を出す。"""
+    if not path_or_url: return None  # 空は失敗ではない(ログも出さない)
     try:
         if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
             response = requests.get(path_or_url, timeout=10)
-            if response.status_code != 200: return None
+            if response.status_code != 200:
+                logger.warning(
+                    "image fetch failed: url=%r reason=http_%s",
+                    path_or_url, response.status_code,
+                )
+                return None
             return Image.open(BytesIO(response.content)).convert("RGBA")
         if os.path.exists(path_or_url):
              return Image.open(path_or_url).convert("RGBA")
+        logger.warning("image load failed: path=%r reason=not_found", path_or_url)
         return None
-    except Exception: return None
+    except Exception as e:
+        logger.warning(
+            "image load failed: src=%r reason=%s: %s",
+            path_or_url, type(e).__name__, e,
+        )
+        return None
 
 
 # =========================================================
@@ -86,6 +118,10 @@ def _load_and_fit_tt(url, target_w, target_h):
     try:
         response = requests.get(url, timeout=10)
         if response.status_code != 200:
+            logger.warning(
+                "artist photo fetch failed: url=%r reason=http_%s",
+                url, response.status_code,
+            )
             return None
         im = Image.open(BytesIO(response.content))
         try:
@@ -98,14 +134,17 @@ def _load_and_fit_tt(url, target_w, target_h):
             im, (int(target_w), int(target_h)),
             method=Image.Resampling.LANCZOS, centering=(0.5, 0.5),
         )
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "artist photo load failed: url=%r reason=%s: %s", url, type(e).__name__, e
+        )
         return None
 
 
 # =========================================================
 # Phase 3 P2: アー写画像並列取得ヘルパー (TT 用、Grid 側と同型)
 # =========================================================
-def _prefetch_tt_images(timetable_data, db, target_size=None):
+def _prefetch_tt_images(timetable_data, db, target_size=None, failures=None):
     """timetable_data の全行をスキャンして name_str → PIL.Image の dict を返す。
     ThreadPoolExecutor で並列 HTTP 取得。出力画像 (タイムテーブル合成結果) は不変。
     HTTP 取得の wall-clock 時間を短縮するための取得フェーズのみ並列化。
@@ -160,8 +199,25 @@ def _prefetch_tt_images(timetable_data, db, target_size=None):
                 name = future_to_name[fut]
                 try:
                     image_cache[name] = fut.result()
-                except Exception:
+                except Exception as e:
+                    logger.warning(
+                        "artist photo worker failed: name=%r url=%r reason=%s: %s",
+                        name, name_to_url.get(name), type(e).__name__, e,
+                    )
                     image_cache[name] = None
+
+    # §5: 失敗の構造化収集は【メインスレッド】で、全 future 解決後に行う。
+    # 「取得を試みた(url があった)のに結果が None」= 失敗。
+    # 画像未設定(url が無い)アーティストは name_to_url に入らないので数えない。
+    if failures is not None:
+        for name, url in name_to_url.items():
+            if image_cache.get(name) is None:
+                failures.append({
+                    "kind": "artist_photo",
+                    "name": name,
+                    "url": url,
+                    "reason": "fetch_failed",
+                })
 
     return image_cache
 
@@ -190,7 +246,7 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     draw.multiline_text((final_x+2, final_y+2), text, fill=(0,0,0,200), font=font, spacing=4, align=align)
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
-def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_width, row_height, columns, image_cache=None):
+def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_width, row_height, columns, image_cache=None, failures=None):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
@@ -238,7 +294,19 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
                     if image_cache is not None:
                         img = image_cache.get(name_str)
                     else:
+                        # image_cache 無しの直列フォールバック経路(外部/旧呼び出し用)。
+                        # prefetch を通らないので、ここで失敗を拾う必要がある。
                         img = load_image(url)
+                        if img is None and failures is not None:
+                            # 同じアーティストが複数行にいても 1 件だけ記録する
+                            if not any(f.get("kind") == "artist_photo" and f.get("name") == name_str
+                                       for f in failures):
+                                failures.append({
+                                    "kind": "artist_photo",
+                                    "name": name_str,
+                                    "url": url,
+                                    "reason": "fetch_failed",
+                                })
                     if img:
                         img_fitted = ImageOps.fit(img, (int(row_width), int(row_height)), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
                         row_img.paste(img_fitted, (0, 0))
@@ -276,7 +344,7 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
             goods_info = f"{goods_time} ({goods_place})" if goods_place else goods_time
     draw_centered_text(draw, goods_info, base_x + goods_x, base_y, goods_w, row_height, font_path, font_size_goods, align="left")
 
-def generate_timetable_image(timetable_data, font_path=None, columns=2):
+def generate_timetable_image(timetable_data, font_path=None, columns=2, failures=None):
     if not timetable_data: return Image.new('RGBA', (COL1_CANVAS_WIDTH, CANVAS_HEIGHT), (0,0,0,255))
     
     if st is not None:
@@ -331,7 +399,8 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
         # 呼ぶように移動し、取得直後にそのサイズへ fit する(OOM 対策)。
         # 全行が同じ row_width / row_height で描かれるので、行ごとに目標が変わることはない。
         image_cache = _prefetch_tt_images(
-            timetable_data, db, target_size=(int(single_col_width), int(row_height))
+            timetable_data, db, target_size=(int(single_col_width), int(row_height)),
+            failures=failures,
         )
 
         # --- 左列の描画 ---
