@@ -1575,9 +1575,144 @@ streamlit 1.59.2 は starlette>=0.46 が必要(`DEFAULT_EXCLUDED_CONTENT_TYPES` 
 教訓: 「import できる/依存が競合しない」は、実際にそのモジュールを import して確かめる。fastapi だけ import して streamlit を
 試さないと見逃す(**pip の解決が通る ≠ runtime import が通る**)。
 
+## 43. TT タブ 4 機能追加(一括追加 / 一括削除 / アー写グリッド表示順 / アー写グリッド非表示)(2026-09-01)
+
+✅ タイムテーブルタブに 4 機能を追加し、アー写グリッドの並べ替えを TT に一本化した。
+すべて明示保存型(操作は draft_rows / session のみ、DB 反映は「🔄 設定反映」だけ)。
+本番反映済み(origin/main = `f2d11ae`)。**DB スキーマ変更ゼロ**。
+
+### 実装した 4 機能
+- **③ アーティストの一括追加**(`c66a398` / `cae8d87` / `c8b2e98`): 候補 multiselect →「追加予定リスト」に溜める →
+  `sort_items` でドラッグ並べ替え + × ボタンで除外 →「追加する」で出演順の末尾へ一括 append。
+  予定リストの操作中は DB 保存しない。★ここで新設した `sort_items` には **`key=` を明示**した(下記)。
+- **① 行の一括削除**(`96b0f84` / `2c9a270` / `7664cc8`): 「削除」チェック列 →「🗑 チェックした行を削除」で一括除去。
+  特殊行(開演前/終演後物販)は対象外(増減は専用トグルが正)。
+- **② アー写グリッド表示順**(`bb5294b` / `fae9b59` / `f6dc2f0` / `898e38d`): TT に番号列を追加し、
+  番号の昇順で左上から詰める。**views/grid.py のドラッグ&ドロップ並べ替えを撤去**し、TT の番号を並び順の唯一の正にした。
+- **アー写グリッド非表示**(`cf4411e` / `c4a7f5f` / `ae8e70a` / `f2d11ae`): 既存 `IS_HIDDEN` の表示名を
+  「タイムテーブル非表示」に改名し、グリッドの除外条件を新フラグ `is_grid_hidden` へ移設。
+  2 つは独立(TT 画像から消してもグリッドには出る。逆も同様)。
+
+### ★確立したパターン: DB スキーマを変えずに UI 列を増やす
+`timetable_rows` に空きカラムが無く、スキーマ変更は禁止。そこで **`TimetableRowDraft` の非永続フィールド**として
+列を持たせ、永続化が要るものだけ `grid_order_json`(JSON カラム)に畳む形に統一した。
+
+1. `TimetableRowDraft` に非永続フィールドを追加(`is_delete_marked` / `grid_no` / `is_grid_hidden`)。
+2. `TIMETABLE_DF_COLUMNS` に対応列を追加(`DELETE` / `GRID_NO` / `GRID_HIDDEN`)+
+   `to_legacy_dict` / `_DF_KEY_TO_DRAFT_KEY` / `from_dict` に写像を足す。
+3. `repositories/timetable_repo.py` は**無変更**(`_draft_to_row` が書き出さない = 保存→再読込で必ず初期値に戻る)。
+4. 永続化が要るものは **grid_settings に seed / save**:
+   - save: 「設定反映」の `save_active_project()` **直前**に純関数で名前リストへ畳む
+     (`build_grid_order_from_rows` / `build_grid_hidden_from_rows`)。**新しい保存境界は作らない**。
+   - seed: `session_manager.reload_project()` の **`_save_snapshot()` より前**に復元する
+     (`seed_grid_no_from_order` / `seed_grid_hidden_from_settings`)。
+5. 未保存判定(`_rows_to_comparable`)は「保存内容を左右するか」で入れる/入れないを決める:
+   - `is_delete_marked` は**含めない**(チェックしただけで誤警告が出る)
+   - `grid_no` / `is_grid_hidden` は**含める**(保存される並び順・除外を変えるため、含めないと黙って失われる)
+
+### ★罠33 対策が load-bearing(3 機能とも RED 証明済み)
+新設の UI 列は **必ず `draft_rows_to_df` が出す列にすること**。UI 専用の session に別持ちすると、
+views/timetable.py の「先取り確定」(`_apply_editor_state_to_df` の `if col in new_df.columns` ガード)に
+弾かれてチェックが毎 run 捨てられる。しかも実害は「黙って捨てられる」より悪く、
+**Streamlit の `_apply_cell_edits` が `KeyError` を投げて画面ごと壊れる**。
+`TIMETABLE_DF_COLUMNS` から該当列を 1 行抜いた木で `DELETE` / `GRID_NO` / `GRID_HIDDEN` の 3 つとも RED を機械確認した。
+
+### seed の位置(誤「未保存」警告の罠)
+`grid_no` / `is_grid_hidden` は `_rows_to_comparable` に含めるため、**seed を `_save_snapshot()` の後で行うと
+プロジェクトを開いた瞬間に「⚠️ 未保存の変更があります」が出る**。当初は view 側で採番する設計だったが、
+この理由で `reload_project()` 内(snapshot 前)へ移した。回帰網 `test_no_false_unsaved_warning_on_open` で固定。
+
+### grid DnD 撤去(`898e38d`)
+- 撤去理由: 1 ドラッグで「component の値返し + `st.rerun()`」の 2 回スクリプトが走り、
+  workspace の `st.tabs` が全 4 タブを毎回 eager 描画するため重い。加えて `sort_items` を **`key=` 無し**で
+  呼んでいたため items が変わるたびにコンポーネントが再マウントして状態を失い、
+  古い戻り値と新しい値が ping-pong して操作不能になることがあった(`grid_just_reset` はその場当たり対処)。
+- 併せて **競合 writer** も撤去: 「grid_order が空なら TT の逆順で埋める」初期化と、リセットボタンの order 書き戻し。
+  残すと他タブの保存で `sync_session_to_draft` が拾い、DB の order が TT の番号と食い違う。
+- 撤去は AST(`ast.unparse` でコメントを落としたコード)+ 文字列の両方でゼロ件を機械証明した(罠29 の流儀)。
+  この過程で未使用になった `timetable_service` import も検出できた。
+
+### 移行(既存データの見た目を保つ)
+- ②: 読込時に `grid_order["order"]` 内の位置 + 1 を `grid_no` に seed → 番号列を足しても初期表示は従来どおり。
+- グリッド非表示: `grid_settings` に `grid_hidden` **キーが存在するか**で移行判定する(値の truthiness ではない)。
+  キーが無い未移行プロジェクトは `is_grid_hidden = is_hidden` で引き継ぐ。
+  **空リストは「誰も非表示にしていない」という確定状態**で、未移行とは別物。`or` で判定すると空リストが
+  未移行に化けて引き継ぎが誤発火する。よって save 側は該当ゼロでも必ず `[]` を書き出す。
+- read-only SELECT で影響を確認(全 21 プロジェクト): `grid_hidden` キー既存 = **0 件**(全件が未移行経路)、
+  `is_hidden=true` の行を持つ = **9 件**(中身はほぼ「転換 / 調整 / OPEN / 会場入り / 完全撤退」等の運用行)。
+  「TT にいない登録アーティストが保存時に order から落ちる」仕様変更の影響 = **0 件**。
+  段階② で撤去した旧ハードコード除外 `["転換","調整"]` に該当し `is_hidden=false` の行も **0 件**。
+
+### 申し送り
+- views/timetable.py 左「出演順」の `sort_items` は **まだ `key=` 無し**(③で新設した予定リストだけ `key` 付き)。
+  ping-pong バグの元が残っているので別スライスで付与する。
+- 同名重複行があると、左「出演順」のドラッグで `name_to_row` の dict 化が重複を潰し、**行が黙って消える**
+  既存バグがある(CSV 取込は重複名を許すため発生しうる)。恒久対処は index ベースのキーに変える。
+- 概要 / フライヤーの**告知テキスト**の出演者リストは引き続き `is_hidden`(タイムテーブル非表示)で除外する。
+  グリッドの新フラグは効かない。寄せるかは未決。
+
+## 44. 段階B(LINE からのフライヤー / TT 更新フロー)設計(2026-09-01 設計・合意)
+
+⏳ **設計のみ・未実装**。グループ LINE から「アー写を差し替えて、フライヤーとタイムテーブルを再生成して返す」フロー。
+
+### 決定事項
+- **グループ⇔プロジェクトの紐付けはしない**。制作部門の 1 グループで全イベントを扱うため、
+  グループ ID とプロジェクトを対応させる意味が無い。対象イベントは毎回その場で選ばせる。
+- **トリガー1(差し替え)**: 「〇〇の写真差し替えて」+ 新アー写 → アー写更新(全イベントに反映・既存 B4 §40/§41)
+  → **〇〇が出演する直近イベント**をボタンで提示(出演者で絞り込む)→ 選択 → フライヤー + TT の 2 枚を再生成して返信。
+- **トリガー2(単体取得)**: 写真を変えず「最新ちょうだい」→ 直近イベントを提示 → 選択 → 2 枚返信。
+- **権限**: グループの誰でも可(便利さ優先。問題が出たら絞る)。確認ステップは挟まず即更新(B4 の踏襲)。
+- **返す成果物**: フライヤーセットの「フライヤー」「タイムテーブル」の **2 枚のみ**。
+  アー写グリッド・告知テキストは対象外。
+
+### 新規開発(実装スライス案・この順)
+1. **フライヤー画像の API 化**(最大の実装)。論点は `flyer_json` の動的キーが 30+ あること(§33〜§35 / 罠22 参照)。
+2. **タイムテーブル画像の API 化** = 段階A2 で後回しにした §36 バケツ②。
+   `generate_timetable_image` の `st.toast` / `st.error` を戻り値化する必要がある。
+   **4 ビュー共用の関数なので画像 parity に注意**(罠32 の「helper 無改造 + own_db を渡す service ラッパ」が使えるか要検討)。
+3. **Bot 会話フロー**: アー写更新 B4 → 出演イベントで絞り込み → イベント選択ボタン(LINE クイックリプライ)
+   → 2 枚生成 → Storage 経由で LINE 返信。トリガー2 も同じ経路に載せる。
+
+### 流用できる資産
+- LINE Bot 本体(Railway / Docker、§41)とアー写更新 B4(§40 / §41)。
+- grid 画像の API 化で得た知見: フォント materialize(罠40)/ OOM 対策(取得時 downscale +
+  JPEG draft デコード + `_render_lock` による直列化)/ Storage 経由の画像返却。
+- `GET /api/projects`(§42)= 直近イベントの取得。
+
+## 罠40: コミットしただけで push を忘れると、本番はいつまでも古いまま直らない
+
+段階A1(grid 画像の生成トリガー)で入れた**フォント materialize 修正 `6a95fe2`(2026-07-19 13:14 コミット)が
+約 6 週間 push されず**、本番 Railway は 1 つ前の `2ccb19a`(同日 12:42 push)のまま動き続けた。
+結果、アー写グリッドの日本語ラベルが豆腐(□)のままという症状が延々と再発報告された。
+**コードは正しく、原因は 100% デプロイ漏れ**だった。
+
+- 切り分けの決め手は `git reflog show origin/main`。`origin/main` が 2026-07-19 12:42 から動いていないこと、
+  修正コミットがその **32 分後**であることが一目で分かる。「直したのに直らない」ときは真っ先にこれを見る。
+- 再現も取れる: 本番と同じ `python:3.13-slim` の Docker で旧コミットを走らせると
+  `FONT_DIR` は空のまま・`truetype` に実パスが 1 度も渡らず `load_default`(= 豆腐)になり、
+  修正後コミットでは `keifont.ttf` が materialize されて日本語グリフが描かれる。
+- **教訓**: 修正したら「push した」で終わらせず、**本番の該当デプロイが最新コミットを指しているか**まで確認する。
+  Railway が最新を自動デプロイする設定になっているかも併せて確認する。
+
+### 併記の教訓: 画像系のローカル検証は「生成成功」で終えてはいけない
+この修正が 6 週間見逃されたもう 1 つの理由は、回帰テストが `ensure_font_available` と `generate_grid_image` を
+**両方 monkeypatch していて「呼ばれたこと」しか見ていなかった**こと。例外が出ないことは、
+日本語が描けたことを何ひとつ保証しない。
+
+- 見るべきは **`font_exists=True` / `resolve_font_path` の戻りが実パス(`keifont.ttf`)/ `load_default` に
+  落ちていない / グリフのマスクが非ゼロ** まで。なお `load_default()` は内部で `truetype(BytesIO)` を呼ぶので、
+  「`truetype` が呼ばれた回数」を成功指標にすると**豆腐でも PASS する**。
+  **実ファイルパスでの呼び出しだけを数える**こと。
+- 対処として `font_service.ensure_font_available` に **materialize したファイルの実体検証**
+  (`_is_usable_font` = PIL で開けるか)を入れ、200 応答でも中身がフォントでなければ削除して取り直すようにした。
+  旧実装は `size > 0` だけを見ていたため、一度壊れたファイルを掴むと `"cached"` が固着して
+  **コンテナが生きている限り自己修復しなかった**。あわせて**未解決時の警告ログ**
+  (「PIL 既定フォントにフォールバックする = 日本語ラベルが豆腐になる」)を
+  `render_grid_png_for_project` に追加した(`53dd1ec`)。
+
 ---
 
-## フェーズ計画 現在地(2026-07-14 時点)
+## フェーズ計画 現在地(2026-09-03 時点)
 
 - **Phase 5(残りビュー移行)= ✅ 完全クローズ(2026-07-14)**: artists / grid(§24〜§28)/
   flyer 全スライス完了。flyer = F-rows(§29)/ F-C(§30)/ F-asset(§31)/ F-proj(§33)/ F-tmpl(§34)/
@@ -1607,3 +1742,17 @@ streamlit 1.59.2 は starlette>=0.46 が必要(`DEFAULT_EXCLUDED_CONTENT_TYPES` 
   同居 mount(5 本・DTO JSON 返し)。EVENT_API_KEY 認証(hmac・fail-closed・Webhook 署名と別系統)。
   /api の 500 は streamlit×fastapi 版数非両立(罠39)が根因で、project_service の read 経路を streamlit/session_manager
   非依存化して解消(8af2d69 + 機械証明 aab86b7)。**次アクション = A1(grid 画像・告知テキストの生成トリガー・§36 バケツ①)**。
+- ✅ **段階A1(grid 画像 / 告知テキストの生成トリガー)= 実装済み・本番稼働**
+  (`services/generation_service.py` + `GET /api/projects/{id}/grid-image` / `summary-text`)。
+  ⚠️ **本ファイルに専用の節がまだ無い(記録漏れ)**。派生の豆腐化修正と観測性強化は 罠40 に記録した。
+  ※ コード内コメントに `§42 追撃` と書かれている箇所があるが、§42 は段階A0(read API)なので参照が誤り。
+  正しくは段階A1/A2 の作業。
+- ✅ **TT タブ 4 機能(一括追加 / 一括削除 / アー写グリッド表示順 / アー写グリッド非表示)完了
+  (2026-09-01、§43)**: 本番反映済み(origin/main = `f2d11ae`)。**非永続フィールド + grid_settings の
+  seed/save** パターンを確立し、DB スキーマを変えずに UI 列を増やせるようになった。
+  grid の DnD は撤去し、**TT の番号が並び順の唯一の正**。
+- ⏳ **段階B(LINE からのフライヤー / TT 更新フロー)= 設計完了・実装待ち(§44)**。
+  **次アクション = フライヤー画像の API 化の調査**(`flyer_json` の動的キー 30+ が最大の論点)。
+  その後 TT 画像の API 化(§36 バケツ②・`generate_timetable_image` の st.toast/error 戻り値化)→ Bot 会話フロー。
+- ⚠️ **要確認(罠40)**: フォント materialize 修正(`6a95fe2` / `53dd1ec`)は origin/main に載っているが、
+  **本番 Railway が再デプロイ済みかは未確認**。アー写グリッドのラベルが豆腐のままなら再デプロイする。
