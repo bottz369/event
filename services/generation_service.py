@@ -138,7 +138,9 @@ def build_summary_text_for_project(project_id: int) -> Optional[str]:
     )
 
 
-def _render_grid_image_for_project(project_id: int) -> Optional["Image.Image"]:
+def _render_grid_image_for_project(
+    project_id: int, failures: Optional[list] = None
+) -> Optional["Image.Image"]:
     """project_id の grid 画像を DB 設定から生成し PIL Image で返す。
 
     段階B B-2: フライヤー合成が main_source に PIL Image を要求するため、
@@ -231,11 +233,14 @@ def _render_grid_image_for_project(project_id: int) -> Optional["Image.Image"]:
             row_counts=row_counts,
             is_brick_mode=is_brick,
             alignment=alignment,
+            failures=failures,
         )
         return img
 
 
-def _render_tt_image_for_project(project_id: int) -> Optional["Image.Image"]:
+def _render_tt_image_for_project(
+    project_id: int, failures: Optional[list] = None
+) -> Optional["Image.Image"]:
     """project_id のタイムテーブル画像を DB 設定から生成し PIL Image で返す。
 
     段階B B-2: フライヤー合成が main_source に PIL Image を要求するため、
@@ -322,7 +327,9 @@ def _render_tt_image_for_project(project_id: int) -> Optional["Image.Image"]:
         else:
             logger.info("timetable font resolved: %s", font_path)
 
-        return generate_timetable_image(gen_list, font_path=font_path, columns=tt_columns)
+        return generate_timetable_image(
+            gen_list, font_path=font_path, columns=tt_columns, failures=failures
+        )
 
 
 # =========================================================
@@ -340,23 +347,32 @@ def _to_png_bytes(img: Optional["Image.Image"]) -> Optional[bytes]:
     return buf.getvalue()
 
 
-def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
+def render_grid_png_for_project(
+    project_id: int, failures: Optional[list] = None
+) -> Optional[bytes]:
     """project_id の grid 画像を PNG bytes で返す。未検出 / 出演者ゼロは None。
 
     実体は _render_grid_image_for_project。ロックはここで取る
     (ヘルパ側は取らない設計ではなく RLock なので入れ子でも安全)。
+
+    §5: failures に list を渡すと、取得に失敗したアー写が構造化エントリで入る。
+    None(既定)なら従来と完全に同一挙動。
     """
     with _render_lock:
-        return _to_png_bytes(_render_grid_image_for_project(project_id))
+        return _to_png_bytes(_render_grid_image_for_project(project_id, failures=failures))
 
 
-def render_timetable_png_for_project(project_id: int) -> Optional[bytes]:
+def render_timetable_png_for_project(
+    project_id: int, failures: Optional[list] = None
+) -> Optional[bytes]:
     """project_id のタイムテーブル画像を PNG bytes で返す。
 
     未検出 project / 描画対象ゼロ(行なし / 全行が「タイムテーブル非表示」)は None。
+
+    §5: failures に list を渡すと、取得に失敗したアー写が構造化エントリで入る。
     """
     with _render_lock:
-        return _to_png_bytes(_render_tt_image_for_project(project_id))
+        return _to_png_bytes(_render_tt_image_for_project(project_id, failures=failures))
 
 
 # =========================================================
@@ -483,7 +499,9 @@ def build_flyer_kwargs_for_project(project_id: int, variant: str = "grid") -> Op
     }
 
 
-def render_flyer_png_for_project(project_id: int, variant: str = "grid") -> Optional[bytes]:
+def render_flyer_png_for_project(
+    project_id: int, variant: str = "grid", failures: Optional[list] = None
+) -> Optional[bytes]:
     """project_id のフライヤー画像(PNG)を DB 設定から生成して返す。
 
     variant="grid" → main_source にアー写グリッド画像、"tt" → タイムテーブル画像。
@@ -559,10 +577,12 @@ def render_flyer_png_for_project(project_id: int, variant: str = "grid") -> Opti
             logger.info("flyer fonts resolved (variant=%s)", variant)
 
         # --- main_source(中間画像)を生成 → 合成 → すぐ解放 ---
+        # ★§5: inner render の failures 収集は main_img の None 判定より前。
+        # 早期 return するケースでも、内側で落ちたアー写を呼び出し側へ残すため。
         if variant == "grid":
-            main_img = _render_grid_image_for_project(project_id)
+            main_img = _render_grid_image_for_project(project_id, failures=failures)
         else:
-            main_img = _render_tt_image_for_project(project_id)
+            main_img = _render_tt_image_for_project(project_id, failures=failures)
         if main_img is None:
             logger.warning(
                 "flyer main_source not available (project=%s variant=%s)", project_id, variant
@@ -573,7 +593,9 @@ def render_flyer_png_for_project(project_id: int, variant: str = "grid") -> Opti
         gc.collect()
 
         try:
-            img, _meta = create_flyer_image_shadow(main_source=main_img, **kwargs)
+            img, _meta = create_flyer_image_shadow(
+                main_source=main_img, failures=failures, **kwargs
+            )
         finally:
             # 4000x3000 級 RGBA を合成後に抱えたままにしない
             main_img = None

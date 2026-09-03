@@ -342,3 +342,85 @@ def test_flyer_load_image_logs_warning(monkeypatch, caplog):
         assert fg.load_image("https://example.invalid/x.png") is None
     msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert any("ConnectionError" in m for m in msgs), msgs
+
+
+# ---------------------------------------------------------------------------
+# services/generation_service: failures の集約
+# ---------------------------------------------------------------------------
+import services.generation_service as gs  # noqa: E402
+
+
+def test_service_grid_aggregates_failures(monkeypatch):
+    """render_grid_png_for_project が内側の failures を集約すること。"""
+    def _fake_generate(artists, image_dir, failures=None, **k):
+        if failures is not None:
+            failures.append({"kind": "artist_photo", "name": "A", "url": "u", "reason": "fetch_failed"})
+        from PIL import Image
+        return Image.new("RGBA", (4, 4))
+
+    monkeypatch.setattr(gs, "_render_grid_image_for_project",
+                        lambda pid, failures=None: _fake_generate(None, None, failures=failures))
+    failures = []
+    png = gs.render_grid_png_for_project(1, failures=failures)
+    assert png is not None
+    assert [f["name"] for f in failures] == ["A"]
+
+
+def test_service_grid_without_failures_arg(monkeypatch):
+    """★failures=None(既定)でも従来どおり動く。"""
+    from PIL import Image
+    monkeypatch.setattr(gs, "_render_grid_image_for_project",
+                        lambda pid, failures=None: Image.new("RGBA", (4, 4)))
+    assert gs.render_grid_png_for_project(1) is not None
+
+
+def test_service_flyer_merges_inner_and_asset_failures(monkeypatch):
+    """★フライヤーは inner(アー写)+ bg/logo を合算すること。"""
+    from PIL import Image
+
+    def _inner(pid, failures=None):
+        if failures is not None:
+            failures.append({"kind": "artist_photo", "name": "A", "url": "u", "reason": "fetch_failed"})
+        return Image.new("RGBA", (4, 4))
+
+    def _compose(main_source=None, failures=None, **kwargs):
+        if failures is not None:
+            failures.append({"kind": "flyer_bg", "name": None, "url": "b", "reason": "fetch_failed"})
+        return (Image.new("RGBA", (4, 4)), {})
+
+    monkeypatch.setattr(gs, "_render_grid_image_for_project", _inner)
+    monkeypatch.setattr(gs, "create_flyer_image_shadow", _compose)
+    monkeypatch.setattr(gs, "build_flyer_kwargs_for_project", lambda pid, variant="grid": {
+        "bg_source": None, "logo_source": None, "styles": {}, "date_text": "",
+        "venue_text": "", "subtitle_text": "", "open_time": "", "start_time": "",
+        "ticket_info_list": [], "common_notes_list": [], "system_fallback_filename": None,
+    })
+    monkeypatch.setattr(gs.font_service, "ensure_font_available", lambda n: "cached")
+    monkeypatch.setattr(gs.font_service, "ensure_font_path", lambda n: None)
+
+    failures = []
+    png = gs.render_flyer_png_for_project(1, variant="grid", failures=failures)
+    assert png is not None
+    kinds = sorted(f["kind"] for f in failures)
+    assert kinds == ["artist_photo", "flyer_bg"], failures
+
+
+def test_service_flyer_keeps_inner_failures_on_early_return(monkeypatch):
+    """★main_img が None で早期 return しても、内側のアー写失敗は残ること。"""
+    def _inner(pid, failures=None):
+        if failures is not None:
+            failures.append({"kind": "artist_photo", "name": "A", "url": "u", "reason": "fetch_failed"})
+        return None  # 生成不能
+
+    monkeypatch.setattr(gs, "_render_grid_image_for_project", _inner)
+    monkeypatch.setattr(gs, "build_flyer_kwargs_for_project", lambda pid, variant="grid": {
+        "bg_source": None, "logo_source": None, "styles": {}, "date_text": "",
+        "venue_text": "", "subtitle_text": "", "open_time": "", "start_time": "",
+        "ticket_info_list": [], "common_notes_list": [], "system_fallback_filename": None,
+    })
+    monkeypatch.setattr(gs.font_service, "ensure_font_available", lambda n: "cached")
+    monkeypatch.setattr(gs.font_service, "ensure_font_path", lambda n: None)
+
+    failures = []
+    assert gs.render_flyer_png_for_project(1, variant="grid", failures=failures) is None
+    assert [f["name"] for f in failures] == ["A"], failures
