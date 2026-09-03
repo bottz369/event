@@ -261,3 +261,84 @@ def test_grid_prefetch_no_image_filename_is_not_a_failure(monkeypatch, caplog):
     assert cache == {}
     assert failures == []
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+# ---------------------------------------------------------------------------
+# utils/flyer_generator: bg / logo
+# ---------------------------------------------------------------------------
+import utils.flyer_generator as fg  # noqa: E402
+
+
+def _default_styles():
+    """本番と同じく FLYER_KEY_REGISTRY の既定で全キーを埋めた styles。
+
+    styles={} だとフォント名が None になり get_font_path が
+    os.path.basename(None) で落ちる(実運用では gather が必ず全キーを埋める)。
+    """
+    from models.flyer_keys import FLYER_KEY_REGISTRY
+
+    return {e.short_key: e.default for e in FLYER_KEY_REGISTRY if e.persist}
+
+
+def _flyer_kwargs(**over):
+    """create_flyer_image_shadow の引数一式(描画は通るが軽い)。"""
+    base = dict(
+        bg_source=None, logo_source=None,
+        main_source=None, styles=_default_styles(),
+        date_text="2026.09.21", venue_text="会場", subtitle_text="",
+        open_time="10:00", start_time="10:30",
+        ticket_info_list=[], common_notes_list=[],
+    )
+    base.update(over)
+    return base
+
+
+def test_flyer_bg_failure_is_recorded(monkeypatch):
+    monkeypatch.setattr(fg.requests, "get", _boom)
+    failures = []
+    img, _meta = fg.create_flyer_image_shadow(
+        failures=failures, **_flyer_kwargs(bg_source="https://example.invalid/bg.jpg")
+    )
+    assert img is not None  # 背景が無くても生成は続行(挙動不変)
+    kinds = [f["kind"] for f in failures]
+    assert "flyer_bg" in kinds, failures
+    e = next(f for f in failures if f["kind"] == "flyer_bg")
+    assert e["name"] is None
+    assert e["url"] == "https://example.invalid/bg.jpg"
+    assert e["reason"] == "fetch_failed"
+
+
+def test_flyer_logo_failure_is_recorded(monkeypatch):
+    monkeypatch.setattr(fg.requests, "get", _boom)
+    failures = []
+    fg.create_flyer_image_shadow(
+        failures=failures, **_flyer_kwargs(logo_source="https://example.invalid/logo.png")
+    )
+    kinds = [f["kind"] for f in failures]
+    assert "flyer_logo" in kinds, failures
+
+
+def test_flyer_no_bg_no_logo_is_not_a_failure(caplog):
+    """★背景/ロゴ未設定は失敗ではない(ログも failure も出ない)。"""
+    failures = []
+    with caplog.at_level(logging.WARNING, logger="utils.flyer_generator"):
+        fg.create_flyer_image_shadow(failures=failures, **_flyer_kwargs())
+    assert failures == []
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_flyer_without_failures_arg_behaves_as_before(monkeypatch):
+    """★failures=None(既存 views 経路)でも例外にならず画像を返す。"""
+    monkeypatch.setattr(fg.requests, "get", _boom)
+    img, _meta = fg.create_flyer_image_shadow(
+        **_flyer_kwargs(bg_source="https://example.invalid/bg.jpg")
+    )
+    assert img is not None
+
+
+def test_flyer_load_image_logs_warning(monkeypatch, caplog):
+    monkeypatch.setattr(fg.requests, "get", _boom)
+    with caplog.at_level(logging.WARNING, logger="utils.flyer_generator"):
+        assert fg.load_image("https://example.invalid/x.png") is None
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("ConnectionError" in m for m in msgs), msgs

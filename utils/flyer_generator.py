@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import requests
@@ -6,12 +7,19 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageColor, ImageChops
 
 from constants import FONT_DIR
 
+logger = logging.getLogger(__name__)
+
+# §5: 素材(背景 / ロゴ)取得失敗の可観測化。
+# ログは failures の有無に関わらず常に出す。failures は任意 out-param(既定 None)で、
+# None のときは従来と完全に同一挙動(描画・レイアウトは一切変更していない)。
+# main_source は呼び出し側(generation_service)が PIL を渡すのでここでは判定しない。
+
 # ==========================================
 # 1. ヘルパー関数 (画像読み込みなど)
 # ==========================================
 def load_image(source):
-    """パスまたはURLから画像を読み込む"""
-    if not source: return None
+    """パスまたはURLから画像を読み込む。失敗は None(挙動不変)だが §5 で WARNING を出す。"""
+    if not source: return None  # 空は失敗ではない(ログも出さない)
     try:
         if isinstance(source, Image.Image):
             return source.convert("RGBA")
@@ -20,10 +28,20 @@ def load_image(source):
                 response = requests.get(source, timeout=10)
                 if response.status_code == 200:
                     return Image.open(BytesIO(response.content)).convert("RGBA")
+                logger.warning(
+                    "flyer asset fetch failed: url=%r reason=http_%s",
+                    source, response.status_code,
+                )
+                return None
             elif os.path.exists(source):
                 return Image.open(source).convert("RGBA")
+            logger.warning("flyer asset load failed: path=%r reason=not_found", source)
+            return None
     except Exception as e:
-        print(f"Image Load Error: {e}")
+        # 旧実装は print だった。§5 で module logger に統一(print は Railway で追いにくい)。
+        logger.warning(
+            "flyer asset load failed: src=%r reason=%s: %s", source, type(e).__name__, e
+        )
     return None
 
 # ==========================================
@@ -304,13 +322,22 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
                               date_text, venue_text, subtitle_text,
                               open_time, start_time,
                               ticket_info_list, common_notes_list,
-                              system_fallback_filename="keifont.ttf"):
+                              system_fallback_filename="keifont.ttf",
+                              failures=None):
     
     layout_meta = {}
     CANVAS_W, CANVAS_H = 1080, 1350
     
     # 背景
     bg_img = load_image(bg_source)
+    # §5: 背景の指定があったのに読めなかったら記録する(未指定は失敗ではない)
+    if bg_img is None and bg_source and failures is not None:
+        failures.append({
+            "kind": "flyer_bg",
+            "name": None,
+            "url": bg_source if isinstance(bg_source, str) else None,
+            "reason": "fetch_failed",
+        })
     if bg_img:
         bg_ratio = bg_img.width / bg_img.height
         canvas_ratio = CANVAS_W / CANVAS_H
@@ -354,6 +381,14 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
 
     # --- 4. ロゴ (★影機能追加) ---
     logo_img = load_image(logo_source)
+    # §5: ロゴの指定があったのに読めなかったら記録する(未指定は失敗ではない)
+    if logo_img is None and logo_source and failures is not None:
+        failures.append({
+            "kind": "flyer_logo",
+            "name": None,
+            "url": logo_source if isinstance(logo_source, str) else None,
+            "reason": "fetch_failed",
+        })
     if logo_img:
         l_scale = styles.get("logo_scale", 1.0)
         l_off_x = styles.get("logo_pos_x", 0.0)
