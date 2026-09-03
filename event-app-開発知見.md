@@ -1679,6 +1679,38 @@ views/timetable.py の「先取り確定」(`_apply_editor_state_to_df` の `if 
   JPEG draft デコード + `_render_lock` による直列化)/ Storage 経由の画像返却。
 - `GET /api/projects`(§42)= 直近イベントの取得。
 
+## 45. 段階A1(生成トリガー)/ A2(grid 画像の実運用ハードニング)(2026-07-16〜2026-09-01)
+
+✅ 実装済み・本番稼働。§43/§44 を書いた時点で**この節だけ記録が漏れていた**ので backfill する。
+
+※ ラベルの注意: §42 の「次」では **A2 = TT 画像生成**と予告していたが、実際には A1 の本番運用で出た
+OOM とフォントの問題への対処が先行した。ここでは慣用に合わせその後続作業を A2 と呼ぶ。
+**TT 画像の API 化(§36 バケツ②)は未着手**で、段階B のスライス 2 で回収する(§44)。
+
+### 段階A1: read API に生成トリガーを追加(2026-07-16)
+- `services/generation_service.py` を新設。DB から引数を組んで既存の生成関数を「呼ぶだけ」の gather 層で、
+  **streamlit を一切 import しない**(罠39 の版数非両立を踏むため。機械証明テストあり)。
+- `GET /api/projects/{id}/summary-text`(告知テキスト)/ `GET /api/projects/{id}/grid-image`
+  (アー写グリッド画像・PNG 透過)の 2 本を A0 の /api に追加。read + generate のみで DB/Storage への書き込みは無し。
+- コミット: `0a2b9d1`(gather 新設)/ `34c99a9`(エンドポイント)/ `9aa9c2b`(TestClient + import 機械確認)。
+
+### 段階A2: grid 画像の OOM 対策(2026-07-17〜18)
+Railway のメモリ上限に対して full-res 合成が重すぎたため、**出力画像の parity を保ったまま**ピークを削った。
+macOS 実測で **982MB → 673MB**。
+- `003f7a6`: 取得時に元アー写を**最長辺 1200px へ downscale-on-load**(縮小のみ・アスペクト比維持なので
+  手動クロップ座標の補正不要)。
+- `2ccb19a`: 巨大 JPEG を **draft デコード**してフル解像度復号自体を回避。
+- `1fef1fb`: `threading.Lock` で **grid 生成を直列化**(同時 1 件)。複数リクエストでピークが積み上がるのを防ぐ。
+  ※ ロックは API 経路のみ。`logic_grid` 自体はロックしないのでアプリ側の単独利用は従来どおり。
+
+### 段階A2: フォント materialize(grid ラベルの日本語化)
+- `6a95fe2`: API/Bot 経路は Streamlit view の `ensure_font_available` を通らないため `FONT_DIR` が空のままで、
+  `generate_grid_image` が PIL 既定フォントにフォールバック → 日本語ラベルが豆腐(□)になっていた。
+  `render_grid_png_for_project` が生成前に `font_service.ensure_font_available` を呼ぶようにして解消。
+  grid_font 本体と `resolve_font_path` の最終フォールバック先 `keifont.ttf` の両方を確保する。
+- `53dd1ec`: ハードニング。materialize したファイルの**実体検証**(`_is_usable_font` = PIL で開けるか)と、
+  **未解決時の警告ログ**を追加。詳細と背景は 罠40。
+
 ## 罠40: コミットしただけで push を忘れると、本番はいつまでも古いまま直らない
 
 段階A1(grid 画像の生成トリガー)で入れた**フォント materialize 修正 `6a95fe2`(2026-07-19 13:14 コミット)が
@@ -1693,6 +1725,8 @@ views/timetable.py の「先取り確定」(`_apply_editor_state_to_df` の `if 
   修正後コミットでは `keifont.ttf` が materialize されて日本語グリフが描かれる。
 - **教訓**: 修正したら「push した」で終わらせず、**本番の該当デプロイが最新コミットを指しているか**まで確認する。
   Railway が最新を自動デプロイする設定になっているかも併せて確認する。
+- ✅ **解決済み(2026-09-01)**: push 後に Railway が再デプロイされ、**本番のアー写グリッドで日本語ラベルが
+  正しく表示されることを確認**した。豆腐化は解消。
 
 ### 併記の教訓: 画像系のローカル検証は「生成成功」で終えてはいけない
 この修正が 6 週間見逃されたもう 1 つの理由は、回帰テストが `ensure_font_available` と `generate_grid_image` を
@@ -1742,11 +1776,8 @@ views/timetable.py の「先取り確定」(`_apply_editor_state_to_df` の `if 
   同居 mount(5 本・DTO JSON 返し)。EVENT_API_KEY 認証(hmac・fail-closed・Webhook 署名と別系統)。
   /api の 500 は streamlit×fastapi 版数非両立(罠39)が根因で、project_service の read 経路を streamlit/session_manager
   非依存化して解消(8af2d69 + 機械証明 aab86b7)。**次アクション = A1(grid 画像・告知テキストの生成トリガー・§36 バケツ①)**。
-- ✅ **段階A1(grid 画像 / 告知テキストの生成トリガー)= 実装済み・本番稼働**
-  (`services/generation_service.py` + `GET /api/projects/{id}/grid-image` / `summary-text`)。
-  ⚠️ **本ファイルに専用の節がまだ無い(記録漏れ)**。派生の豆腐化修正と観測性強化は 罠40 に記録した。
-  ※ コード内コメントに `§42 追撃` と書かれている箇所があるが、§42 は段階A0(read API)なので参照が誤り。
-  正しくは段階A1/A2 の作業。
+- ✅ **段階A1(生成トリガー)/ A2(grid 画像の OOM 対策・フォント materialize)= 完了・本番稼働(§45)**。
+  記録漏れだった分を §45 に backfill 済み。**TT 画像の API 化(§36 バケツ②)は未着手**で段階B へ回収(§44)。
 - ✅ **TT タブ 4 機能(一括追加 / 一括削除 / アー写グリッド表示順 / アー写グリッド非表示)完了
   (2026-09-01、§43)**: 本番反映済み(origin/main = `f2d11ae`)。**非永続フィールド + grid_settings の
   seed/save** パターンを確立し、DB スキーマを変えずに UI 列を増やせるようになった。
@@ -1754,5 +1785,5 @@ views/timetable.py の「先取り確定」(`_apply_editor_state_to_df` の `if 
 - ⏳ **段階B(LINE からのフライヤー / TT 更新フロー)= 設計完了・実装待ち(§44)**。
   **次アクション = フライヤー画像の API 化の調査**(`flyer_json` の動的キー 30+ が最大の論点)。
   その後 TT 画像の API 化(§36 バケツ②・`generate_timetable_image` の st.toast/error 戻り値化)→ Bot 会話フロー。
-- ⚠️ **要確認(罠40)**: フォント materialize 修正(`6a95fe2` / `53dd1ec`)は origin/main に載っているが、
-  **本番 Railway が再デプロイ済みかは未確認**。アー写グリッドのラベルが豆腐のままなら再デプロイする。
+- ✅ **解決済み(罠40)**: フォント materialize 修正(`6a95fe2` / `53dd1ec`)を push → Railway 再デプロイ →
+  **2026-09-01 に本番のアー写グリッドで日本語ラベル表示を確認**。豆腐化は解消済み。

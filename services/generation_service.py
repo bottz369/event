@@ -191,7 +191,8 @@ def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
         # materialize の結果を必ずログに残す。generate_grid_image は font 未解決でも
         # 黙って PIL 既定フォント(= 日本語が豆腐)にフォールバックして画像を返すため、
         # ここで警告を出さないと本番で豆腐が出ていることに誰も気づけない
-        # (§42 の 6 週間見逃しの実因)。判定は logic_grid と同じ resolve_font_path を使う。
+        # (段階A2 のフォント materialize 修正 6a95fe2 が 6 週間見逃された実因。§45/罠40)。
+        # 判定は logic_grid と同じ resolve_font_path を使う。
         _resolved = resolve_font_path(font_path) or resolve_font_path("keifont.ttf")
         if _resolved:
             logger.info("grid font resolved: %s", _resolved)

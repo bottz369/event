@@ -108,8 +108,8 @@ def get_default_font_name() -> str:
 def ensure_font_available(filename) -> str:
     """
     フォントファイルを FONT_DIR に確保する。分岐の骨格は旧 grid.py
-    check_and_download_font を踏襲(S0-1)しつつ、§42 追撃で「置いたファイルが
-    本当にフォントとして開けるか」の検証を各分岐に足している(下記)。
+    check_and_download_font を踏襲(S0-1)しつつ、段階A2 のハードニング(53dd1ec・§45/罠40)で
+    「置いたファイルが本当にフォントとして開けるか」の検証を各分岐に足している(下記)。
     戻り値で状態を返し、st.toast は書かない(view 戻し)。
 
     分岐:
@@ -123,7 +123,7 @@ def ensure_font_available(filename) -> str:
       ⑥ どれも当たらず → "not_found"
     戻り値の 4 値は従来と同一(views/grid.py の分岐は無改修)。
 
-    §42 追撃で変更した点(いずれも「materialize の確実化」):
+    段階A2 のハードニング(53dd1ec・§45/罠40)で変更した点(いずれも「materialize の確実化」):
       - 書き出し後 / cached 判定時に _is_usable_font で検証する。200 応答でも中身が
         フォントでない場合に size>0 のまま "cached" が固着し、コンテナが生きている
         限り豆腐が直らない事故を防ぐ。

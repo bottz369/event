@@ -62,7 +62,8 @@ def test_render_materialize_failure_does_not_break(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# §42 追撃: materialize が「実際に使えるフォントを置いた」ことまで検証する回帰網
+# 段階A2 のハードニング(53dd1ec・§45/罠40): materialize が「実際に使えるフォントを
+# 置いた」ことまで検証する回帰網
 # ---------------------------------------------------------------------------
 # 旧テスト(上の2本)は ensure_font_available を丸ごと monkeypatch していたため、
 # 「呼ばれたこと」しか見ておらず、FONT_DIR にフォントが落ちたか / 日本語が描けるかは
@@ -189,7 +190,8 @@ def test_render_warns_loudly_when_font_is_not_resolved(monkeypatch):
 
     generate_grid_image は font 未解決でも黙って PIL 既定フォントで描画して画像を
     返してしまう。ログが無いと本番で豆腐が出ていることに誰も気づけない
-    (§42 が 6 週間見逃された実因)。この警告はその検知装置なので回帰網で守る。
+    (段階A2 のフォント materialize 修正 6a95fe2 が 6 週間見逃された実因。§45/罠40)。
+    この警告はその検知装置なので回帰網で守る。
     """
     monkeypatch.setattr(gs.font_service, "ensure_font_available", lambda name: "not_found")
     monkeypatch.setattr(gs, "SessionLocal", lambda: _FakeDB())
