@@ -24,6 +24,7 @@ from typing import List, Optional
 from constants import FONT_DIR
 from database import SessionLocal
 from logic_grid import generate_grid_image, resolve_font_path
+from logic_timetable import generate_timetable_image
 from repositories import project_repo
 from services import artist_service, font_service, timetable_service
 from utils.flyer_helpers import format_time_str
@@ -216,6 +217,98 @@ def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
             is_brick_mode=is_brick,
             alignment=alignment,
         )
+        if img is None:
+            return None
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+
+def render_timetable_png_for_project(project_id: int) -> Optional[bytes]:
+    """project_id のタイムテーブル画像を DB 設定から生成し PNG bytes で返す。
+
+    未検出 project / 描画対象ゼロ(全行が「タイムテーブル非表示」等)は None。
+
+    gather(views/timetable.py の画像生成ブロックを streamlit フリーに移植):
+      - rows は timetable_service.get_rows_for_project(timetable_rows → data_json fallback)
+      - open_time / start_time は project_repo.to_draft と同じ正規化を通す
+        (アプリの session_state.tt_open_time / tt_start_time と同値)
+      - gen_list は timetable_service.build_tt_gen_list_from_rows
+        (OPEN / START 行と ★IS_HIDDEN=「タイムテーブル非表示」行を除外)
+      - settings_json: tt_font(無ければ keifont.ttf)/ tt_columns(無ければ 2)
+      - 24 組以上の強制 2 列は logic_timetable 側にあるのでここでは扱わない
+    生成物は RGBA 透過なので PNG で bytes 化する(JPEG 不可)。
+
+    OOM 対策: grid と同じ _render_lock を共有し、同時に 1 件だけ生成する
+    (段階B でフライヤーが grid + TT + 合成を連続実行するため、両者を跨いで直列化する)。
+    """
+    with _render_lock:
+        db = SessionLocal()
+        try:
+            proj = project_repo.get_project(db, project_id)
+            if proj is None:
+                return None
+            draft = project_repo.to_draft(proj)  # open_time / start_time の正規化を再利用
+            settings_raw = proj.settings_json
+        finally:
+            db.close()
+
+        rows = timetable_service.get_rows_for_project(project_id)
+        if not rows:
+            return None
+
+        settings = _loads_dict(settings_raw)
+        tt_font = settings.get("tt_font") or "keifont.ttf"
+        try:
+            tt_columns = int(settings.get("tt_columns") or 2)
+        except Exception:
+            tt_columns = 2
+
+        gen_list = timetable_service.build_tt_gen_list_from_rows(
+            rows, draft.open_time, draft.start_time
+        )
+        if not gen_list:
+            return None
+
+        # フォントを DB から FONT_DIR へ materialize する(grid と同型・§45 A2)。
+        # DB read + ローカル一時 FS write のみ(本番 Storage/DB 書き込みは無い)。
+        for _fname in dict.fromkeys([tt_font, "keifont.ttf"]):
+            try:
+                _status = font_service.ensure_font_available(_fname)
+                logger.info("ensure_font_available(%r) -> %r", _fname, _status)
+            except Exception as e:
+                logger.warning("ensure_font_available(%r) failed: %s", _fname, e, exc_info=True)
+
+        # ★ grid との違い: logic_timetable.get_font の候補は
+        #   [渡された path, assets/fonts/keifont.ttf, fonts/keifont.ttf, keifont.ttf] で
+        #   **FONT_DIR を見ない**(logic_grid.resolve_font_path とは異なる)。
+        #   つまり keifont.ttf を materialize してあっても、渡す path が実在しなければ
+        #   PIL 既定フォントに落ちて日本語ラベルが豆腐になる。
+        #   そこで service 側で FONT_DIR 内の keifont.ttf へ明示フォールバックする。
+        font_path = os.path.join(FONT_DIR, tt_font)
+        if not os.path.exists(font_path):
+            fallback = os.path.join(FONT_DIR, "keifont.ttf")
+            if os.path.exists(fallback):
+                logger.warning(
+                    "tt font not materialized (%r); falling back to %s", font_path, fallback
+                )
+                font_path = fallback
+            else:
+                try:
+                    _listing = sorted(os.listdir(FONT_DIR))
+                except Exception:
+                    _listing = None
+                logger.warning(
+                    "timetable font NOT resolved (font_path=%r FONT_DIR=%r listing=%r). "
+                    "generate_timetable_image will fall back to the PIL default font and "
+                    "Japanese labels will render as tofu.",
+                    font_path, FONT_DIR, _listing,
+                )
+        else:
+            logger.info("timetable font resolved: %s", font_path)
+
+        img = generate_timetable_image(gen_list, font_path=font_path, columns=tt_columns)
         if img is None:
             return None
 
