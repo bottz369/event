@@ -290,3 +290,71 @@ def test_timetable_image_404_when_no_rows(monkeypatch):
 
 def test_timetable_image_401():
     assert client.get("/api/projects/1/timetable-image").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /api/projects/{id}/flyer-image(生成トリガー・段階B B-2)
+# ---------------------------------------------------------------------------
+def test_flyer_image_ok_grid(monkeypatch):
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    seen = {}
+
+    def _fake(pid, variant):
+        seen["variant"] = variant
+        return b"\x89PNG\r\n\x1a\nFAKEFLYERGRID"
+
+    monkeypatch.setattr(bot_api, "_render_flyer_png", _fake)
+    r = client.get("/api/projects/1/flyer-image", headers=_auth())
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content == b"\x89PNG\r\n\x1a\nFAKEFLYERGRID"
+    assert seen["variant"] == "grid", "variant 未指定は grid が既定"
+
+
+def test_flyer_image_ok_tt(monkeypatch):
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    seen = {}
+
+    def _fake(pid, variant):
+        seen["variant"] = variant
+        return b"\x89PNG\r\n\x1a\nFAKEFLYERTT"
+
+    monkeypatch.setattr(bot_api, "_render_flyer_png", _fake)
+    r = client.get("/api/projects/1/flyer-image?variant=tt", headers=_auth())
+    assert r.status_code == 200
+    assert r.content == b"\x89PNG\r\n\x1a\nFAKEFLYERTT"
+    assert seen["variant"] == "tt"
+
+
+def test_flyer_image_400_on_bad_variant(monkeypatch):
+    monkeypatch.setattr(
+        bot_api, "_render_flyer_png",
+        lambda pid, variant: (_ for _ in ()).throw(AssertionError("must not render")),
+    )
+    r = client.get("/api/projects/1/flyer-image?variant=poster", headers=_auth())
+    assert r.status_code == 400
+    assert r.json()["detail"] == "variant must be grid or tt"
+
+
+def test_flyer_image_404_when_project_missing(monkeypatch):
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: None)
+    monkeypatch.setattr(
+        bot_api, "_render_flyer_png",
+        lambda pid, variant: (_ for _ in ()).throw(AssertionError("must not render")),
+    )
+    r = client.get("/api/projects/999/flyer-image", headers=_auth())
+    assert r.status_code == 404
+    assert r.json()["detail"] == "project not found"
+
+
+def test_flyer_image_404_when_source_unavailable(monkeypatch):
+    """中身(グリッド/TT)が作れないとき 404。"""
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    monkeypatch.setattr(bot_api, "_render_flyer_png", lambda pid, variant: None)
+    r = client.get("/api/projects/1/flyer-image", headers=_auth())
+    assert r.status_code == 404
+    assert r.json()["detail"] == "flyer source image not available"
+
+
+def test_flyer_image_401():
+    assert client.get("/api/projects/1/flyer-image").status_code == 401

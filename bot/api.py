@@ -99,6 +99,12 @@ def _render_timetable_png(project_id: int):
     return generation_service.render_timetable_png_for_project(project_id)
 
 
+def _render_flyer_png(project_id: int, variant: str):
+    from services import generation_service
+
+    return generation_service.render_flyer_png_for_project(project_id, variant=variant)
+
+
 def _parse_grid(raw: Optional[str]):
     """grid_order_json(生文字列)を JSON パースして返す。None / 空 / 壊れは None。"""
     if not raw:
@@ -191,4 +197,24 @@ def get_project_timetable_image(project_id: int) -> Response:
     png = _render_timetable_png(project_id)
     if png is None:
         raise HTTPException(status_code=404, detail="timetable has no rows")
+    return Response(content=png, media_type="image/png")
+
+
+@router.get("/projects/{project_id}/flyer-image")
+def get_project_flyer_image(project_id: int, variant: str = "grid") -> Response:
+    """その project のフライヤー画像(PNG・1080x1350)を DB 設定から生成して返す。
+
+    アプリの「フライヤーセット」2 枚に対応する:
+      variant=grid … アー写グリッドを載せた版(既定)
+      variant=tt   … タイムテーブルを載せた版
+    未知の variant は 400。未検出プロジェクトは 404。
+    中身(グリッド/TT)が作れず生成不能なら 404。段階B B-2。
+    """
+    if variant not in ("grid", "tt"):
+        raise HTTPException(status_code=400, detail="variant must be grid or tt")
+    if _load_project_view(project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    png = _render_flyer_png(project_id, variant)
+    if png is None:
+        raise HTTPException(status_code=404, detail="flyer source image not available")
     return Response(content=png, media_type="image/png")
