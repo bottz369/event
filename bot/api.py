@@ -15,6 +15,7 @@ Webhook(/callback)の LINE 署名検証とは別系統で、EVENT_API_KEY によ
 """
 from __future__ import annotations
 
+import base64
 import hmac
 import json
 import os
@@ -87,22 +88,45 @@ def _build_summary_text(project_id: int):
     return generation_service.build_summary_text_for_project(project_id)
 
 
-def _render_grid_png(project_id: int):
+def _render_grid_png(project_id: int, failures=None):
     from services import generation_service
 
-    return generation_service.render_grid_png_for_project(project_id)
+    return generation_service.render_grid_png_for_project(project_id, failures=failures)
 
 
-def _render_timetable_png(project_id: int):
+def _render_timetable_png(project_id: int, failures=None):
     from services import generation_service
 
-    return generation_service.render_timetable_png_for_project(project_id)
+    return generation_service.render_timetable_png_for_project(project_id, failures=failures)
 
 
-def _render_flyer_png(project_id: int, variant: str):
+def _missing_assets_headers(failures: list) -> dict:
+    """§5: 取得に失敗した素材を PNG レスポンスのヘッダで返す。
+
+    body は PNG のまま(parity)。呼び出し側(Bot / B-3)が「差し替えたのに
+    画像が欠けている」を検知できるようにするためのフック。
+
+    - X-Missing-Assets-Count: 件数。0 のときも【必ず】付ける
+      (ヘッダが無い = 古いデプロイ、と区別できるようにするため)。
+    - X-Missing-Assets: JSON を UTF-8 → base64。空なら空文字列。
+      ★HTTP ヘッダは latin-1 しか安全に運べないので、日本語アーティスト名が
+        壊れないよう base64 にする(生 JSON を入れると UnicodeEncodeError)。
+    """
+    headers = {"X-Missing-Assets-Count": str(len(failures))}
+    if failures:
+        raw = json.dumps(failures, ensure_ascii=False).encode("utf-8")
+        headers["X-Missing-Assets"] = base64.b64encode(raw).decode("ascii")
+    else:
+        headers["X-Missing-Assets"] = ""
+    return headers
+
+
+def _render_flyer_png(project_id: int, variant: str, failures=None):
     from services import generation_service
 
-    return generation_service.render_flyer_png_for_project(project_id, variant=variant)
+    return generation_service.render_flyer_png_for_project(
+        project_id, variant=variant, failures=failures
+    )
 
 
 def _parse_grid(raw: Optional[str]):
@@ -179,10 +203,13 @@ def get_project_grid_image(project_id: int) -> Response:
     """
     if _load_project_view(project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
-    png = _render_grid_png(project_id)
+    failures: list = []
+    png = _render_grid_png(project_id, failures=failures)
     if png is None:
         raise HTTPException(status_code=404, detail="grid has no artists")
-    return Response(content=png, media_type="image/png")
+    return Response(
+        content=png, media_type="image/png", headers=_missing_assets_headers(failures)
+    )
 
 
 @router.get("/projects/{project_id}/timetable-image")
@@ -194,10 +221,13 @@ def get_project_timetable_image(project_id: int) -> Response:
     """
     if _load_project_view(project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
-    png = _render_timetable_png(project_id)
+    failures: list = []
+    png = _render_timetable_png(project_id, failures=failures)
     if png is None:
         raise HTTPException(status_code=404, detail="timetable has no rows")
-    return Response(content=png, media_type="image/png")
+    return Response(
+        content=png, media_type="image/png", headers=_missing_assets_headers(failures)
+    )
 
 
 @router.get("/projects/{project_id}/flyer-image")
@@ -214,7 +244,10 @@ def get_project_flyer_image(project_id: int, variant: str = "grid") -> Response:
         raise HTTPException(status_code=400, detail="variant must be grid or tt")
     if _load_project_view(project_id) is None:
         raise HTTPException(status_code=404, detail="project not found")
-    png = _render_flyer_png(project_id, variant)
+    failures: list = []
+    png = _render_flyer_png(project_id, variant, failures=failures)
     if png is None:
         raise HTTPException(status_code=404, detail="flyer source image not available")
-    return Response(content=png, media_type="image/png")
+    return Response(
+        content=png, media_type="image/png", headers=_missing_assets_headers(failures)
+    )

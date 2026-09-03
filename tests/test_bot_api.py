@@ -225,7 +225,7 @@ def test_summary_text_401():
 # ---------------------------------------------------------------------------
 def test_grid_image_ok(monkeypatch):
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
-    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid: b"\x89PNG\r\n\x1a\nFAKEPNGBYTES")
+    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid, failures=None: b"\x89PNG\r\n\x1a\nFAKEPNGBYTES")
     r = client.get("/api/projects/1/grid-image", headers=_auth())
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
@@ -236,7 +236,7 @@ def test_grid_image_ok(monkeypatch):
 def test_grid_image_404_when_project_missing(monkeypatch):
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: None)
     # project 未検出時は生成に進まない
-    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid: (_ for _ in ()).throw(AssertionError("must not render")))
+    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid, failures=None: (_ for _ in ()).throw(AssertionError("must not render")))
     r = client.get("/api/projects/999/grid-image", headers=_auth())
     assert r.status_code == 404
     assert r.json()["detail"] == "project not found"
@@ -244,7 +244,7 @@ def test_grid_image_404_when_project_missing(monkeypatch):
 
 def test_grid_image_404_when_no_artists(monkeypatch):
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
-    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid: None)
+    monkeypatch.setattr(bot_api, "_render_grid_png", lambda pid, failures=None: None)
     r = client.get("/api/projects/1/grid-image", headers=_auth())
     assert r.status_code == 404
     assert r.json()["detail"] == "grid has no artists"
@@ -259,7 +259,7 @@ def test_grid_image_401():
 # ---------------------------------------------------------------------------
 def test_timetable_image_ok(monkeypatch):
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
-    monkeypatch.setattr(bot_api, "_render_timetable_png", lambda pid: b"\x89PNG\r\n\x1a\nFAKETTBYTES")
+    monkeypatch.setattr(bot_api, "_render_timetable_png", lambda pid, failures=None: b"\x89PNG\r\n\x1a\nFAKETTBYTES")
     r = client.get("/api/projects/1/timetable-image", headers=_auth())
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
@@ -272,7 +272,7 @@ def test_timetable_image_404_when_project_missing(monkeypatch):
     # project 未検出時は生成に進まない(重い生成を走らせない)
     monkeypatch.setattr(
         bot_api, "_render_timetable_png",
-        lambda pid: (_ for _ in ()).throw(AssertionError("must not render")),
+        lambda pid, failures=None: (_ for _ in ()).throw(AssertionError("must not render")),
     )
     r = client.get("/api/projects/999/timetable-image", headers=_auth())
     assert r.status_code == 404
@@ -282,7 +282,7 @@ def test_timetable_image_404_when_project_missing(monkeypatch):
 def test_timetable_image_404_when_no_rows(monkeypatch):
     """行が無い / 全行が「タイムテーブル非表示」で描画対象ゼロのとき 404。"""
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
-    monkeypatch.setattr(bot_api, "_render_timetable_png", lambda pid: None)
+    monkeypatch.setattr(bot_api, "_render_timetable_png", lambda pid, failures=None: None)
     r = client.get("/api/projects/1/timetable-image", headers=_auth())
     assert r.status_code == 404
     assert r.json()["detail"] == "timetable has no rows"
@@ -299,7 +299,7 @@ def test_flyer_image_ok_grid(monkeypatch):
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
     seen = {}
 
-    def _fake(pid, variant):
+    def _fake(pid, variant, failures=None):
         seen["variant"] = variant
         return b"\x89PNG\r\n\x1a\nFAKEFLYERGRID"
 
@@ -315,7 +315,7 @@ def test_flyer_image_ok_tt(monkeypatch):
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
     seen = {}
 
-    def _fake(pid, variant):
+    def _fake(pid, variant, failures=None):
         seen["variant"] = variant
         return b"\x89PNG\r\n\x1a\nFAKEFLYERTT"
 
@@ -329,7 +329,7 @@ def test_flyer_image_ok_tt(monkeypatch):
 def test_flyer_image_400_on_bad_variant(monkeypatch):
     monkeypatch.setattr(
         bot_api, "_render_flyer_png",
-        lambda pid, variant: (_ for _ in ()).throw(AssertionError("must not render")),
+        lambda pid, variant, failures=None: (_ for _ in ()).throw(AssertionError("must not render")),
     )
     r = client.get("/api/projects/1/flyer-image?variant=poster", headers=_auth())
     assert r.status_code == 400
@@ -340,7 +340,7 @@ def test_flyer_image_404_when_project_missing(monkeypatch):
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: None)
     monkeypatch.setattr(
         bot_api, "_render_flyer_png",
-        lambda pid, variant: (_ for _ in ()).throw(AssertionError("must not render")),
+        lambda pid, variant, failures=None: (_ for _ in ()).throw(AssertionError("must not render")),
     )
     r = client.get("/api/projects/999/flyer-image", headers=_auth())
     assert r.status_code == 404
@@ -350,7 +350,7 @@ def test_flyer_image_404_when_project_missing(monkeypatch):
 def test_flyer_image_404_when_source_unavailable(monkeypatch):
     """中身(グリッド/TT)が作れないとき 404。"""
     monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
-    monkeypatch.setattr(bot_api, "_render_flyer_png", lambda pid, variant: None)
+    monkeypatch.setattr(bot_api, "_render_flyer_png", lambda pid, variant, failures=None: None)
     r = client.get("/api/projects/1/flyer-image", headers=_auth())
     assert r.status_code == 404
     assert r.json()["detail"] == "flyer source image not available"
@@ -358,3 +358,87 @@ def test_flyer_image_404_when_source_unavailable(monkeypatch):
 
 def test_flyer_image_401():
     assert client.get("/api/projects/1/flyer-image").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# §5: X-Missing-Assets ヘッダ(取得に失敗した素材の申し送り)
+# ---------------------------------------------------------------------------
+import base64  # noqa: E402
+import json as _json  # noqa: E402
+
+_PNG = b"\x89PNG\r\n\x1a\nFAKE"
+
+
+def _decode_missing(r):
+    """X-Missing-Assets(base64/UTF-8/JSON)をデコードして list を返す。"""
+    raw = r.headers.get("X-Missing-Assets", "")
+    if not raw:
+        return []
+    return _json.loads(base64.b64decode(raw).decode("utf-8"))
+
+
+@pytest.mark.parametrize(
+    "path,attr",
+    [
+        ("/api/projects/1/grid-image", "_render_grid_png"),
+        ("/api/projects/1/timetable-image", "_render_timetable_png"),
+        ("/api/projects/1/flyer-image", "_render_flyer_png"),
+    ],
+)
+def test_missing_assets_header_always_present(monkeypatch, path, attr):
+    """★失敗ゼロでも X-Missing-Assets-Count は必ず付く(ヘッダ無し=旧デプロイと区別)。"""
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    monkeypatch.setattr(bot_api, attr, lambda *a, **k: _PNG)
+    r = client.get(path, headers=_auth())
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content == _PNG, "body は PNG のまま(parity)"
+    assert r.headers["X-Missing-Assets-Count"] == "0"
+    assert _decode_missing(r) == []
+
+
+@pytest.mark.parametrize(
+    "path,attr",
+    [
+        ("/api/projects/1/grid-image", "_render_grid_png"),
+        ("/api/projects/1/timetable-image", "_render_timetable_png"),
+        ("/api/projects/1/flyer-image", "_render_flyer_png"),
+    ],
+)
+def test_missing_assets_header_carries_japanese_names(monkeypatch, path, attr):
+    """★日本語アーティスト名がヘッダで壊れないこと(base64/UTF-8 の往復)。
+
+    HTTP ヘッダは latin-1 しか安全に運べないので、生 JSON を入れると
+    UnicodeEncodeError になる。base64 化の回帰網。
+    """
+    entries = [
+        {"kind": "artist_photo", "name": "手羽先センセーション",
+         "url": "https://example.invalid/a.jpg", "reason": "fetch_failed"},
+        {"kind": "flyer_bg", "name": None, "url": "https://example.invalid/bg.jpg",
+         "reason": "fetch_failed"},
+    ]
+
+    def _fake(*a, **k):
+        k["failures"].extend(entries)
+        return _PNG
+
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    monkeypatch.setattr(bot_api, attr, _fake)
+
+    r = client.get(path, headers=_auth())
+    assert r.status_code == 200
+    assert r.content == _PNG
+    assert r.headers["X-Missing-Assets-Count"] == "2"
+
+    decoded = _decode_missing(r)
+    assert decoded == entries
+    assert decoded[0]["name"] == "手羽先センセーション", "日本語が UTF-8 で復元できる"
+    assert decoded[1]["kind"] == "flyer_bg"
+
+
+def test_missing_assets_header_absent_on_404(monkeypatch):
+    """404 経路は従来どおり(ヘッダは付かない・挙動不変)。"""
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: None)
+    r = client.get("/api/projects/999/grid-image", headers=_auth())
+    assert r.status_code == 404
+    assert "X-Missing-Assets-Count" not in r.headers
