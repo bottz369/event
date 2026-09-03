@@ -184,3 +184,80 @@ def test_prefetch_success_records_no_failure(monkeypatch):
     )
     assert cache.get("手羽先センセーション") is not None
     assert failures == []
+
+
+# ---------------------------------------------------------------------------
+# logic_grid: grid 側も同型(kind="artist_photo"・name はアーティスト名)
+# ---------------------------------------------------------------------------
+import logic_grid as lg  # noqa: E402
+
+
+class _FakeArtistView:
+    """ArtistView 相当(prefetch が触るのは id / name / image_filename のみ)。"""
+
+    def __init__(self, aid, name, image_filename):
+        self.id = aid
+        self.name = name
+        self.image_filename = image_filename
+
+
+def test_grid_load_image_from_url_logs_warning(monkeypatch, caplog):
+    monkeypatch.setattr(lg.requests, "get", _boom)
+    with caplog.at_level(logging.WARNING, logger="logic_grid"):
+        assert lg.load_image_from_url("https://example.invalid/a.jpg") is None
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("ConnectionError" in m for m in msgs), msgs
+
+
+def test_grid_load_image_from_url_empty_is_not_a_failure(caplog):
+    with caplog.at_level(logging.WARNING, logger="logic_grid"):
+        assert lg.load_image_from_url("") is None
+        assert lg.load_image_from_url(None) is None
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_grid_load_and_downscale_logs_warning(monkeypatch, caplog):
+    monkeypatch.setattr(lg.requests, "get", _boom)
+    with caplog.at_level(logging.WARNING, logger="logic_grid"):
+        assert lg._load_and_downscale("https://example.invalid/a.jpg") is None
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("ConnectionError" in m for m in msgs), msgs
+
+
+def test_grid_prefetch_collects_failure_entry(monkeypatch):
+    import database
+
+    monkeypatch.setattr(database, "get_image_url", lambda fn: "https://example.invalid/g.jpg")
+    monkeypatch.setattr(lg, "get_image_url", lambda fn: "https://example.invalid/g.jpg")
+    monkeypatch.setattr(lg.requests, "get", _boom)
+
+    failures = []
+    cache = lg._fetch_grid_images_parallel(
+        [_FakeArtistView(7, "まねきケチャ", "g.jpg")], failures=failures
+    )
+    assert cache.get(7) is None
+    assert len(failures) == 1
+    e = failures[0]
+    assert e["kind"] == "artist_photo"
+    assert e["name"] == "まねきケチャ"
+    assert e["url"] == "https://example.invalid/g.jpg"
+    assert e["reason"] == "fetch_failed"
+
+
+def test_grid_prefetch_without_failures_arg(monkeypatch):
+    """★failures=None(既存 views 経路)でも例外にならない。"""
+    monkeypatch.setattr(lg, "get_image_url", lambda fn: "https://example.invalid/g.jpg")
+    monkeypatch.setattr(lg.requests, "get", _boom)
+    cache = lg._fetch_grid_images_parallel([_FakeArtistView(7, "まねきケチャ", "g.jpg")])
+    assert cache.get(7) is None
+
+
+def test_grid_prefetch_no_image_filename_is_not_a_failure(monkeypatch, caplog):
+    failures = []
+    with caplog.at_level(logging.WARNING, logger="logic_grid"):
+        cache = lg._fetch_grid_images_parallel(
+            [_FakeArtistView(7, "まねきケチャ", None)], failures=failures
+        )
+    assert cache == {}
+    assert failures == []
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]

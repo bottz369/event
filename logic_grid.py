@@ -8,6 +8,7 @@ import numpy as np
 import requests
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+import logging
 from database import get_image_url
 
 # ★追加: パス解決のために constants からディレクトリ情報をインポート
@@ -17,6 +18,13 @@ except ImportError:
     # 万が一 constants が読み込めない場合のバックアップ設定
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     FONT_DIR = os.path.join(BASE_DIR, "assets", "fonts")
+
+logger = logging.getLogger(__name__)
+
+# §5: 素材取得失敗の可観測化。ログは failures の有無に関わらず常に出す。
+# failures は任意 out-param(既定 None)で、None のときは従来と完全に同一挙動。
+# 構造化エントリの収集はメインスレッドで url_jobs と image_cache を突合して行う
+# (contextvars は ThreadPoolExecutor の worker へ伝播しないので使わない)。
 
 # ================= 設定エリア =================
 TILE_WIDTH = 800       
@@ -142,11 +150,16 @@ def create_no_image_placeholder(width, height):
     return img
 
 def load_image_from_url(url):
+    if not url:
+        return None  # 空 URL は失敗ではない(ログも出さない)
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         return Image.open(BytesIO(response.content)).convert("RGBA")
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "artist photo load failed: url=%r reason=%s: %s", url, type(e).__name__, e
+        )
         return None
 
 
@@ -195,14 +208,17 @@ def _load_and_downscale(url):
             pass  # draft 非対応(PNG 等)/失敗時はフル復号にフォールバック
         im = im.convert("RGBA")
         return _downscale_max_edge(im)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "artist photo load failed: url=%r reason=%s: %s", url, type(e).__name__, e
+        )
         return None
 
 
 # =========================================================
 # Phase 3 P2: アー写画像並列取得ヘルパー
 # =========================================================
-def _fetch_grid_images_parallel(target_artists):
+def _fetch_grid_images_parallel(target_artists, failures=None):
     """target_artists の各 image_filename を ThreadPoolExecutor で並列取得し、
     {artist.id: PIL.Image or None} の dict を返す。出力画像 (キャンバス合成結果)
     は不変。HTTP 取得の wall-clock 時間を短縮するための取得フェーズのみ並列化。
@@ -242,8 +258,26 @@ def _fetch_grid_images_parallel(target_artists):
                 aid = future_to_id[fut]
                 try:
                     image_cache[aid] = fut.result()
-                except Exception:
+                except Exception as e:
+                    logger.warning(
+                        "artist photo worker failed: id=%r reason=%s: %s",
+                        aid, type(e).__name__, e,
+                    )
                     image_cache[aid] = None
+
+    # §5: 失敗の構造化収集は【メインスレッド】で、全 future 解決後に行う。
+    # 「取得を試みた(url_jobs にある)のに結果が None」= 失敗。
+    # image_filename が無い / URL 化できないアーティストは url_jobs に入らないので数えない。
+    if failures is not None:
+        for aid, url in url_jobs:
+            if image_cache.get(aid) is None:
+                artist = by_id.get(aid)
+                failures.append({
+                    "kind": "artist_photo",
+                    "name": getattr(artist, "name", None),
+                    "url": url,
+                    "reason": "fetch_failed",
+                })
 
     return image_cache
 
@@ -274,7 +308,7 @@ def resolve_font_path(font_path_input):
     
     return None
 
-def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_counts=None, is_brick_mode=True, alignment="center"):
+def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_counts=None, is_brick_mode=True, alignment="center", failures=None):
     """
     grid画像を生成する
     """
@@ -283,7 +317,7 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
     if total_images == 0: return None
 
     # Phase 3 P2: アー写画像を並列取得 (取得フェーズと加工フェーズの分離・出力不変)
-    image_cache = _fetch_grid_images_parallel(target_artists)
+    image_cache = _fetch_grid_images_parallel(target_artists, failures=failures)
 
     # 行指定がない場合の安全策
     if not row_counts: row_counts = [5] * 10
