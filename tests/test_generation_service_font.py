@@ -74,6 +74,7 @@ import pytest
 from PIL import ImageFont
 
 import services.font_service as fs
+from models.timetable import TimetableRowDraft
 
 
 def _real_font_bytes() -> bytes:
@@ -205,6 +206,82 @@ def test_render_warns_loudly_when_font_is_not_resolved(monkeypatch):
     gs.logger.addHandler(handler)
     try:
         gs.render_grid_png_for_project(1)
+    finally:
+        gs.logger.removeHandler(handler)
+
+    warnings = [r.getMessage() for r in handler.records if r.levelno >= logging.WARNING]
+    assert any("tofu" in m for m in warnings), (
+        "フォント未解決時に豆腐化の警告が出ていない: %r" % warnings
+    )
+
+
+# ---------------------------------------------------------------------------
+# 段階B B-1: render_timetable_png_for_project のフォント materialize
+# ---------------------------------------------------------------------------
+class _FakeTTProject:
+    id = 1
+    grid_order_json = None
+    settings_json = '{"tt_font":"myfont.ttf","tt_columns":2}'
+    open_time = "10:00"
+    start_time = "10:30"
+    title = "X"
+    subtitle = ""
+    event_date = None
+    venue_name = ""
+    venue_url = ""
+    goods_start_offset = 5
+    tickets_json = None
+    ticket_notes_json = None
+    free_text_json = None
+    flyer_json = None
+
+
+def test_render_timetable_materializes_font_and_default(monkeypatch):
+    """TT 画像生成でも tt_font と keifont.ttf の両方を materialize すること。"""
+    calls = []
+    monkeypatch.setattr(gs.font_service, "ensure_font_available", lambda name: calls.append(name) or "cached")
+    monkeypatch.setattr(gs, "SessionLocal", lambda: _FakeDB())
+    monkeypatch.setattr(gs.project_repo, "get_project", lambda db, pid: _FakeTTProject())
+    monkeypatch.setattr(
+        gs.timetable_service, "get_rows_for_project",
+        lambda pid: [TimetableRowDraft(artist_name="A", duration=30)],
+    )
+    monkeypatch.setattr(
+        gs.timetable_service, "build_tt_gen_list_from_rows",
+        lambda rows, o, s: [["10:30 - 11:00", "A", "", "A"]],
+    )
+    monkeypatch.setattr(gs, "generate_timetable_image", lambda *a, **k: None)
+
+    assert gs.render_timetable_png_for_project(1) is None  # generate stub が None
+    assert "myfont.ttf" in calls
+    assert "keifont.ttf" in calls
+
+
+def test_render_timetable_warns_when_font_is_not_resolved(monkeypatch, tmp_path):
+    """フォントが FONT_DIR に無いまま生成に進むとき、必ず豆腐警告を出すこと。
+
+    ★logic_timetable.get_font の候補には FONT_DIR が入っていないため、
+    keifont.ttf を materialize してあっても渡す path が実在しなければ
+    PIL 既定フォントに落ちて日本語ラベルが豆腐になる。その検知装置を守る。
+    """
+    monkeypatch.setattr(gs, "FONT_DIR", str(tmp_path))  # 空ディレクトリ
+    monkeypatch.setattr(gs.font_service, "ensure_font_available", lambda name: "not_found")
+    monkeypatch.setattr(gs, "SessionLocal", lambda: _FakeDB())
+    monkeypatch.setattr(gs.project_repo, "get_project", lambda db, pid: _FakeTTProject())
+    monkeypatch.setattr(
+        gs.timetable_service, "get_rows_for_project",
+        lambda pid: [TimetableRowDraft(artist_name="A", duration=30)],
+    )
+    monkeypatch.setattr(
+        gs.timetable_service, "build_tt_gen_list_from_rows",
+        lambda rows, o, s: [["10:30 - 11:00", "A", "", "A"]],
+    )
+    monkeypatch.setattr(gs, "generate_timetable_image", lambda *a, **k: None)
+
+    handler = _RecordingHandler()
+    gs.logger.addHandler(handler)
+    try:
+        gs.render_timetable_png_for_project(1)
     finally:
         gs.logger.removeHandler(handler)
 

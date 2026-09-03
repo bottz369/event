@@ -252,3 +252,41 @@ def test_grid_image_404_when_no_artists(monkeypatch):
 
 def test_grid_image_401():
     assert client.get("/api/projects/1/grid-image").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /api/projects/{id}/timetable-image(生成トリガー・段階B B-1)
+# ---------------------------------------------------------------------------
+def test_timetable_image_ok(monkeypatch):
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    monkeypatch.setattr(bot_api, "_render_timetable_png", lambda pid: b"\x89PNG\r\n\x1a\nFAKETTBYTES")
+    r = client.get("/api/projects/1/timetable-image", headers=_auth())
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content == b"\x89PNG\r\n\x1a\nFAKETTBYTES"
+    assert len(r.content) > 0
+
+
+def test_timetable_image_404_when_project_missing(monkeypatch):
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: None)
+    # project 未検出時は生成に進まない(重い生成を走らせない)
+    monkeypatch.setattr(
+        bot_api, "_render_timetable_png",
+        lambda pid: (_ for _ in ()).throw(AssertionError("must not render")),
+    )
+    r = client.get("/api/projects/999/timetable-image", headers=_auth())
+    assert r.status_code == 404
+    assert r.json()["detail"] == "project not found"
+
+
+def test_timetable_image_404_when_no_rows(monkeypatch):
+    """行が無い / 全行が「タイムテーブル非表示」で描画対象ゼロのとき 404。"""
+    monkeypatch.setattr(bot_api, "_load_project_view", lambda pid: ProjectView(id=pid, title="X"))
+    monkeypatch.setattr(bot_api, "_render_timetable_png", lambda pid: None)
+    r = client.get("/api/projects/1/timetable-image", headers=_auth())
+    assert r.status_code == 404
+    assert r.json()["detail"] == "timetable has no rows"
+
+
+def test_timetable_image_401():
+    assert client.get("/api/projects/1/timetable-image").status_code == 401
