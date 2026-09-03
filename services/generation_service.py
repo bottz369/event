@@ -19,7 +19,10 @@ import io
 import json
 import os
 import threading
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:  # 型注釈専用(実行時に PIL を import しない)
+    from PIL import Image
 
 from constants import FONT_DIR
 from database import SessionLocal
@@ -40,10 +43,15 @@ _SPECIAL_ROW_NAMES = ("開演前物販", "終演後物販")
 _ALIGN_MAP = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
 _BRICK_LABEL = "レンガ (サイズ統一)"
 
-# OOM 対策: grid 画像生成を API 経路で直列化する(同時に1件だけ生成)。
-# 複数 /grid-image 同時アクセスで full-res 生成のピークが積み上がるのを防ぐ。
-# ※ logic_grid 自体はロックしない(アプリ側の単独利用は直列化しない)。
-_render_lock = threading.Lock()
+# OOM 対策: 画像生成を API 経路で直列化する(同時に1件だけ生成)。
+# 複数の生成リクエストが重なって full-res 生成のピークが積み上がるのを防ぐ。
+# ※ logic_grid / logic_timetable 自体はロックしない(アプリ側の単独利用は直列化しない)。
+#
+# ★段階B B-2 で RLock に変更した理由: フライヤー生成は同一スレッド内で
+#   grid / TT の生成ヘルパを入れ子で呼ぶ。非再入の Lock のままだと自分自身の
+#   ロック待ちでデッドロックする。RLock でも「別スレッドは待たされる」
+#   = 同時 1 件という直列化の意味は変わらない。
+_render_lock = threading.RLock()
 
 
 def _loads_list(raw) -> list:
@@ -127,8 +135,12 @@ def build_summary_text_for_project(project_id: int) -> Optional[str]:
     )
 
 
-def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
-    """project_id の grid 画像を DB 設定から生成し PNG bytes で返す。
+def _render_grid_image_for_project(project_id: int) -> Optional["Image.Image"]:
+    """project_id の grid 画像を DB 設定から生成し PIL Image で返す。
+
+    段階B B-2: フライヤー合成が main_source に PIL Image を要求するため、
+    PNG encode の手前で切り出した内部ヘルパ。PNG bytes が欲しい場合は
+    公開版 render_grid_png_for_project() を使う(こちらを呼んで encode するだけ)。
 
     未検出 project / 出演者ゼロ(generate_grid_image が None)は None。
 
@@ -217,16 +229,15 @@ def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
             is_brick_mode=is_brick,
             alignment=alignment,
         )
-        if img is None:
-            return None
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
+        return img
 
 
-def render_timetable_png_for_project(project_id: int) -> Optional[bytes]:
-    """project_id のタイムテーブル画像を DB 設定から生成し PNG bytes で返す。
+def _render_tt_image_for_project(project_id: int) -> Optional["Image.Image"]:
+    """project_id のタイムテーブル画像を DB 設定から生成し PIL Image で返す。
+
+    段階B B-2: フライヤー合成が main_source に PIL Image を要求するため、
+    PNG encode の手前で切り出した内部ヘルパ。PNG bytes が欲しい場合は
+    公開版 render_timetable_png_for_project() を使う。
 
     未検出 project / 描画対象ゼロ(全行が「タイムテーブル非表示」等)は None。
 
@@ -308,10 +319,38 @@ def render_timetable_png_for_project(project_id: int) -> Optional[bytes]:
         else:
             logger.info("timetable font resolved: %s", font_path)
 
-        img = generate_timetable_image(gen_list, font_path=font_path, columns=tt_columns)
-        if img is None:
-            return None
+        return generate_timetable_image(gen_list, font_path=font_path, columns=tt_columns)
 
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
+
+# =========================================================
+# 公開 API: PNG bytes 版(既存エンドポイントが呼ぶ)
+# =========================================================
+def _to_png_bytes(img: Optional["Image.Image"]) -> Optional[bytes]:
+    """PIL Image を PNG bytes にする。None はそのまま None。
+
+    生成物は RGBA 透過なので PNG で bytes 化する(JPEG 不可)。
+    """
+    if img is None:
+        return None
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def render_grid_png_for_project(project_id: int) -> Optional[bytes]:
+    """project_id の grid 画像を PNG bytes で返す。未検出 / 出演者ゼロは None。
+
+    実体は _render_grid_image_for_project。ロックはここで取る
+    (ヘルパ側は取らない設計ではなく RLock なので入れ子でも安全)。
+    """
+    with _render_lock:
+        return _to_png_bytes(_render_grid_image_for_project(project_id))
+
+
+def render_timetable_png_for_project(project_id: int) -> Optional[bytes]:
+    """project_id のタイムテーブル画像を PNG bytes で返す。
+
+    未検出 project / 描画対象ゼロ(行なし / 全行が「タイムテーブル非表示」)は None。
+    """
+    with _render_lock:
+        return _to_png_bytes(_render_tt_image_for_project(project_id))
