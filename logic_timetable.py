@@ -57,9 +57,55 @@ def load_image(path_or_url):
 
 
 # =========================================================
+# 段階B B-1.5: OOM 対策(JPEG draft + 取得直後の fit)。
+#
+# ★座標補正が不要な理由: TT のアー写描画は draw_one_row の
+#   ImageOps.fit(img, (row_width, row_height), centering=(0.5, 0.5)) だけで、
+#   手動クロップ座標 (crop_scale / crop_x / crop_y) を一切使わない(grid と違う点)。
+#   fit は完全に「描画先サイズ基準」なので、元画像側を縮めても構図・位置は動かない。
+#
+# ★なぜ「最長辺 N px への一様縮小」(grid 方式)ではないか:
+#   TT の描画先は 1740x159(2列)〜2800x?(1列)と非常に横長で、元アー写は
+#   1000〜2000px 程度。一様縮小では幅の制約に阻まれてほとんど縮まらない
+#   (実測: 34MB → 30MB)。実際に使われるのは中央の細い帯だけなので、
+#   取得直後に描画先サイズへ fit してしまうのが正解(実測: 34MB → 5.5MB)。
+#   → キャッシュ保持量が元画像サイズに依存せず 1 枚あたり一定になる。
+#
+# ★parity: ImageOps.fit は冪等(fit(fit(x)) == fit(x) を実データで完全一致確認済み)。
+#   よって draw_one_row 側は無変更のままで出力が変わらない。差分は draft の
+#   DCT スケール由来のみ(scratch/parity_tt_downscale.py で知覚不能レベルを数値化)。
+# =========================================================
+def _load_and_fit_tt(url, target_w, target_h):
+    """URL 取得 → JPEG draft デコード → 描画先サイズへ fit(worker スレッド内)。
+
+    Image.draft は load() より前に呼ぶ必要がある。draft は要求サイズを下回らない
+    DCT スケールを選ぶので、巨大 JPEG のフル復号を避けつつ画質は保たれる。
+    JPEG 以外では no-op(例外時も従来どおり続行)。
+    失敗時 None は従来の load_image と同じ(呼び出し側でアー写なし描画になる)。
+    """
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code != 200:
+            return None
+        im = Image.open(BytesIO(response.content))
+        try:
+            im.draft("RGB", (target_w, target_h))
+        except Exception:
+            pass  # draft 非対応(PNG 等)/失敗時はフル復号にフォールバック
+        im = im.convert("RGBA")
+        # draw_one_row と完全に同じ引数で fit する(ここで縮めても結果は変わらない)。
+        return ImageOps.fit(
+            im, (int(target_w), int(target_h)),
+            method=Image.Resampling.LANCZOS, centering=(0.5, 0.5),
+        )
+    except Exception:
+        return None
+
+
+# =========================================================
 # Phase 3 P2: アー写画像並列取得ヘルパー (TT 用、Grid 側と同型)
 # =========================================================
-def _prefetch_tt_images(timetable_data, db):
+def _prefetch_tt_images(timetable_data, db, target_size=None):
     """timetable_data の全行をスキャンして name_str → PIL.Image の dict を返す。
     ThreadPoolExecutor で並列 HTTP 取得。出力画像 (タイムテーブル合成結果) は不変。
     HTTP 取得の wall-clock 時間を短縮するための取得フェーズのみ並列化。
@@ -100,7 +146,16 @@ def _prefetch_tt_images(timetable_data, db):
     image_cache = {}
     if name_to_url:
         with ThreadPoolExecutor(max_workers=8) as executor:
-            future_to_name = {executor.submit(load_image, url): name for (name, url) in name_to_url.items()}
+            # 段階B B-1.5: 描画先サイズが分かっていれば取得直後に fit まで済ませる(OOM 対策)。
+            # target_size=None のときは従来どおりフル解像度で取得する(呼び出し側互換)。
+            if target_size is not None:
+                _tw, _th = target_size
+                future_to_name = {
+                    executor.submit(_load_and_fit_tt, url, _tw, _th): name
+                    for (name, url) in name_to_url.items()
+                }
+            else:
+                future_to_name = {executor.submit(load_image, url): name for (name, url) in name_to_url.items()}
             for fut in future_to_name:
                 name = future_to_name[fut]
                 try:
@@ -231,8 +286,6 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
     db = SessionLocal()
 
     try:
-        # Phase 3 P2: アー写画像を並列取得 (取得フェーズと加工フェーズの分離・出力不変)
-        image_cache = _prefetch_tt_images(timetable_data, db)
         total_artists = len(timetable_data)
         
         # 安全策: ロジック側でも24組以上は強制2列にする
@@ -272,6 +325,14 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2):
             single_col_width = canvas_width
         else:
             single_col_width = int((canvas_width - COLUMN_GAP) / 2)
+
+        # Phase 3 P2: アー写画像を並列取得 (取得フェーズと加工フェーズの分離)。
+        # 段階B B-1.5: 描画先サイズ (single_col_width x row_height) が確定してから
+        # 呼ぶように移動し、取得直後にそのサイズへ fit する(OOM 対策)。
+        # 全行が同じ row_width / row_height で描かれるので、行ごとに目標が変わることはない。
+        image_cache = _prefetch_tt_images(
+            timetable_data, db, target_size=(int(single_col_width), int(row_height))
+        )
 
         # --- 左列の描画 ---
         y = margin_between_rows / 2

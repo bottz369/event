@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""TT 画像の生成結果ハッシュを出す(streamlit optional 化の前後でバイト一致を証明する)。
+"""TT 画像の生成結果ハッシュを出す(段階B B-1: streamlit optional 化のバイト一致証明用)。
+
+★注意: B-1.5(取得直後の fit / JPEG draft = OOM 対策)以降は、リサンプリング経路が
+  変わるためハッシュは B-1 時点と一致しない。B-1.5 以降の parity 判定は
+  scratch/parity_tt_downscale.py(知覚品質の数値判定)を使うこと。
+  本スクリプトは「同一コードでの決定性確認」には引き続き使える。
 
 使い方: .venv/bin/python3 scratch/verify_tt_parity.py <project_id> [<project_id> ...]
 read-only(DB は SELECT のみ / 書き込みは FONT_DIR への materialize だけ)。
