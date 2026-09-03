@@ -93,6 +93,12 @@ def _render_grid_png(project_id: int):
     return generation_service.render_grid_png_for_project(project_id)
 
 
+def _render_timetable_png(project_id: int):
+    from services import generation_service
+
+    return generation_service.render_timetable_png_for_project(project_id)
+
+
 def _parse_grid(raw: Optional[str]):
     """grid_order_json(生文字列)を JSON パースして返す。None / 空 / 壊れは None。"""
     if not raw:
@@ -170,4 +176,19 @@ def get_project_grid_image(project_id: int) -> Response:
     png = _render_grid_png(project_id)
     if png is None:
         raise HTTPException(status_code=404, detail="grid has no artists")
+    return Response(content=png, media_type="image/png")
+
+
+@router.get("/projects/{project_id}/timetable-image")
+def get_project_timetable_image(project_id: int) -> Response:
+    """その project のタイムテーブル画像(PNG・透過)を DB 設定から生成して返す。
+
+    未検出プロジェクトは 404。描画対象ゼロ(行が無い / 全行が「タイムテーブル非表示」)は
+    404(timetable has no rows)。段階B B-1。
+    """
+    if _load_project_view(project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    png = _render_timetable_png(project_id)
+    if png is None:
+        raise HTTPException(status_code=404, detail="timetable has no rows")
     return Response(content=png, media_type="image/png")
