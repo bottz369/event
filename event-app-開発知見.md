@@ -1746,6 +1746,76 @@ macOS 実測で **982MB → 673MB**。
 
 ---
 
+## 46. 段階B スライス1(TT画像API)/ スライス2(flyer画像API)= 完了・本番稼働(2026-09-01〜2026-09-03)
+
+§44 の段階B設計に沿って、Bot が返す2枚(フライヤー / タイムテーブル)を API から生成できるようにした。
+すべて generation_service(streamlit 非 import・§45)に載せ、出力は既存アプリと byte parity。
+
+### スライス1: TT 画像 API(§36 バケツ②の回収)
+- `25dc7ff`: logic_timetable の streamlit を optional 化(`try: import streamlit / except: st=None`)、
+  `st.toast` / `st.error` をガード。描画ロジックは無変更。
+- `570563f`: rows から生成用 gen_list を組む純関数 `build_tt_gen_list_from_rows`
+  (OPEN/START + タイムテーブル非表示を除外)。
+- `61e4558` / `992472e`: `render_timetable_png_for_project` + `GET /api/projects/{id}/timetable-image`。
+- `213a452`: 回帰網(エンドポイント + フォント materialize / 豆腐警告)。
+- `5b4ef9d`(B-1.5・OOM 対策): アー写を取得直後に描画先サイズへ `ImageOps.fit`。TT は描画先が横長で
+  フル解像度を保持する意味がないため、grid の「最長辺一律縮小」ではなく fit が正解。実測ピーク
+  id=12 648→440MB / id=13 993→563MB。fit は冪等なので描画側は無変更=parity。
+
+### スライス2: flyer 画像 API(flyer_json 動的キーが最大の論点だった)
+- `7cb7830`: grid/TT 生成を PIL 返しヘルパに分離(PNG 版は薄いラッパ・出力不変)。
+  flyer が main_source に中間画像(grid or TT)を必要とするため。
+- `1d051c3`: `build_flyer_kwargs_for_project`。flyer_json の動的キー(~103)は
+  `models/flyer_keys.py` の `FLYER_KEY_REGISTRY` を SSOT にして
+  `{e.short_key: flyer_json.get(e.short_key, e.default) for e in REGISTRY}` で一括構築。
+  → 「動的キー30+」問題はレジストリ化で解消。
+- `c70b9a8`: `render_flyer_png_for_project(project_id, variant)`。`_render_lock` を **RLock 化**
+  (flyer が内側で grid/TT 生成ロックを再入するため)。main_source は合成後すぐ解放して gc。
+- `63bc0c3`: `GET /api/projects/{id}/flyer-image?variant=grid|tt`。
+- OOM 実測(Railway **Hobby**): 最悪 id=13 flyer-grid 851.8MB(1GB 内)。本番疎通で grid/tt とも
+  200・約2.0MB・目視OK。**フライヤー画像 API 本番動作確定(2026-09-03)**。
+
+---
+
+## 47. §5 素材取得失敗の「握り潰し」解消(ログ + failures + X-Missing-Assets ヘッダ)(2026-09-03)
+
+段階B の Bot 会話フロー(アー写差し替え→再生成)前の安全弁。アー写・flyer 背景/ロゴの取得が失敗しても
+無言で None を返し「素材欠け」で描画継続していた穴(誰も気づけない)を塞いだ。
+5コミット: `4ee63f5`(TT)/ `92dcd58`(grid)/ `d2ecd35`(flyer bg/logo)/ `88299ce`(サービス集約)/
+`7c4e46d`(API ヘッダ)。各コミット単体で verify 緑・全146 passed。
+
+### 設計(B案採用・合意済み)
+- 公開ジェネレータに**任意 out-param `failures: Optional[list]=None`** を追加するのみ。`None`(views 経路)なら
+  挙動・出力 byte parity。list を渡したときだけ `{"kind","name","url","reason"}` を append。
+- **失敗集約は必ずメインスレッド**。TT/grid prefetch は ThreadPoolExecutor で、worker 内は
+  `logging.warning` のみ。構造化エントリは全 future 解決後に `name_to_url`(取得を試みた対象)×
+  `image_cache`(結果 None)を突合して作る。
+  - ★不変条件: **contextvars でスレッド跨ぎ収集をしない**(executor worker に伝播しないため)。コードにも明記。
+- 「空 URL / 画像未設定 = 正常な None」は失敗に数えない・ログも出さない。数えるのは
+  「非空なのに status!=200 / 例外 / デコード失敗」だけ。
+- flyer は inner render(アー写)の failures 収集を **`main_img is None` の早期 return より前**に行い、
+  bg/logo は `create_flyer_image_shadow(failures=...)` へ伝播して合算。
+- 二重計上なし: `generate_timetable_image` は `draw_one_row` に `image_cache` は渡すが `failures` は渡さない。
+  draw_one_row 側の収集は「image_cache=None の旧/外部経路」専用で dedup ガード付き。
+
+### API サーフェス(B-3 = Bot 会話フローへの橋渡し)
+画像 3 エンドポイントは body が PNG のままなので、失敗リストは**レスポンスヘッダ**で返す:
+- `X-Missing-Assets-Count`: 件数。**0 でも必ず付ける**(ヘッダ無し=古いデプロイ、と B-3 側で区別するため)。
+- `X-Missing-Assets`: `json → UTF-8 → base64`。**HTTP ヘッダは latin-1 しか安全に運べず、日本語アー写名を
+  生 JSON で入れると UnicodeEncodeError になる**ため base64 必須。`"手羽先センセーション"` の往復復元を回帰網で固定。
+- 404 は Response 構築前に raise = ヘッダ無し(従来どおり)。
+
+### 検証
+- RED→GREEN: `requests.get` を 404/例外に monkeypatch し、None 返却 + failures 1件 + WARNING(caplog)を確認。
+  空 URL は failures 空・WARNING 無し。
+- parity: `failures=None` の出力 byte が変更前と一致(id=12/39 の grid/tt で sha256 一致)。streamlit-free ガード緑。
+- ★教訓: parity 検証中に**まさに §5 対象の取得失敗が一過性に発生**し、触っていない grid のハッシュがズレた
+  (再実行で一致)。握り潰しがあると parity 検証すら信用できない、という実例。今後は WARNING で即検知できる。
+- 補足: `utils/flyer_generator.load_image` の `print(...)` を module logger 化(Railway で追える・挙動不変)。
+  リトライ(C案)は不採用。
+
+---
+
 ## フェーズ計画 現在地(2026-09-03 時点)
 
 - **Phase 5(残りビュー移行)= ✅ 完全クローズ(2026-07-14)**: artists / grid(§24〜§28)/
@@ -1782,8 +1852,14 @@ macOS 実測で **982MB → 673MB**。
   (2026-09-01、§43)**: 本番反映済み(origin/main = `f2d11ae`)。**非永続フィールド + grid_settings の
   seed/save** パターンを確立し、DB スキーマを変えずに UI 列を増やせるようになった。
   grid の DnD は撤去し、**TT の番号が並び順の唯一の正**。
-- ⏳ **段階B(LINE からのフライヤー / TT 更新フロー)= 設計完了・実装待ち(§44)**。
-  **次アクション = フライヤー画像の API 化の調査**(`flyer_json` の動的キー 30+ が最大の論点)。
-  その後 TT 画像の API 化(§36 バケツ②・`generate_timetable_image` の st.toast/error 戻り値化)→ Bot 会話フロー。
+- ✅ **段階B スライス1(TT画像API)/ スライス2(flyer画像API)= 完了・本番稼働(§46)**。
+  generation_service に集約(streamlit 非依存)、出力は byte parity、OOM は Hobby 内(最悪 flyer id=13 852MB)。
+  flyer_json の動的キーは `FLYER_KEY_REGISTRY` で解消。
+- ✅ **§5 素材取得失敗の握り潰し解消 = 実装・レビュー完了(§47、`4ee63f5`〜`7c4e46d` の5コミット)**。
+  ログ + `failures` out-param + `X-Missing-Assets` ヘッダ。メインスレッド集約(contextvars 不使用)・parity 維持。push で本番反映。
+- ⏳ **次アクション = 段階B スライス3(Bot 会話フロー)**: アー写差し替え → そのアーティストが出演する直近
+  イベントを絞り込み → LINE クイックリプライで選択 → フライヤー(grid)+ フライヤー(tt)を生成して返信。
+  誰でも操作可・確認ステップ無し(§44)。§5 の `X-Missing-Assets` を Bot が読んで「〇〇のアー写取得に失敗」を申し送る。
+  ※ 着手前に logic_timetable.py:46 `load_image` 系の retry 方針は不要(§5 で可観測化済み)。
 - ✅ **解決済み(罠40)**: フォント materialize 修正(`6a95fe2` / `53dd1ec`)を push → Railway 再デプロイ →
   **2026-09-01 に本番のアー写グリッドで日本語ラベル表示を確認**。豆腐化は解消済み。
