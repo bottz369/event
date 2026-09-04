@@ -7,5 +7,5 @@ git ls-files '*.py' | while read f; do
 done
 echo "COMPILE_OK"
 echo "=== [2/2] pytest: スモーク + 回帰網 ==="
-python3 -m pytest tests/test_smoke_apptest.py tests/test_tt_editor_repro.py tests/test_flyer_scale_link.py tests/test_tab_state_pinning.py -v --disable-warnings
+python3 -m pytest tests/test_smoke_apptest.py tests/test_tt_editor_repro.py tests/test_flyer_scale_link.py tests/test_tab_state_pinning.py tests/test_unified_save.py -v --disable-warnings
 echo "=== VERIFY_ALL_GREEN ==="
