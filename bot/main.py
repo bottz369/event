@@ -194,10 +194,20 @@ def download_image(message_id: str, access_token: str, timeout: int = 30) -> Tup
     return resp.content, resp.headers.get("Content-Type", "image/jpeg")
 
 
-def reply_text(reply_token: str, text: str, access_token: str, timeout: int = 15) -> None:
-    """reply token でテキスト返信する(best-effort。失敗しても例外は投げず log のみ)。"""
-    if not reply_token:
+def reply_messages(
+    reply_token: str, messages: List[dict], access_token: str, timeout: int = 15
+) -> None:
+    """reply token で messages 配列をそのまま返信する(best-effort・例外を投げない)。
+
+    ★push ではなく reply を使う: push は無料枠が有限、reply は無制限。
+      reply token の有効期限は約 1 分なので、重い生成は先に済ませてから呼ぶこと。
+    LINE の 1 リクエスト上限は 5 メッセージ。超過分は落として警告する。
+    """
+    if not reply_token or not messages:
         return
+    if len(messages) > 5:
+        logger.warning("too many messages (%d); truncating to 5", len(messages))
+        messages = messages[:5]
     try:
         resp = requests.post(
             LINE_REPLY_ENDPOINT,
@@ -205,13 +215,165 @@ def reply_text(reply_token: str, text: str, access_token: str, timeout: int = 15
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
-            json={"replyToken": reply_token, "messages": [{"type": "text", "text": text}]},
+            json={"replyToken": reply_token, "messages": messages},
             timeout=timeout,
         )
         if resp.status_code >= 300:
             logger.warning("reply failed: %s %s", resp.status_code, resp.text[:200])
     except Exception as e:  # 通知失敗で Webhook を落とさない
         logger.warning("reply request error: %s", e)
+
+
+def reply_text(reply_token: str, text: str, access_token: str, timeout: int = 15) -> None:
+    """テキスト 1 通の返信(reply_messages の薄いラッパ)。"""
+    reply_messages(
+        reply_token, [{"type": "text", "text": text}], access_token, timeout=timeout
+    )
+
+
+# ---------------------------------------------------------------------------
+# 段階B B-3: イベント選択クイックリプライ / 生成画像の Storage アップロード
+# ---------------------------------------------------------------------------
+# LINE のクイックリプライ制約(2026 時点):
+#   items <= 13 / action.label <= 20 文字 / postback data <= 300 bytes
+# ★選択状態はサーバに持たず postback data に埋める(ステートレス)。
+#   pending_store は「テキスト → 画像」の順待ち(既存 B4)専用のまま増やさない。
+QUICKREPLY_MAX_ITEMS = 13
+QUICKREPLY_LABEL_MAX = 20
+POSTBACK_DATA_MAX_BYTES = 300
+
+# postback data の書式: "regen|pid=<int>|artist=<name>"
+POSTBACK_ACTION_REGEN = "regen"
+
+
+def _truncate_label(text: str, limit: int = QUICKREPLY_LABEL_MAX) -> str:
+    """LINE の label 上限に丸める(超過は末尾を … にする)。"""
+    s = (text or "").strip() or "(無題)"
+    if len(s) <= limit:
+        return s
+    return s[: limit - 1] + "…"
+
+
+def build_postback_data(project_id: int, artist: str) -> str:
+    """postback data を組む。300 bytes を超えないようアーティスト名側を削る。"""
+    head = "%s|pid=%d|artist=" % (POSTBACK_ACTION_REGEN, int(project_id))
+    budget = POSTBACK_DATA_MAX_BYTES - len(head.encode("utf-8"))
+    name = artist or ""
+    encoded = name.encode("utf-8")
+    if len(encoded) > budget:
+        # UTF-8 の途中で切らないよう 1 文字ずつ詰める
+        out = []
+        used = 0
+        for ch in name:
+            b = len(ch.encode("utf-8"))
+            if used + b > budget:
+                break
+            out.append(ch)
+            used += b
+        name = "".join(out)
+    return head + name
+
+
+def parse_postback_data(data: str) -> Optional[Tuple[int, str]]:
+    """postback data を (project_id, artist) に戻す。不正なら None。"""
+    if not data:
+        return None
+    parts = data.split("|")
+    if not parts or parts[0] != POSTBACK_ACTION_REGEN:
+        return None
+    pid = None
+    artist = ""
+    for p in parts[1:]:
+        if p.startswith("pid="):
+            try:
+                pid = int(p[len("pid="):])
+            except ValueError:
+                return None
+        elif p.startswith("artist="):
+            artist = p[len("artist="):]
+    if pid is None:
+        return None
+    return (pid, artist)
+
+
+def build_event_quickreply(events: List[object], artist: str) -> dict:
+    """イベント選択のクイックリプライ付きテキストメッセージを組む。
+
+    events は models.event.EventOption のリスト(project_id / title / event_date)。
+    """
+    items = []
+    for e in events[:QUICKREPLY_MAX_ITEMS]:
+        date_part = e.event_date.strftime("%m/%d") if getattr(e, "event_date", None) else "日付未定"
+        label = _truncate_label("%s %s" % (date_part, e.title))
+        items.append({
+            "type": "action",
+            "action": {
+                "type": "postback",
+                "label": label,
+                "data": build_postback_data(e.project_id, artist),
+                "displayText": "%s %s" % (date_part, e.title),
+            },
+        })
+    return {
+        "type": "text",
+        "text": "どのイベントを再生成しますか?",
+        "quickReply": {"items": items},
+    }
+
+
+def upload_generated_png(png: bytes, project_id: int, variant: str, now: Optional[float] = None) -> Optional[str]:
+    """生成 PNG を Storage に上げ、公開 URL を返す。失敗は None。
+
+    ★キーは (project_id, variant) 固定で毎回上書きする(生成物が無限に増えないように)。
+      その代わり CDN / LINE 側のキャッシュを避けるため、返す URL に ?t=<epoch> を付ける。
+    DB には何も書かない(Storage のみ)。
+    """
+    from database import get_image_url, upload_image_to_supabase  # 遅延 import(env 非依存維持)
+
+    filename = "generated/%d/flyer_%s.png" % (int(project_id), variant)
+    try:
+        saved = upload_image_to_supabase(_NamedBytesIO(png, "flyer_%s.png" % variant), filename)
+        if not saved:
+            logger.warning("generated image upload failed: %s", filename)
+            return None
+        url = get_image_url(saved)
+        if not url:
+            logger.warning("generated image url not available: %s", filename)
+            return None
+    except Exception as e:
+        logger.warning("generated image upload error: %s: %s", type(e).__name__, e)
+        return None
+    stamp = int(now if now is not None else time.time())
+    sep = "&" if "?" in url else "?"
+    return "%s%st=%d" % (url, sep, stamp)
+
+
+def build_preview_png(png: bytes, max_edge: int = 240) -> bytes:
+    """LINE の previewImageUrl 用に長辺 max_edge へ縮小した PNG を返す。
+
+    preview は 1MB 目安の制約があるため、フルサイズ(数 MB)をそのまま使わない。
+    縮小に失敗したら元の bytes をそのまま返す(送信を止めない)。
+    """
+    try:
+        from PIL import Image  # 遅延 import(env 非依存維持)
+
+        im = Image.open(io.BytesIO(png))
+        im.thumbnail((max_edge, max_edge), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning("preview downscale failed: %s: %s", type(e).__name__, e)
+        return png
+
+
+def build_image_message(original_url: str, preview_url: str) -> dict:
+    """LINE の image message(URL は HTTPS 必須)。"""
+    return {
+        "type": "image",
+        "originalContentUrl": original_url,
+        "previewImageUrl": preview_url or original_url,
+    }
 
 
 # ---------------------------------------------------------------------------
