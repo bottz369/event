@@ -72,7 +72,15 @@ def project_with_unlinked_scales(readonly_creds):
 
 
 def _open_project(at, event_date):
-    """event_date でラベルを引き当ててプロジェクトを開く。"""
+    """event_date でラベルを引き当ててプロジェクトを開き、フライヤータブへ移る。
+
+    タブは遅延描画(選択中のタブだけ render)なので、🔗 のウィジェットを
+    観測するにはフライヤータブを開いておく必要がある。
+    """
+    from views.workspace import TAB_FLYER
+
+    from tests.conftest import select_tab
+
     label = next(
         (o for o in at.selectbox(key=SELECTOR_KEY).options if str(event_date) in o),
         None,
@@ -81,6 +89,7 @@ def _open_project(at, event_date):
         pytest.skip(f"selectbox に event_date '{event_date}' のラベルが無い")
     at.selectbox(key=SELECTOR_KEY).select(label).run()
     assert not at.exception, f"プロジェクト選択で例外: {at.exception}"
+    select_tab(at, TAB_FLYER)
     return at
 
 

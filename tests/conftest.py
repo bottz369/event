@@ -159,3 +159,23 @@ def app_test(_inject_readonly_secrets):
     from streamlit.testing.v1 import AppTest
 
     return AppTest.from_file(str(APP_PATH), default_timeout=90)
+
+
+# =========================================================
+# タブ遅延描画に対応するヘルパ
+# =========================================================
+# workspace はタブを遅延描画する(選択中のタブだけ render)ため、
+# あるタブのウィジェットを操作するテストは先にそのタブを選ぶ必要がある。
+def select_tab(at, label: str):
+    """workspace のタブを切り替えて run する。views.workspace の TAB_* を渡す。"""
+    at.radio(key="ws_active_tab").set_value(label).run()
+    assert not at.exception, f"タブ '{label}' の描画で例外: {at.exception}"
+    return at
+
+
+@pytest.fixture
+def tab():
+    """views.workspace のタブラベル定数をまとめて返す。"""
+    from views import workspace
+
+    return workspace

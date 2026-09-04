@@ -26,6 +26,26 @@ from views.flyer import render_flyer_editor
 
 
 # =========================================================
+# タブ定義
+# =========================================================
+# 遅延描画のため「いま選択されているタブ」を session_state で持つ。
+# 保存ハンドラはこの値を見て、再生成するプレビューの範囲を決める。
+TAB_OVERVIEW = "📝 イベント概要"
+TAB_TT = "⏱️ タイムテーブル"
+TAB_GRID = "🖼️ アー写グリッド"
+TAB_FLYER = "📑 フライヤーセット"
+TAB_LABELS = [TAB_OVERVIEW, TAB_TT, TAB_GRID, TAB_FLYER]
+
+ACTIVE_TAB_KEY = "ws_active_tab"
+
+
+def current_tab() -> str:
+    """現在選択されているタブのラベル。未設定なら先頭タブ。"""
+    tab = st.session_state.get(ACTIVE_TAB_KEY)
+    return tab if tab in TAB_LABELS else TAB_LABELS[0]
+
+
+# =========================================================
 # タブ遅延描画のための session_state ピン留め
 # =========================================================
 # Streamlit は「そのラン中に描画されなかったウィジェット」の session_state を
@@ -140,23 +160,34 @@ def render_workspace_page():
     # 旧 ensure_generated_contents の置き換え(現状は no-op)
     _autogenerate_previews_if_needed()
 
-    # 各タブ
-    tab_overview, tab_tt, tab_grid, tab_flyer = st.tabs(
-        ["📝 イベント概要", "⏱️ タイムテーブル", "🖼️ アー写グリッド", "📑 フライヤーセット"]
+    # 各タブ(遅延描画: 選択中のタブだけ render する)
+    #
+    # st.tabs は全タブを常に実行するため「いま見ているタブ」を知る API が無い。
+    # 保存ハンドラが「現在のタブのプレビューだけ再生成」するにはタブの識別が
+    # 必要なので、選択ウィジェット + 分岐描画に置き換えている。
+    # 非表示タブのウィジェット値は _pin_session_keys() が延命している。
+    if st.session_state.get(ACTIVE_TAB_KEY) not in TAB_LABELS:
+        st.session_state[ACTIVE_TAB_KEY] = TAB_LABELS[0]
+    # st.radio(horizontal) を使う。st.segmented_control / st.pills は見た目は
+    # タブに近いが AppTest が未対応(罠34 と同種)で回帰テストを書けないため。
+    st.radio(
+        "タブ",
+        TAB_LABELS,
+        key=ACTIVE_TAB_KEY,
+        horizontal=True,
+        label_visibility="collapsed",
     )
+    active_tab = current_tab()
 
-    with tab_overview:
+    if active_tab == TAB_OVERVIEW:
         render_overview_page()
-
-    with tab_tt:
+    elif active_tab == TAB_TT:
         render_timetable_page()
-
-    with tab_grid:
+    elif active_tab == TAB_GRID:
         # 旧コードで grid 側がこのキーを参照しているため一応セット(後で消す)
         st.session_state.current_grid_proj_id = active_id
         render_grid_page()
-
-    with tab_flyer:
+    elif active_tab == TAB_FLYER:
         render_flyer_editor(active_id)
 
 
@@ -241,16 +272,12 @@ def _render_new_project_form() -> None:
 
 
 def _render_project_header(draft) -> None:
+    """プロジェクト名と、その直下の操作ボタン列を描画する。
+
+    保存ボタンはアプリ全体でここ 1 つだけ(各タブの保存/生成ボタンは廃止)。
+    「複製して編集」は右上からこの保存ボタンの右隣へ移動した。
+    """
     st.markdown("---")
-    col_dummy, col_act = st.columns([4, 1])
-    with col_act:
-        if st.button("📄 複製して編集", width='stretch', key="btn_proj_duplicate"):
-            new_id = project_service.duplicate_active_project()
-            if new_id:
-                st.toast("プロジェクトを複製しました！", icon="✨")
-                st.rerun()
-            else:
-                st.error("複製に失敗しました")
 
     title = draft.title or "(無題)"
     date_str = str(draft.event_date) if draft.event_date else "----"
@@ -259,3 +286,33 @@ def _render_project_header(draft) -> None:
         f"### 📂 {title} <small>({date_str} @ {venue})</small>",
         unsafe_allow_html=True,
     )
+
+    col_save, col_dup, _col_rest = st.columns([1, 1, 3])
+    with col_save:
+        if st.button(
+            "💾 プロジェクトを保存する",
+            type="primary",
+            width='stretch',
+            key="btn_project_save",
+        ):
+            _handle_project_save()
+    with col_dup:
+        if st.button("📄 複製して編集", width='stretch', key="btn_proj_duplicate"):
+            new_id = project_service.duplicate_active_project()
+            if new_id:
+                st.toast("プロジェクトを複製しました！", icon="✨")
+                st.rerun()
+            else:
+                st.error("複製に失敗しました")
+
+
+def _handle_project_save() -> None:
+    """唯一の保存ハンドラ。
+
+    C1 時点では save_active_project() を呼ぶだけ。保存後のプレビュー再生成は
+    C2 で足す(それまで各タブの旧ボタンも残っている)。
+    """
+    if project_service.save_active_project():
+        st.toast("プロジェクトを保存しました", icon="✅")
+    else:
+        st.error("保存に失敗しました")

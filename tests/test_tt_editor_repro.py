@@ -22,8 +22,17 @@ SELECTOR_KEY = "ws_project_selector_label"
 
 
 def _open_project_tt(at, label):
-    """プロジェクトを選択して run(workspace は st.tabs で TT を eager 描画)。"""
+    """プロジェクトを選択し、TT タブへ切り替えて run する。
+
+    workspace はタブを遅延描画する(選択中のタブだけ render)ため、
+    TT のウィジェットを操作する前にタブを選ぶ必要がある。
+    """
+    from views.workspace import TAB_TT
+
+    from tests.conftest import select_tab
+
     at.selectbox(key=SELECTOR_KEY).select(label).run()
+    select_tab(at, TAB_TT)
     return at
 
 
@@ -504,6 +513,12 @@ def _open_first_project(at):
         pytest.skip("選択できるプロジェクトが無い")
     at.selectbox(key=SELECTOR_KEY).select(options[0]).run()
     assert not at.exception, f"プロジェクト選択で例外: {at.exception}"
+    # タブは遅延描画なので TT を明示的に開く
+    from views.workspace import TAB_TT
+
+    from tests.conftest import select_tab
+
+    select_tab(at, TAB_TT)
     return options[0]
 
 

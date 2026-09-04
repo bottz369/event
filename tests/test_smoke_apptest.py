@@ -17,13 +17,29 @@ ROW_COUNTS_WIDGET_KEY = "grid_row_counts_str"
 
 
 def _select_project(at, label):
+    """プロジェクトを選択し、grid タブを開いた状態にして返す。
+
+    workspace はタブを遅延描画するため、grid の widget を見るテストは
+    grid タブを選んでおく必要がある。
+    """
+    from views.workspace import TAB_GRID
+
+    from tests.conftest import select_tab
+
     at.selectbox(key=SELECTOR_KEY).select(label).run()
+    select_tab(at, TAB_GRID)
     return at
 
 
 def test_smoke_all_tabs(app_test, two_projects_different_row_counts):
-    """プロジェクト選択後、workspace の 4 タブ(概要/TT/グリッド/フライヤー)が
-    例外なく eager 描画されることを確認する。"""
+    """プロジェクト選択後、workspace の 4 タブが順に例外なく描画されることを確認する。
+
+    タブは遅延描画(選択中のタブだけ render)なので、1 つずつ切り替えて確かめる。
+    """
+    from views.workspace import TAB_GRID, TAB_LABELS
+
+    from tests.conftest import select_tab
+
     (_pid_a, label_a, _rc_a), _ = two_projects_different_row_counts
 
     at = app_test.run()
@@ -33,13 +49,18 @@ def test_smoke_all_tabs(app_test, two_projects_different_row_counts):
     if label_a not in options:
         pytest.skip(f"selectbox にラベル '{label_a}' が見つからない(ラベル整合ずれ)")
 
-    _select_project(at, label_a)
+    at.selectbox(key=SELECTOR_KEY).select(label_a).run()
     assert not at.exception, (
-        f"プロジェクト '{label_a}' 選択後の全タブ描画で例外: {at.exception}"
+        f"プロジェクト '{label_a}' 選択後の描画で例外: {at.exception}"
     )
 
-    # グリッドタブの主要 widget がツリー上に存在する(= grid タブが描画された)ことも確認
-    assert at.text_input(key=ROW_COUNTS_WIDGET_KEY), "グリッドタブが描画されていない"
+    for label in TAB_LABELS:
+        select_tab(at, label)
+        if label == TAB_GRID:
+            # グリッドタブの主要 widget がツリー上に存在する(= 実際に描画された)
+            assert at.text_input(key=ROW_COUNTS_WIDGET_KEY), (
+                "グリッドタブが描画されていない"
+            )
 
 
 def test_no_value_bleed_on_switch(app_test, two_projects_different_row_counts):
