@@ -91,6 +91,30 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
 # =========================================================
 # 保存ハンドラから呼ばれる公開関数(統合保存ボタン用)
 # =========================================================
+def _flyer_preview_signature():
+    """フライヤープレビューの一致判定に使う署名。
+
+    フライヤーは自分の設定に加えて grid 画像 / TT 画像を素材にするため、
+    それぞれの生成パラメータも署名に含める。どれかが変われば
+    「変更を保存するとプレビューが更新されます」を出し、DL も止める。
+    """
+    return {
+        "flyer": gather_flyer_settings_from_session(),
+        "bg": st.session_state.get("flyer_bg_id"),
+        "logo": st.session_state.get("flyer_logo_id"),
+        "grid": st.session_state.get("grid_last_generated_params"),
+        "tt": st.session_state.get("tt_last_generated_params"),
+    }
+
+
+def flyer_preview_is_stale():
+    """いま表示しているフライヤーが現在の設定とズレているか。"""
+    last = st.session_state.get("flyer_last_generated_params")
+    if not last:
+        return True
+    return last != _flyer_preview_signature()
+
+
 def regenerate_flyer_preview(project_id):
     """保存後の状態からフライヤーセット 2 枚を作り直す。成功で True。
 
@@ -108,7 +132,12 @@ def regenerate_flyer_preview(project_id):
     except Exception as e:
         st.error(f"フライヤー画像の生成エラー: {e}")
         return False
-    return bool(st.session_state.get("flyer_result_grid"))
+    if not st.session_state.get("flyer_result_grid"):
+        return False
+    # 素材(grid / TT)の生成パラメータも含めた署名を残す。以後これと
+    # 現在の設定を比べて「保存済みの画像かどうか」を判定する。
+    st.session_state.flyer_last_generated_params = _flyer_preview_signature()
+    return True
 
 
 # ==========================================
@@ -443,20 +472,12 @@ def render_flyer_editor(project_id):
             target_key = st.radio("移動させる要素を選択:", list(move_targets.keys()), 
                                   format_func=lambda x: move_targets[x], horizontal=True, key="flyer_click_target")
 
-        if st.button("💾 設定を保存してプレビューを生成する", type="primary", width='stretch'):
-            # Phase 2B-2a: 直接書き込みを廃止し save_active_project 経由に統一。
-            # sync_session_to_draft が session_state.flyer_* を draft.flyer_settings に
-            # 同期 → apply_draft が既存 flyer_json と merge して書き込む。
-            # _FLYER_EXCLUDED_KEYS で UI 専用 3 キーを除外しているため、保存される
-            # キー集合は旧 gather (registry persist=True 103 件) と一致する。
-            if project_service.save_active_project():
-                st.toast("設定を保存しました", icon="✅")
-                # 副作用: プレビュー画像生成 (session_state.flyer_result_* に格納)。
-                # _generate_preview は proj.flyer_json を読まず session_state を直接
-                # 参照するので、save 前に取得した proj(DTO)が stale でも問題なし。
-                _generate_preview(proj)
-            else:
-                st.error("保存に失敗しました")
+        # 保存/生成ボタンはここには無い。保存はワークスペース唯一の
+        # 「💾 プロジェクトを保存する」に集約され、フライヤーはその保存ハンドラが
+        # grid 画像 → TT 画像 → フライヤー合成の順に作り直す。
+        if flyer_preview_is_stale():
+            st.warning("変更を保存するとプレビューが更新されます。")
+
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
@@ -512,10 +533,14 @@ def render_flyer_editor(project_id):
                 else:
                     st.image(st.session_state.flyer_result_grid, width=st.session_state.flyer_preview_width)
                 
-                buf = io.BytesIO()
-                st.session_state.flyer_result_grid.save(buf, format="PNG")
-                st.download_button("DL (Grid)", buf.getvalue(), "flyer_grid.png", "image/png", key="dl_grid_single")
-            else: st.info("プレビューを生成してください")
+                if flyer_preview_is_stale():
+                    # 保存値と食い違う画像は配らない(症状1 の再発防止)
+                    st.info("変更を保存するとダウンロードできます。")
+                else:
+                    buf = io.BytesIO()
+                    st.session_state.flyer_result_grid.save(buf, format="PNG")
+                    st.download_button("DL (Grid)", buf.getvalue(), "flyer_grid.png", "image/png", key="dl_grid_single")
+            else: st.info("プロジェクトを保存するとプレビューが表示されます。")
             
         with t2:
             if st.session_state.get("flyer_result_tt"):
@@ -529,10 +554,13 @@ def render_flyer_editor(project_id):
                 else:
                     st.image(st.session_state.flyer_result_tt, width=st.session_state.flyer_preview_width)
 
-                buf = io.BytesIO()
-                st.session_state.flyer_result_tt.save(buf, format="PNG")
-                st.download_button("DL (TT)", buf.getvalue(), "flyer_tt.png", "image/png", key="dl_tt_single")
-            else: st.info("プレビューを生成してください")
+                if flyer_preview_is_stale():
+                    st.info("変更を保存するとダウンロードできます。")
+                else:
+                    buf = io.BytesIO()
+                    st.session_state.flyer_result_tt.save(buf, format="PNG")
+                    st.download_button("DL (TT)", buf.getvalue(), "flyer_tt.png", "image/png", key="dl_tt_single")
+            else: st.info("プロジェクトを保存するとプレビューが表示されます。")
             
         filtered_artists = []
         try:
@@ -566,7 +594,10 @@ def render_flyer_editor(project_id):
             st.markdown("### ファイル一括ダウンロード")
             include_assets = st.checkbox("素材データを含める")
             if st.button("📦 ZIPファイルを生成", type="primary"):
-                if not st.session_state.get("flyer_result_grid"): st.error("先にプレビューを生成してください。")
+                if not st.session_state.get("flyer_result_grid"):
+                    st.error("先にプロジェクトを保存してください。")
+                elif flyer_preview_is_stale():
+                    st.error("未保存の変更があります。保存してからZIPを作成してください。")
                 else:
                     try:
                         zip_buffer = io.BytesIO()

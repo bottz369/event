@@ -48,6 +48,22 @@ def update_free(i, field, project_id):
 # =========================================================
 # 保存ハンドラから呼ばれる公開関数(統合保存ボタン用)
 # =========================================================
+def collect_overview_widget_values(project_id):
+    """共通備考のウィジェット値を proj_ticket_notes へ回収する(保存の直前に呼ぶ)。
+
+    共通備考は t_common_note_<pid>_<i> という動的キーの text_input で編集され、
+    リスト本体 (proj_ticket_notes) には自動では戻らない。旧「設定反映」ボタンが
+    保存の直前に行っていた処理を、統合保存ハンドラから呼べるよう切り出したもの。
+    """
+    notes = st.session_state.get("proj_ticket_notes")
+    if not notes:
+        return
+    for i in range(len(notes)):
+        key = f"t_common_note_{project_id}_{i}"
+        if key in st.session_state:
+            notes[i] = st.session_state[key]
+
+
 def mark_overview_saved():
     """概要タブの「保存済みパラメータ」を現在値へ更新する。
 
@@ -268,48 +284,11 @@ def render_overview_page():
     if "overview_last_saved_params" not in st.session_state:
         st.session_state.overview_last_saved_params = current_params
 
-    is_changed = (st.session_state.overview_last_saved_params != current_params)
-    if is_changed:
-        st.warning("⚠️ 設定が変更されています。最新の状態にするには「設定反映」ボタンを押してください。")
-    
-    st.caption("変更内容は以下のボタンで保存してください。")
-
-    if st.button("🔄 設定反映 (保存＆テキスト生成)", type="primary", width='stretch', key="btn_overview_save"):
-        if "proj_ticket_notes" in st.session_state:
-            for i in range(len(st.session_state.proj_ticket_notes)):
-                key = f"t_common_note_{project_id}_{i}"
-                if key in st.session_state: st.session_state.proj_ticket_notes[i] = st.session_state[key]
-        
-        if project_id:
-            try:
-                # Phase 2B-1b: save_active_project() 経由で保存
-                # sync_session_to_draft が proj_title / proj_subtitle / proj_date / proj_venue / proj_url /
-                # tt_open_time / tt_start_time / proj_tickets / proj_ticket_notes / proj_free_text を
-                # draft_project に同期 → apply_draft で DB へ書き出す。
-                if project_service.save_active_project():
-                    st.toast("イベント情報を保存しました！", icon="✅")
-
-                    updated_params = {
-                        "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
-                        "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
-                        "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
-                        "title": st.session_state.get("proj_title", ""),
-                        "subtitle": st.session_state.get("proj_subtitle", ""),
-                        "venue": st.session_state.get("proj_venue", ""),
-                        "url": st.session_state.get("proj_url", ""),
-                        "date": str(st.session_state.get("proj_date", "")),
-                        "open": st.session_state.get("tt_open_time", ""),
-                        "start": st.session_state.get("tt_start_time", "")
-                    }
-                    st.session_state.overview_last_saved_params = updated_params
-                    st.rerun()
-                else:
-                    st.error("保存に失敗しました")
-            except Exception as e:
-                st.error(f"保存エラー: {e}")
-                st.code(traceback.format_exc())
-        else:
-            st.error("プロジェクトIDが不明です")
+    # 保存ボタンはここには無い。保存はワークスペース唯一の
+    # 「💾 プロジェクトを保存する」に集約されている。
+    if st.session_state.overview_last_saved_params != current_params:
+        st.warning("変更を保存するとプレビューが更新されます。")
+    st.caption("変更内容は上の「💾 プロジェクトを保存する」で保存してください。")
 
     # ==========================================
     # ★リスト生成ロジック (非表示対応済)

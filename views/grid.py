@@ -289,81 +289,20 @@ def render_grid_page():
                 "rows": st.session_state.grid_rows
             }
 
-            # Phase 3 stop-autogen: render 時のグリッド画像自動生成を廃止。
-            # 生成は下記「🔄 設定反映 (プレビュー生成)」ボタン押下時のみ。
-            # workspace の eager タブ描画でプロジェクトを開くだけで 20 秒級の
-            # 画像生成が走る問題を解消する。生成関数本体・N+1 クエリ・速度は無変更。
-
-            # 設定反映・保存ボタン
-            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", width='stretch', key="btn_grid_generate"):
-                if generate_grid_image:
-                    # 段階②: 生成・保存の直前に session の grid_order を TT 由来の順序へ
-                    # 揃える(TT タブの「設定反映」と同じ反映。sync_session_to_draft が
-                    # _GRID_KEY_MAP 経由で draft.grid_settings["order"] に載せる)。
-                    # これでプレビュー表示・生成画像・DB 保存の 3 つが必ず一致する。
-                    st.session_state.grid_order = tt_order
-                    st.session_state.grid_hidden = tt_grid_hidden
-                    target_artists = artist_service.get_artists_by_names(tt_order)
-                    
-                    if not target_artists:
-                        st.warning("表示するアーティストデータがありません。")
-                    else:
-                        # フォント確保(service 戻り値に応じて view で toast)
-                        status = font_service.ensure_font_available(st.session_state.grid_font)
-                        if status == "downloaded_url":
-                            st.toast(f"フォント(URL)を準備しました: {st.session_state.grid_font}", icon="🔤")
-                        elif status == "downloaded_db":
-                            st.toast(f"フォント(DB)を準備しました: {st.session_state.grid_font}", icon="🔤")
-
-                        with st.spinner("画像を生成＆保存中..."):
-                            try:
-                                is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
-                                align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
-                                align_val = align_map.get(st.session_state.grid_alignment, "center")
-
-                                # 絶対パスを渡す
-                                abs_font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.grid_font)
-
-                                img = generate_grid_image(
-                                    target_artists, IMAGE_DIR, 
-                                    font_path=abs_font_path, 
-                                    row_counts=parsed_counts, is_brick_mode=is_brick, alignment=align_val
-                                )
-                                
-                                if img:
-                                    st.session_state.last_generated_grid_image = img
-                                    st.session_state.grid_last_generated_params = current_params
-
-                                    # Phase 2B: 保存経路を save_active_project に統一。
-                                    # 旧 save_current_project は settings_json を {tt_font, grid_font}
-                                    # で全置換し tt_columns を消すため使わない。grid_* は
-                                    # sync_session_to_draft が draft.grid_settings / draft.settings に拾う。
-                                    if project_service.save_active_project():
-                                        st.toast("保存＆プレビュー更新完了！", icon="✅")
-                                    else:
-                                        st.error("DB保存に失敗しました")
-                                else:
-                                    st.error("生成失敗")
-                            except Exception as e:
-                                st.error(f"プレビュー生成エラー: {e}")
-                else:
-                    st.error("ロジックエラー")
-
-            # 判定ロジック
-            is_outdated = False
-            if st.session_state.get("grid_last_generated_params") is None: is_outdated = True
-            elif st.session_state.grid_last_generated_params != current_params: is_outdated = True
-            
-            if st.session_state.get("last_generated_grid_image"):
-                if is_outdated:
-                    st.warning("⚠️ 設定が変更されています。最新の状態にするには「設定反映」ボタンを押してください。")
-                    st.caption("👇 前回生成時のプレビュー")
-                else:
-                    st.caption("👇 現在のプレビュー")
-                st.image(st.session_state.last_generated_grid_image, width='stretch')
+            # 生成/保存ボタンはここには無い。保存はワークスペース唯一の
+            # 「💾 プロジェクトを保存する」に集約され、プレビューはその保存
+            # ハンドラが保存後の状態から作り直す。レンダー毎の自動生成は禁止
+            # (罠16 / Phase 3 stop-autogen)。
+            _grid_img = st.session_state.get("last_generated_grid_image")
+            if not _grid_img:
+                st.info("プロジェクトを保存するとプレビューが表示されます。")
+            elif st.session_state.get("grid_last_generated_params") != current_params:
+                st.caption("👇 直近に保存したときのプレビュー")
+                st.warning("変更を保存するとプレビューが更新されます。")
+                st.image(_grid_img, width='stretch')
             else:
-                # Phase 3 stop-autogen: 自動生成廃止に伴い、画像未生成時は常にプレースホルダ。
-                st.info("👆 設定を行ったら「設定反映」ボタンを押してプレビューを生成してください。")
+                st.caption("👇 現在のプレビュー")
+                st.image(_grid_img, width='stretch')
 
     except Exception as main_e:
         st.error(f"予期せぬエラー: {main_e}")

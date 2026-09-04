@@ -19,7 +19,11 @@ import streamlit as st
 from services import session_manager, project_service
 from models.flyer_keys import FLYER_KEY_REGISTRY
 
-from views.overview import mark_overview_saved, render_overview_page
+from views.overview import (
+    collect_overview_widget_values,
+    mark_overview_saved,
+    render_overview_page,
+)
 from views.timetable import (
     fold_grid_order_from_rows,
     regenerate_tt_preview,
@@ -156,7 +160,7 @@ def render_workspace_page():
 
     # 未保存警告
     if session_manager.has_unsaved_changes():
-        st.warning("⚠️ このプロジェクトには未保存の変更があります。各タブの「設定反映」で保存してください。")
+        st.warning("⚠️ このプロジェクトには未保存の変更があります。上の「💾 プロジェクトを保存する」で保存してください。")
 
     # ヘッダー(タイトル / 日付 / 会場 + 複製ボタン)
     _render_project_header(draft)
@@ -328,13 +332,16 @@ def _handle_project_save() -> None:
     (罠16 / Phase 3 stop-autogen。プロジェクトを開くだけで 20 秒級の
     画像生成が走る問題の再発防止)。
     """
+    active_id = session_manager.get_active_project_id()
+
+    # 保存前の回収: ウィジェットからリスト本体へ戻す必要がある値を先に取り込む
+    collect_overview_widget_values(active_id)
     fold_grid_order_from_rows()
 
     if not project_service.save_active_project():
         st.error("保存に失敗しました")
         return
 
-    active_id = session_manager.get_active_project_id()
     tab = current_tab()
     with st.spinner("保存しました。プレビューを作成中..."):
         if tab == TAB_TT:

@@ -277,6 +277,23 @@ def build_gen_list_from_draft():
     return gen_list
 
 
+def tt_preview_is_stale():
+    """いま表示している TT プレビューが現在の設定とズレているか。
+
+    ズレていたら「変更を保存するとプレビューが更新されます」を出し、
+    ダウンロードもさせない(乖離した画像を配らないため)。
+    """
+    last = st.session_state.get("tt_last_generated_params")
+    if not last:
+        return True
+    current = {
+        "gen_list": build_gen_list_from_draft(),
+        "font": st.session_state.get("tt_font"),
+        "columns": st.session_state.get("tt_columns"),
+    }
+    return last != current
+
+
 def fold_grid_order_from_rows():
     """TT の「アー写グリッド表示順 / 非表示」を session の grid_* へ畳む。
 
@@ -569,7 +586,7 @@ def render_timetable_page():
         # ------------------------------------------------------------------
         # 明示保存型: 候補選択 / 予定に追加 / 並べ替え / × 除外 のいずれも
         # st.session_state["tt_pending_add"] を更新するだけで、DB 保存も画像再生成も
-        # 行わない。DB 反映は従来どおり「🔄 設定反映 (プレビュー生成)」の
+        # 行わない。DB 反映はワークスペースの「💾 プロジェクトを保存する」の
         # save_active_project() のみ。
         st.session_state.setdefault("tt_pending_add", [])
 
@@ -618,7 +635,7 @@ def render_timetable_page():
                 if st.button("追加する", type="primary", key="btn_tt_pending_apply"):
                     # 予定リストの並び順のまま draft_rows へ一括 append。
                     # 挿入位置は「＋」(1件追加) と同一 (_append_artist_rows に集約)。
-                    # ここでも DB 保存はしない。反映は「🔄 設定反映」の
+                    # ここでも DB 保存はしない。反映は「💾 プロジェクトを保存する」の
                     # save_active_project() 時にまとめて行われる (明示保存型)。
                     session_manager.set_draft_rows(
                         _append_artist_rows(session_manager.get_draft_rows(), pending)
@@ -630,7 +647,7 @@ def render_timetable_page():
                     # toast を使う (rerun を跨いで表示される)。
                     st.toast(
                         f"{len(pending)} 組を出演順の末尾に追加しました"
-                        "(DB 反映は「🔄 設定反映」で)",
+                        "(DB 反映は「💾 プロジェクトを保存する」で)",
                         icon="✅",
                     )
                     st.rerun()
@@ -723,7 +740,7 @@ def render_timetable_page():
                     "GRID_NO": st.column_config.NumberColumn(
                         "アー写グリッド表示順", width="small", min_value=1, step=1,
                         help="この番号の昇順で、アー写グリッドに左上から詰めて並びます。"
-                             "空欄は末尾(出演順)。反映は「🔄 設定反映」を押したときです。",
+                             "空欄は末尾(出演順)。反映は「💾 プロジェクトを保存する」を押したときです。",
                     ),
                     "GRID_HIDDEN": st.column_config.CheckboxColumn(
                         "アー写グリッド非表示", width="small",
@@ -757,7 +774,7 @@ def render_timetable_page():
             # 段階①: チェックした行の一括削除。
             # 「削除」チェックは DELETE 列 → draft_rows[].is_delete_marked に載っており、
             # 直上の書き戻し(と render 冒頭の先取り確定)でこの時点の draft_rows が最新。
-            # ここでは除去するだけで DB 保存はしない(保存は「🔄 設定反映」に集約)。
+            # ここでは除去するだけで DB 保存はしない(保存は統合保存ボタンに集約)。
             # 特殊行の扱いは _drop_marked_rows 側に集約(必ず残す)。
             _marked = [r for r in draft_rows if r.is_delete_marked and not r.is_special_row]
             if _marked:
@@ -775,7 +792,7 @@ def render_timetable_page():
                 mark_dirty()
                 # 罠25: st.success の直後に st.rerun() を置くとメッセージが消えるため toast。
                 st.toast(
-                    f"{len(_marked)} 行を削除しました(DB 反映は「🔄 設定反映」で)",
+                    f"{len(_marked)} 行を削除しました(DB 反映は「💾 プロジェクトを保存する」で)",
                     icon="🗑",
                 )
                 st.rerun()
@@ -919,82 +936,24 @@ def render_timetable_page():
                     key="tt_columns"
                 )
             
-            current_tt_params = {
-                "gen_list": gen_list,
-                "font": st.session_state.tt_font,
-                "columns": st.session_state.tt_columns 
-            }
-            if "tt_last_generated_params" not in st.session_state: st.session_state.tt_last_generated_params = None
+            st.session_state.tt_last_generated_params = st.session_state.get(
+                "tt_last_generated_params"
+            )
 
-            # Phase 3 stop-autogen: render 時の TT 画像自動生成を廃止。
-            # 生成は下記「🔄 設定反映 (プレビュー生成)」ボタン押下時のみ。
-            # workspace の eager タブ描画でプロジェクトを開くだけで 20 秒級の
-            # 画像生成が走る問題を解消する。生成関数本体・速度は無変更。
-
-            if st.button("🔄 設定反映 (プレビュー生成)", type="primary", width='stretch', key="btn_tt_generate"):
-                if import_error_msg:
-                    st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
-                elif generate_timetable_image:
-                    if gen_list:
-                        ensure_font_exists(db, st.session_state.tt_font)
-
-                        with st.spinner("画像を生成＆保存中..."):
-                            try:
-                                font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
-
-                                # 画像生成
-                                img = generate_timetable_image(gen_list, font_path=font_path, columns=st.session_state.tt_columns)
-                                st.session_state.last_generated_tt_image = img
-                                st.session_state.tt_last_generated_params = current_tt_params
-
-                                # 段階②: TT の「アー写グリッド表示順」を保存直前に
-                                # grid_order へ畳む(TT → グリッドの一方向反映)。
-                                # 新しい保存境界は作らず既存の save_active_project() に相乗りする
-                                # (sync_session_to_draft が _GRID_KEY_MAP 経由で
-                                #  draft.grid_settings["order"] に載せ、apply_draft が
-                                #  grid_order_json へ書き出す)。session の grid_order も
-                                # 更新するので、同 run 内で flyer / overview の
-                                # session 優先参照とも整合する。
-                                _rows_for_grid = session_manager.get_draft_rows()
-                                st.session_state.grid_order = build_grid_order_from_rows(
-                                    _rows_for_grid
-                                )
-                                # 「アー写グリッド非表示」も同時に畳む。該当ゼロでも []
-                                # を書くことが重要で、このキーの存在が「移行済み」の印
-                                # を兼ねる(無いと次回読込で is_hidden を引き継いでしまう)。
-                                st.session_state.grid_hidden = build_grid_hidden_from_rows(
-                                    _rows_for_grid
-                                )
-
-                                # Phase 2B-1b: save_active_project() 経由で保存
-                                # sync_session_to_draft が tt_open_time / tt_start_time / tt_goods_offset /
-                                # tt_font / tt_columns を draft_project に同期 → apply_draft で DB へ書き出す。
-                                if project_service.save_active_project():
-                                    st.toast("保存＆プレビュー更新完了！", icon="✅")
-                                else:
-                                    st.error("保存に失敗しました")
-
-                            except Exception as e:
-                                st.error(f"生成エラー: {e}")
-                    else:
-                        st.warning("データがありません")
-                else:
-                    st.error("ロジックエラー: 理由不明のロード失敗です。アプリを再起動してください。")
-
-            is_outdated = False
-            if st.session_state.tt_last_generated_params is None: is_outdated = True
-            elif st.session_state.tt_last_generated_params != current_tt_params: is_outdated = True
-
-            if st.session_state.get("last_generated_tt_image"):
-                if is_outdated:
-                    st.warning("⚠️ 設定が変更されています。最新の状態にするには「設定反映」ボタンを押してください。")
-                    st.caption("👇 前回生成時のプレビュー")
-                else:
-                    st.caption("👇 現在のプレビュー")
-                st.image(st.session_state.last_generated_tt_image, width='stretch')
+            # 生成/保存ボタンはここには無い。保存はワークスペース唯一の
+            # 「💾 プロジェクトを保存する」に集約され、プレビューはその保存
+            # ハンドラが保存後の状態から作り直す。レンダー毎の自動生成は禁止
+            # (罠16 / Phase 3 stop-autogen)。
+            _tt_img = st.session_state.get("last_generated_tt_image")
+            if not _tt_img:
+                st.info("プロジェクトを保存するとプレビューが表示されます。")
+            elif tt_preview_is_stale():
+                st.caption("👇 直近に保存したときのプレビュー")
+                st.warning("変更を保存するとプレビューが更新されます。")
+                st.image(_tt_img, width='stretch')
             else:
-                # Phase 3 stop-autogen: 自動生成廃止に伴い、画像未生成時は常にプレースホルダ。
-                st.info("👆 「設定反映」ボタンを押してプレビューを生成してください。")
+                st.caption("👇 現在のプレビュー")
+                st.image(_tt_img, width='stretch')
 
     else:
         st.info("👈 上のボックスからプロジェクトを選択してください")
