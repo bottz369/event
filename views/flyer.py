@@ -39,6 +39,28 @@ def gather_flyer_settings_from_session():
             save_data[entry.short_key] = v
     return save_data
 
+def _sync_linked_scale_h(prefix: str):
+    """🔗 リンク ON のとき 横幅 → 高さ を1回だけ追随させる on_change コールバック。
+
+    症状2(a) の修正。以前はレンダー本体で無条件に
+    `st.session_state.flyer_<prefix>_scale_h = new_w` を実行していたため、
+    link が persist=False・既定 True であることと相まって
+    「プロジェクトを開いて何か保存するだけで scale_h が scale_w に潰れる」
+    進行性のデータ破壊が起きていた(健全な scale_h≠scale_w も巻き込む)。
+
+    on_change はユーザーがウィジェットを操作したときだけ発火するので、
+    レンダー起因の上書きが原理的に発生しない。横幅スライダーと 🔗 チェック
+    ボックスの両方に付け、後者は「ON にした瞬間の1回だけ追随」を担う。
+
+    罠18: widget key への代入はコールバック内でのみ行う(コールバックは
+    スクリプト再実行の前に走るため、ウィジェットは新しい値を読み直す)。
+    """
+    if st.session_state.get(f"flyer_{prefix}_link"):
+        st.session_state[f"flyer_{prefix}_scale_h"] = st.session_state[
+            f"flyer_{prefix}_scale_w"
+        ]
+
+
 def render_visual_selector(label, options, key_name, current_value, allow_none=False):
     st.markdown(f"**{label}**")
     if allow_none:
@@ -360,18 +382,16 @@ def render_flyer_editor(project_id):
             t_sz1, t_sz2 = st.tabs(["グリッド画像", "TT画像"])
             with t_sz1:
                 c_link1, c_link2 = st.columns([0.15, 0.85])
-                with c_link1: st.checkbox("🔗", key="flyer_grid_link", help="縦横比を固定")
+                with c_link1: st.checkbox("🔗", key="flyer_grid_link", help="縦横比を固定", on_change=_sync_linked_scale_h, args=("grid",))
                 c1, c2 = st.columns(2)
-                with c1: new_w = st.slider("横幅 (%)", 10, 150, step=1, key="flyer_grid_scale_w")
-                if st.session_state.flyer_grid_link: st.session_state.flyer_grid_scale_h = new_w
+                with c1: st.slider("横幅 (%)", 10, 150, step=1, key="flyer_grid_scale_w", on_change=_sync_linked_scale_h, args=("grid",))
                 with c2: st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
                 st.number_input("Y位置 (上+/下-)", step=10, key="flyer_grid_pos_y")
             with t_sz2:
                 c_link1, c_link2 = st.columns([0.15, 0.85])
-                with c_link1: st.checkbox("🔗", key="flyer_tt_link", help="縦横比を固定")
+                with c_link1: st.checkbox("🔗", key="flyer_tt_link", help="縦横比を固定", on_change=_sync_linked_scale_h, args=("tt",))
                 c1, c2 = st.columns(2)
-                with c1: new_w = st.slider("横幅 (%)", 10, 150, step=1, key="flyer_tt_scale_w")
-                if st.session_state.flyer_tt_link: st.session_state.flyer_tt_scale_h = new_w
+                with c1: st.slider("横幅 (%)", 10, 150, step=1, key="flyer_tt_scale_w", on_change=_sync_linked_scale_h, args=("tt",))
                 with c2: st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
                 st.number_input("Y位置 (上+/下-)", step=10, key="flyer_tt_pos_y")
             
