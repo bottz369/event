@@ -313,3 +313,82 @@ def test_preview_inputs_match_db_and_api(
     assert at.session_state["tt_gen_list"] == api_gen_list, (
         "画面表示用の gen_list が API と食い違う"
     )
+
+
+def test_unvisited_tabs_settings_are_not_lost_on_save(
+    opened_project, tab, readonly_creds, stub_save, monkeypatch
+):
+    """未訪問タブの設定が保存で消えない(タブ遅延描画の最大のリスク)。
+
+    タブを遅延描画すると、開いていないタブのウィジェットは描画されない。
+    Streamlit は未描画ウィジェットの session_state を破棄するため、素直に実装すると
+    「grid タブを開かずに保存したら grid の設定が既定へ戻る」といった事故が起きる。
+    _pin_session_keys() の延命と legacy_adapter の seed でこれを防いでいる。
+
+    ここでは grid / TT を一度も開かずフライヤータブへ移り、保存ハンドラの中
+    (= sync_session_to_draft が読むのと同じ実行コンテキスト)で値を回収して
+    DB と一致することを確かめる。
+    """
+    from sqlalchemy import text
+
+    from tests.conftest import select_tab
+    from views import workspace
+
+    at, pid = opened_project
+
+    engine = _make_engine(readonly_creds["DB_URL"])
+    try:
+        with engine.connect() as conn:
+            s_raw, g_raw = conn.execute(
+                text(
+                    "SELECT settings_json, grid_order_json FROM projects_v4 WHERE id = :i"
+                ),
+                {"i": pid},
+            ).fetchone()
+    finally:
+        engine.dispose()
+    db_settings = json.loads(s_raw) if s_raw else {}
+    db_grid = json.loads(g_raw) if g_raw else {}
+
+    # grid / TT タブは開かずにフライヤータブへ
+    select_tab(at, tab.TAB_FLYER)
+
+    import streamlit as st
+
+    watched = (
+        "tt_columns",
+        "tt_font",
+        "grid_font",
+        "grid_row_counts_str",
+        "grid_layout_mode",
+        "grid_alignment",
+    )
+
+    def _capture(*_a, **_kw):
+        st.session_state["_probe_settings"] = {
+            k: st.session_state.get(k) for k in watched
+        }
+        return True
+
+    for name in ("regenerate_grid_preview", "regenerate_tt_preview", "regenerate_flyer_preview"):
+        monkeypatch.setattr(workspace, name, _capture)
+
+    at.button(key=SAVE_BUTTON_KEY).click().run()
+    assert not at.exception, f"保存で例外: {at.exception}"
+    captured = at.session_state["_probe_settings"]
+
+    expected = {
+        "tt_columns": db_settings.get("tt_columns") or 2,
+        "tt_font": db_settings.get("tt_font") or "keifont.ttf",
+        "grid_font": db_settings.get("grid_font") or "keifont.ttf",
+        "grid_row_counts_str": db_grid.get("row_counts_str"),
+        "grid_layout_mode": db_grid.get("layout_mode"),
+        "grid_alignment": db_grid.get("alignment"),
+    }
+    for key, want in expected.items():
+        if want is None:
+            continue  # DB に無いキーは比較対象外(既定が入る)
+        assert captured[key] == want, (
+            f"未訪問タブの {key} が保存時に失われている: "
+            f"保存される値={captured[key]!r} / DB={want!r}"
+        )
