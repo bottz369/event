@@ -24,13 +24,21 @@ DB/画像ロジックは新規に書きません(§40 モノリス Bot)。
    → pending 消去 →「○○ のアー写を更新しました」/「○○ が見つかりません」と返信。
 3. pending の無い画像・非許可ユーザー・DM は無視。
 
-### ガード(全て満たす時のみ実行)
+### ガード(B-4 以降)
 
-- グループ発イベント(DM は完全無視)
-- 送信者 `userId` が `OWNER_USER_IDS` に含まれる
-- テキストのメンションで自ボット宛(`mention.mentionees[].isSelf == true`)
-- `ALLOWED_GROUP_IDS` が設定されていれば `groupId` がその集合に含まれること
-  (空なら全グループ許可・送信者ガードは常に有効)
+- グループ発イベント(DM / ルームは完全無視)
+- テキストのトリガーは自ボット宛メンション必須(`mention.mentionees[].isSelf == true`)
+  ※ @All は `isSelf` が立たないので反応しない
+- **そのグループが「起動済み」であること**。起動は `OWNER_USER_IDS` の人が
+  「@Bot 起動」と送ると有効になる。未起動グループには使い方のヒントだけ返す。
+- 起動後は、そのグループの参加者なら誰でも利用できる(送信者の OWNER ゲートは無し)。
+
+起動状態は Supabase Storage の `bot/activated_groups.json` に永続化される
+(Railway の再デプロイ・再起動でも保持。DB スキーマは使わない)。
+オーナーがグループを退会すると自動で無効化され、再開はオーナーの「起動」で行う。
+
+> ⚠️ **`ALLOWED_GROUP_IDS` は B-4 でゲートに使われなくなった**。
+> env に残っていても無害だが、混乱を避けるなら空にしてよい。
 
 ## 環境変数
 
@@ -44,8 +52,8 @@ DB/画像ロジックは新規に書きません(§40 モノリス Bot)。
 | `SUPABASE_KEY` | Supabase API キー(Storage) |
 | `LINE_CHANNEL_SECRET` | 署名検証 |
 | `LINE_CHANNEL_ACCESS_TOKEN` | reply / 画像 DL |
-| `OWNER_USER_IDS` | 更新を許可する送信者 userId(カンマ区切り) |
-| `ALLOWED_GROUP_IDS` | 反応を許可する groupId(カンマ区切り・空可) |
+| `OWNER_USER_IDS` | **グループを「起動」できる人の userId**(カンマ区切り)。B-4 の起動可否判定に使う |
+| `ALLOWED_GROUP_IDS` | ~~反応を許可する groupId~~ **B-4 で未使用**(起動ストアが置き換えた)。空でよい |
 | `EVENT_API_KEY` | read 専用 `/api/*` の認証キー(`Authorization: Bearer <key>` / `X-API-Key` で照合。Webhook の LINE 署名検証とは別系統) |
 
 `EVENT_API_KEY` は Railway では他の変数と同じく Variables に設定する。ローカルで `/api` を叩くときは
