@@ -258,3 +258,278 @@ def test_failure_notice_lists_artists_and_assets():
 def test_failure_notice_none_when_empty():
     assert bm.build_failure_notice([]) is None
     assert bm.build_failure_notice([{"kind": "unknown"}]) is None
+
+
+# ---------------------------------------------------------------------------
+# C4: handle_event の配線(ガード / トリガー2 / postback / バックグラウンド)
+# ---------------------------------------------------------------------------
+GROUP = "Gallowed"
+USER = "Usomeone"
+
+
+def _config(allowed=(GROUP,), owners=()):
+    return bm.BotConfig(
+        channel_secret="s",
+        channel_access_token="AT",
+        owner_user_ids=frozenset(owners),
+        allowed_group_ids=frozenset(allowed),
+    )
+
+
+def _text_event(text, mentioned=True, group=GROUP, user=USER):
+    mentionees = [{"index": 0, "length": 4, "isSelf": True}] if mentioned else []
+    return {
+        "type": "message",
+        "replyToken": "RT",
+        "source": {"type": "group", "groupId": group, "userId": user},
+        "message": {"type": "text", "text": text, "mention": {"mentionees": mentionees}},
+    }
+
+
+@pytest.fixture
+def sent(monkeypatch):
+    """reply_messages を捕捉する。"""
+    box = []
+    monkeypatch.setattr(bm, "reply_messages",
+                        lambda tok, msgs, at, timeout=15: box.append((tok, msgs)))
+    return box
+
+
+def test_owner_gate_removed_any_group_member_can_use(sent, monkeypatch):
+    """★OWNER ゲート撤去: 許可グループ内なら owner でなくても反応する。"""
+    monkeypatch.setattr(bm, "_reply_event_choices",
+                        lambda tok, artist, config, prefix=None: sent.append(("choices", artist)))
+    bm.handle_event(_text_event("@Bot 手羽先の最新"), _config(owners=("someone-else",)))
+    assert ("choices", "手羽先") in sent
+
+
+def test_text_without_mention_is_ignored(sent):
+    """★メンション無しテキストは無反応(誤爆防止)。"""
+    bm.handle_event(_text_event("手羽先の最新", mentioned=False), _config())
+    assert sent == []
+
+
+def test_group_not_allowed_is_ignored(sent):
+    """★許可グループ外は無反応。"""
+    bm.handle_event(_text_event("@Bot 手羽先の最新", group="Gother"), _config())
+    assert sent == []
+
+
+def test_dm_is_ignored(sent):
+    ev = _text_event("@Bot 手羽先の最新")
+    ev["source"] = {"type": "user", "userId": USER}
+    bm.handle_event(ev, _config())
+    assert sent == []
+
+
+def test_trigger2_latest_marker_lists_events(sent, monkeypatch):
+    """★トリガー2: 「〇〇の最新」で写真を待たずイベント選択へ。"""
+    import services.event_service as es
+
+    monkeypatch.setattr(es, "list_recent_events_for_artist",
+                        lambda name, **k: [_ev(39, "秋フェス")])
+    bm.handle_event(_text_event("@Bot 手羽先センセーションの最新"), _config())
+
+    assert len(sent) == 1
+    _tok, msgs = sent[0]
+    assert msgs[-1]["quickReply"]["items"][0]["action"]["data"] == \
+        bm.build_postback_data(39, "手羽先センセーション")
+
+
+def test_trigger2_regenerate_marker_also_works(sent, monkeypatch):
+    import services.event_service as es
+
+    monkeypatch.setattr(es, "list_recent_events_for_artist",
+                        lambda name, **k: [_ev(1, "E")])
+    bm.handle_event(_text_event("@Bot 手羽先の再生成"), _config())
+    assert len(sent) == 1
+
+
+def test_trigger2_zero_events_replies_message(sent, monkeypatch):
+    """★0 件なら「見つかりませんでした」で終了。"""
+    import services.event_service as es
+
+    monkeypatch.setattr(es, "list_recent_events_for_artist", lambda name, **k: [])
+    bm.handle_event(_text_event("@Bot 手羽先の最新"), _config())
+    _tok, msgs = sent[0]
+    assert msgs[0]["type"] == "text"
+    assert "見つかりませんでした" in msgs[0]["text"]
+
+
+def test_trigger1_still_enters_pending(sent, monkeypatch):
+    """★トリガー1 は従来どおり写真待ちに入る(挙動不変)。"""
+    bm.pending_store._data.clear()
+    bm.handle_event(_text_event("@Bot 手羽先のアー写更新"), _config())
+    assert bm.pending_store.pop_valid(USER, __import__("time").time()) == "手羽先"
+
+
+def test_trigger1_after_update_lists_events(sent, monkeypatch):
+    """★アー写更新成功 → そのままイベント選択ボタンを出す。"""
+    import services.event_service as es
+
+    bm.pending_store._data.clear()
+    bm.pending_store.put(USER, "手羽先", __import__("time").time())
+    monkeypatch.setattr(bm, "download_image", lambda mid, at, timeout=30: (b"IMG", "image/jpeg"))
+    monkeypatch.setattr(bm, "update_artist_photo",
+                        lambda name, b, ct: (True, "手羽先 のアー写を更新しました"))
+    monkeypatch.setattr(es, "list_recent_events_for_artist",
+                        lambda name, **k: [_ev(39, "秋フェス")])
+
+    ev = {
+        "type": "message", "replyToken": "RT",
+        "source": {"type": "group", "groupId": GROUP, "userId": USER},
+        "message": {"type": "image", "id": "m1"},
+    }
+    bm.handle_event(ev, _config())
+
+    _tok, msgs = sent[0]
+    assert msgs[0]["text"].startswith("手羽先 のアー写を更新しました")
+    assert "quickReply" in msgs[-1]
+
+
+def test_trigger1_update_failure_does_not_list_events(sent, monkeypatch):
+    bm.pending_store._data.clear()
+    bm.pending_store.put(USER, "居ない人", __import__("time").time())
+    monkeypatch.setattr(bm, "download_image", lambda mid, at, timeout=30: (b"IMG", "image/jpeg"))
+    monkeypatch.setattr(bm, "update_artist_photo", lambda name, b, ct: (False, "「居ない人」が見つかりません"))
+
+    ev = {
+        "type": "message", "replyToken": "RT",
+        "source": {"type": "group", "groupId": GROUP, "userId": USER},
+        "message": {"type": "image", "id": "m1"},
+    }
+    bm.handle_event(ev, _config())
+    _tok, msgs = sent[0]
+    assert msgs == [{"type": "text", "text": "「居ない人」が見つかりません"}]
+
+
+# ---------------------------------------------------------------------------
+# C4: postback
+# ---------------------------------------------------------------------------
+def _postback_event(data, group=GROUP):
+    return {
+        "type": "postback",
+        "replyToken": "RT",
+        "source": {"type": "group", "groupId": group, "userId": USER},
+        "postback": {"data": data},
+    }
+
+
+def test_postback_spawns_background_thread(monkeypatch):
+    """★重い生成は別スレッド。handle_event は即座に戻る。"""
+    spawned = {}
+
+    def _spawn(pid, artist, tok, config):
+        spawned.update(pid=pid, artist=artist, token=tok)
+
+        class _T:
+            pass
+        return _T()
+
+    monkeypatch.setattr(bm, "_spawn_regeneration", _spawn)
+    bm.handle_event(_postback_event(bm.build_postback_data(39, "手羽先")), _config())
+    assert spawned == {"pid": 39, "artist": "手羽先", "token": "RT"}
+
+
+def test_postback_thread_actually_replies(monkeypatch, sent):
+    """thread が実際に 2 枚 + 警告を reply すること(join して確認)。"""
+    monkeypatch.setattr(bm, "render_flyer_set_for_project", lambda pid: (
+        [bm.build_image_message("https://a/1.png", "https://a/1p.png"),
+         bm.build_image_message("https://a/2.png", "https://a/2p.png")],
+        [{"kind": "artist_photo", "name": "手羽先", "url": "u", "reason": "fetch_failed"}],
+    ))
+    t = bm._spawn_regeneration(39, "手羽先", "RT", _config())
+    t.join(timeout=5)
+    assert not t.is_alive()
+
+    _tok, msgs = sent[0]
+    assert len(msgs) == 3, msgs
+    assert [m["type"] for m in msgs] == ["image", "image", "text"]
+    assert "手羽先" in msgs[2]["text"]
+
+
+def test_postback_thread_replies_failure_when_nothing_generated(monkeypatch, sent):
+    monkeypatch.setattr(bm, "render_flyer_set_for_project", lambda pid: ([], []))
+    t = bm._spawn_regeneration(39, "A", "RT", _config())
+    t.join(timeout=5)
+    _tok, msgs = sent[0]
+    assert msgs[0]["type"] == "text"
+    assert "生成できませんでした" in msgs[0]["text"]
+
+
+def test_postback_invalid_data_is_ignored(monkeypatch):
+    monkeypatch.setattr(bm, "_spawn_regeneration",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    bm.handle_event(_postback_event("garbage"), _config())
+
+
+def test_postback_group_guard_applies(monkeypatch):
+    monkeypatch.setattr(bm, "_spawn_regeneration",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    bm.handle_event(_postback_event(bm.build_postback_data(1, "A"), group="Gother"), _config())
+
+
+# ---------------------------------------------------------------------------
+# C4: webhook レベル(callback は 200 を即返す)
+# ---------------------------------------------------------------------------
+import base64 as _b64  # noqa: E402
+import hashlib as _hashlib  # noqa: E402
+import hmac as _hmac  # noqa: E402
+import time as _time  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+SECRET = "test-channel-secret"
+
+
+def _signed_post(client, payload: dict):
+    body = json.dumps(payload).encode("utf-8")
+    sig = _b64.b64encode(
+        _hmac.new(SECRET.encode("utf-8"), body, _hashlib.sha256).digest()
+    ).decode("ascii")
+    return client.post("/callback", content=body,
+                       headers={"X-Line-Signature": sig, "Content-Type": "application/json"})
+
+
+@pytest.fixture
+def line_env(monkeypatch):
+    monkeypatch.setenv("LINE_CHANNEL_SECRET", SECRET)
+    monkeypatch.setenv("LINE_CHANNEL_ACCESS_TOKEN", "AT")
+    monkeypatch.setenv("LINE_ALLOWED_GROUP_IDS", GROUP)
+    monkeypatch.setenv("LINE_OWNER_USER_IDS", "")
+    return TestClient(bm.app)
+
+
+def test_callback_returns_200_immediately_for_postback(line_env, monkeypatch):
+    """★postback の重い生成はバックグラウンド。callback は待たずに 200 を返す。"""
+    started = {}
+    release = []
+
+    def _slow(pid, artist, tok, config):
+        started["pid"] = pid
+
+        def _work():
+            _time.sleep(2.0)  # 生成が重い状況を模す
+            release.append(True)
+
+        import threading
+        t = threading.Thread(target=_work, daemon=True)
+        t.start()
+        return t
+
+    monkeypatch.setattr(bm, "_spawn_regeneration", _slow)
+
+    t0 = _time.time()
+    r = _signed_post(line_env, {"events": [_postback_event(bm.build_postback_data(39, "A"))]})
+    elapsed = _time.time() - t0
+
+    assert r.status_code == 200
+    assert started["pid"] == 39
+    assert elapsed < 1.0, "生成完了を待っていない(elapsed=%.2fs)" % elapsed
+    assert release == [], "callback 応答時点ではまだ生成中"
+
+
+def test_callback_rejects_bad_signature(line_env):
+    r = line_env.post("/callback", content=b'{"events":[]}',
+                      headers={"X-Line-Signature": "bogus"})
+    assert r.status_code == 400

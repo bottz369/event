@@ -48,6 +48,10 @@ PENDING_TTL_SECONDS = 5 * 60
 # 名前抽出で「○○」の右端に来る合図(この手前を名前候補とみなす)。
 _ARTWORK_MARKERS = ("アー写", "アーティスト写真")
 
+# 段階B B-3 トリガー2(写真を送らずに最新の 2 枚だけ欲しい)の合図。
+# 名前の取り出し方はトリガー1 と同じロジックを使う(extract_artist_name の markers 引数)。
+_LATEST_MARKERS = ("最新", "再生成")
+
 
 # ---------------------------------------------------------------------------
 # 設定(環境変数からの遅延読み込み。import 時には読まない)
@@ -118,17 +122,19 @@ def strip_self_mentions(text: str, mentionees: Optional[List[dict]]) -> str:
     return result
 
 
-def extract_artist_name(text: str) -> Optional[str]:
+def extract_artist_name(text: str, markers: Optional[Tuple[str, ...]] = None) -> Optional[str]:
     """メンション除去後テキストから「○○のアー写更新 / ○○ アー写」の ○○ を取り出す。
 
     見つからなければ None。全角スペースは半角に正規化し、合図(アー写等)の手前を名前候補、
     末尾の助詞「の」を 1 つだけ除去する。
+
+    markers を渡すとその合図で切る(段階B B-3 のトリガー2 用。既定は _ARTWORK_MARKERS)。
     """
     if not text:
         return None
     s = text.replace("　", " ").strip()
     marker_pos = -1
-    for marker in _ARTWORK_MARKERS:
+    for marker in (markers or _ARTWORK_MARKERS):
         i = s.find(marker)
         if i != -1:
             marker_pos = i if marker_pos == -1 else min(marker_pos, i)
@@ -519,9 +525,76 @@ def _passes_group_guard(group_id: Optional[str], config: BotConfig) -> bool:
     return True
 
 
+def _reply_event_choices(reply_token: str, artist: str, config: BotConfig,
+                         prefix: Optional[str] = None) -> None:
+    """artist の直近イベントをクイックリプライで提示する。0 件ならその旨だけ返す。"""
+    from services import event_service  # 遅延 import(bot.main を env 非依存に保つ)
+
+    try:
+        events = event_service.list_recent_events_for_artist(artist)
+    except Exception as e:
+        logger.error("event lookup failed: %s", e, exc_info=True)
+        events = []
+
+    if not events:
+        text = "「%s」が出演する直近イベントは見つかりませんでした。" % artist
+        if prefix:
+            text = prefix + "\n" + text
+        reply_text(reply_token, text, config.channel_access_token)
+        return
+
+    messages: List[dict] = []
+    if prefix:
+        messages.append({"type": "text", "text": prefix})
+    messages.append(build_event_quickreply(events, artist))
+    reply_messages(reply_token, messages, config.channel_access_token)
+
+
+def _regenerate_and_reply(project_id: int, artist: str, reply_token: str,
+                          config: BotConfig) -> None:
+    """フライヤー 2 枚を生成して reply する。★別スレッドから呼ばれる想定。
+
+    生成は数十秒かかりうるので callback を待たせない。reply token は約 1 分有効なので
+    その範囲で返す。例外は握って必ず何かを返す(無反応が一番困るため)。
+    """
+    try:
+        messages, failures = render_flyer_set_for_project(project_id)
+    except Exception as e:
+        logger.error("regenerate failed: pid=%s: %s", project_id, e, exc_info=True)
+        reply_text(reply_token, "画像の生成に失敗しました。", config.channel_access_token)
+        return
+
+    if not messages:
+        reply_text(
+            reply_token,
+            "このイベントの画像を生成できませんでした(出演者やタイムテーブルの設定をご確認ください)。",
+            config.channel_access_token,
+        )
+        return
+
+    notice = build_failure_notice(failures)
+    if notice:
+        messages = messages + [{"type": "text", "text": notice}]
+    reply_messages(reply_token, messages, config.channel_access_token)
+
+
+def _spawn_regeneration(project_id: int, artist: str, reply_token: str,
+                        config: BotConfig) -> threading.Thread:
+    """再生成を daemon thread に逃がして即座に戻る(callback は 200 をすぐ返す)。"""
+    t = threading.Thread(
+        target=_regenerate_and_reply,
+        args=(project_id, artist, reply_token, config),
+        daemon=True,
+        name="flyer-regen-%s" % project_id,
+    )
+    t.start()
+    return t
+
+
 def handle_event(event: dict, config: BotConfig) -> None:
     """1 イベントを処理する。ガード非通過は静かに無視(reply しない)。"""
-    if event.get("type") != "message":
+    event_type = event.get("type")
+    if event_type not in ("message", "postback"):
         return
     source = event.get("source") or {}
     message = event.get("message") or {}
@@ -530,10 +603,24 @@ def handle_event(event: dict, config: BotConfig) -> None:
     group_id = _source_group_id(source)
     user_id = source.get("userId")
 
-    # 共通ガード: グループ発 + 送信者が OWNER。DM は完全無視。
+    # 共通ガード: グループ発 + 許可グループであること。DM は完全無視。
+    # ★段階B B-3(合意済み): 送信者が OWNER かどうかのゲートは撤去した。
+    #   許可グループの中なら誰でも使える。代わりに【テキストのトリガーは
+    #   自ボット宛メンション必須】(is_self_mentioned)を維持して誤爆を防ぐ。
+    #   config.owner_user_ids は互換のため残すが、ゲートには使わない。
     if not _passes_group_guard(group_id, config):
         return
-    if not user_id or user_id not in config.owner_user_ids:
+
+    # --- postback(イベント選択ボタン)---
+    # ボタンはメンション起動フローの続きなので、ここではメンションを要求しない
+    # (グループ許可リストのガードは上で通過済み)。
+    if event_type == "postback":
+        parsed = parse_postback_data(((event.get("postback") or {}).get("data")) or "")
+        if not parsed:
+            return  # 不正 data は静かに無視
+        project_id, artist = parsed
+        # ★重い生成は別スレッド。callback は 200 を即返す。
+        _spawn_regeneration(project_id, artist, reply_token, config)
         return
 
     msg_type = message.get("type")
@@ -545,14 +632,24 @@ def handle_event(event: dict, config: BotConfig) -> None:
         if not is_self_mentioned(mentionees):
             return  # 自ボット宛でないテキストは無視
         cleaned = strip_self_mentions(message.get("text", ""), mentionees)
+
+        # トリガー1(アー写差し替え)を先に判定し、無ければトリガー2(最新を取得)。
         name = extract_artist_name(cleaned)
         if not name:
+            latest_name = extract_artist_name(cleaned, markers=_LATEST_MARKERS)
+            if latest_name:
+                # 段階B B-3 トリガー2: 写真を待たずにイベント選択へ進む
+                _reply_event_choices(reply_token, latest_name, config)
+                return
             reply_text(
                 reply_token,
-                "アー写更新は「<アーティスト名>のアー写更新」と送ってから画像を送ってください。",
+                "アー写更新は「<アーティスト名>のアー写更新」と送ってから画像を送ってください。\n"
+                "写真を変えずに最新の画像だけ欲しいときは「<アーティスト名>の最新」と送ってください。",
                 config.channel_access_token,
             )
             return
+        if not user_id:
+            return  # pending は userId 単位。取れないなら写真待ちに入れない
         pending_store.put(user_id, name, now)
         reply_text(
             reply_token,
@@ -574,11 +671,17 @@ def handle_event(event: dict, config: BotConfig) -> None:
             reply_text(reply_token, "画像の取得に失敗しました。", config.channel_access_token)
             return
         try:
-            _ok, reply = update_artist_photo(name, image_bytes, content_type)
+            ok, reply = update_artist_photo(name, image_bytes, content_type)
         except Exception as e:
             logger.error("update_artist_photo failed: %s", e, exc_info=True)
-            reply = f"「{name}」の更新に失敗しました"
-        reply_text(reply_token, reply, config.channel_access_token)
+            ok, reply = False, f"「{name}」の更新に失敗しました"
+
+        if not ok:
+            reply_text(reply_token, reply, config.channel_access_token)
+            return
+
+        # 段階B B-3 トリガー1 の後段: 更新できたら、そのまま再生成するイベントを選ばせる。
+        _reply_event_choices(reply_token, name, config, prefix=reply)
         return
 
     # その他のメッセージ種別は無視
