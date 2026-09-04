@@ -17,11 +17,75 @@ from datetime import date
 import streamlit as st
 
 from services import session_manager, project_service
+from models.flyer_keys import FLYER_KEY_REGISTRY
 
 from views.overview import render_overview_page
 from views.timetable import render_timetable_page
 from views.grid import render_grid_page
 from views.flyer import render_flyer_editor
+
+
+# =========================================================
+# タブ遅延描画のための session_state ピン留め
+# =========================================================
+# Streamlit は「そのラン中に描画されなかったウィジェット」の session_state を
+# ランの終わりに破棄する。タブを遅延描画(選択中のタブだけ render)に変えると、
+# 非表示タブのウィジェット値がタブ切替のたびに消えてしまう。
+#
+#   実測: A タブで入力 → B タブへ切替 → A へ戻す と入力値が '' に戻る。
+#
+# 明示保存型(DB に入るのは保存ボタンだけ)なので、未保存の編集が黙って
+# 消えるのは許容できない。そこでランの先頭で保持対象キーを自分自身に
+# 再代入して「生きている」状態を維持する(ウィジェット実体化より前に行うので
+# 通常の「既定値をあらかじめ session_state に置く」パターンと同じ扱いになる)。
+#
+# 対象は SESSION_PROJECT_KEYS + flyer レジストリ + プロジェクトデータ系の
+# 動的キー(チケット / フリーテキスト行など)。ボタン・ダウンロード・
+# file_uploader のキーは session_state 経由で値を設定できず例外になるため
+# 明示的に除外する。
+_PIN_ALLOW_PREFIXES = (
+    "tt_", "grid_", "flyer_", "proj_", "overview_", "txt_overview_",
+    "t_name_", "t_price_", "t_note_", "t_common_note_",
+    "f_title_", "f_content_",
+)
+# ボタン / download_button / file_uploader のキー(値の設定が禁止されている)
+_PIN_DENY_PREFIXES = (
+    "btn_", "del_", "dl_", "rename_btn_", "rst_", "up_", "upd_",
+    "tt_pending_rm_",
+    # st.data_editor のウィジェット state。延命すると編集差分(edited_rows)の
+    # 状態機械が壊れる(罠33 の回帰テストが RED になることを実測)。
+    # TT の SSOT は draft_rows(素のキーなので破棄対象外)で、data_editor は
+    # セル編集ごとに rerun して「先取り確定」ブロックが draft_rows へ反映する
+    # ため、延命しなくても確定済みの編集は失われない。
+    "tt_editor_",
+)
+_PIN_DENY_EXACT = frozenset({"csv_upload_key", "save_font_conf", "save_pos"})
+
+
+def _pinned_keys(existing_keys) -> set:
+    """このランで再代入して延命するキー集合を返す(純関数・テスト可能)。"""
+    keys = set(session_manager.SESSION_PROJECT_KEYS)
+    keys |= {f"flyer_{e.short_key}" for e in FLYER_KEY_REGISTRY}
+    for k in existing_keys:
+        if isinstance(k, str) and k.startswith(_PIN_ALLOW_PREFIXES):
+            keys.add(k)
+    return {
+        k
+        for k in keys
+        if k not in _PIN_DENY_EXACT and not k.startswith(_PIN_DENY_PREFIXES)
+    }
+
+
+def _pin_session_keys() -> None:
+    """非表示タブのウィジェット値が破棄されないよう自身に再代入する。"""
+    for k in _pinned_keys(list(st.session_state.keys())):
+        if k in st.session_state:
+            try:
+                st.session_state[k] = st.session_state[k]
+            except Exception:
+                # 設定不可なウィジェット種別(想定外の追加)は延命対象から外す。
+                # 落とすほどではないので握って続行する。
+                pass
 
 
 # =========================================================
@@ -61,6 +125,10 @@ def render_workspace_page():
     if draft is None:
         st.error("プロジェクトデータの取得に失敗しました。")
         return
+
+    # タブ遅延描画で非表示タブの未保存編集が消えないよう延命する
+    # (ウィジェット実体化より前に行う必要があるためタブ描画の手前で呼ぶ)
+    _pin_session_keys()
 
     # 未保存警告
     if session_manager.has_unsaved_changes():
