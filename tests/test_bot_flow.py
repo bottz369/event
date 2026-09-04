@@ -158,3 +158,103 @@ def test_build_preview_png_downscales():
 
 def test_build_preview_png_falls_back_on_error():
     assert bm.build_preview_png(b"not an image") == b"not an image"
+
+
+# ---------------------------------------------------------------------------
+# C3: render_flyer_set_for_project
+# ---------------------------------------------------------------------------
+def _stub_generation(monkeypatch, results):
+    """generation_service.render_flyer_png_for_project を差し替える。
+
+    results: {variant: (png_or_None, [failures...])}
+    """
+    import services.generation_service as gs
+
+    def _fake(pid, variant="grid", failures=None):
+        png, fails = results.get(variant, (None, []))
+        if failures is not None:
+            failures.extend(fails)
+        return png
+
+    monkeypatch.setattr(gs, "render_flyer_png_for_project", _fake)
+
+
+def _stub_storage(monkeypatch):
+    monkeypatch.setattr(bm, "upload_generated_png",
+                        lambda png, pid, variant, now=None: "https://cdn.invalid/%d_%s.png" % (pid, variant))
+    monkeypatch.setattr(bm, "build_preview_png", lambda png, max_edge=240: b"PREVIEW")
+
+
+def test_flyer_set_returns_two_images_and_merged_failures(monkeypatch):
+    _stub_generation(monkeypatch, {
+        "grid": (b"GRIDPNG", [{"kind": "artist_photo", "name": "A", "url": "u", "reason": "fetch_failed"}]),
+        "tt": (b"TTPNG", [{"kind": "flyer_bg", "name": None, "url": "b", "reason": "fetch_failed"}]),
+    })
+    _stub_storage(monkeypatch)
+
+    msgs, failures = bm.render_flyer_set_for_project(39)
+    assert len(msgs) == 2
+    assert all(m["type"] == "image" for m in msgs)
+    assert msgs[0]["originalContentUrl"] == "https://cdn.invalid/39_grid.png"
+    assert msgs[1]["originalContentUrl"] == "https://cdn.invalid/39_tt.png"
+    assert sorted(f["kind"] for f in failures) == ["artist_photo", "flyer_bg"], failures
+
+
+def test_flyer_set_skips_unavailable_variant(monkeypatch):
+    """★片方が生成不能(None)なら、その variant はスキップして残りを返す。"""
+    _stub_generation(monkeypatch, {"grid": (b"GRIDPNG", []), "tt": (None, [])})
+    _stub_storage(monkeypatch)
+
+    msgs, failures = bm.render_flyer_set_for_project(39)
+    assert len(msgs) == 1
+    assert msgs[0]["originalContentUrl"].endswith("_grid.png")
+    assert failures == []
+
+
+def test_flyer_set_returns_empty_when_all_fail(monkeypatch):
+    _stub_generation(monkeypatch, {"grid": (None, []), "tt": (None, [])})
+    _stub_storage(monkeypatch)
+    msgs, _ = bm.render_flyer_set_for_project(39)
+    assert msgs == []
+
+
+def test_flyer_set_survives_generation_exception(monkeypatch):
+    """生成が例外でも Webhook を落とさず、もう片方を返す。"""
+    import services.generation_service as gs
+
+    def _fake(pid, variant="grid", failures=None):
+        if variant == "grid":
+            raise RuntimeError("boom")
+        return b"TTPNG"
+
+    monkeypatch.setattr(gs, "render_flyer_png_for_project", _fake)
+    _stub_storage(monkeypatch)
+    msgs, _ = bm.render_flyer_set_for_project(39)
+    assert len(msgs) == 1
+    assert msgs[0]["originalContentUrl"].endswith("_tt.png")
+
+
+def test_flyer_set_skips_when_upload_fails(monkeypatch):
+    _stub_generation(monkeypatch, {"grid": (b"G", []), "tt": (b"T", [])})
+    monkeypatch.setattr(bm, "upload_generated_png", lambda *a, **k: None)
+    msgs, _ = bm.render_flyer_set_for_project(39)
+    assert msgs == []
+
+
+# ---------------------------------------------------------------------------
+# C3: 失敗の文言化
+# ---------------------------------------------------------------------------
+def test_failure_notice_lists_artists_and_assets():
+    notice = bm.build_failure_notice([
+        {"kind": "artist_photo", "name": "手羽先センセーション", "url": "u", "reason": "fetch_failed"},
+        {"kind": "artist_photo", "name": "手羽先センセーション", "url": "u", "reason": "fetch_failed"},
+        {"kind": "flyer_bg", "name": None, "url": "b", "reason": "fetch_failed"},
+    ])
+    assert "手羽先センセーション" in notice
+    assert notice.count("手羽先センセーション") == 1, "重複は 1 回だけ"
+    assert "背景画像" in notice
+
+
+def test_failure_notice_none_when_empty():
+    assert bm.build_failure_notice([]) is None
+    assert bm.build_failure_notice([{"kind": "unknown"}]) is None

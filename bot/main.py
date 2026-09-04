@@ -377,6 +377,86 @@ def build_image_message(original_url: str, preview_url: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 段階B B-3: フライヤーセット(2 枚)の生成 → Storage → image message
+# ---------------------------------------------------------------------------
+FLYER_VARIANTS = ("grid", "tt")
+_VARIANT_LABEL = {"grid": "アー写グリッド版", "tt": "タイムテーブル版"}
+
+
+def render_flyer_set_for_project(project_id: int) -> Tuple[List[dict], List[dict]]:
+    """pid のフライヤー 2 枚を生成し、(image message のリスト, failures) を返す。
+
+    ★生成はプロセス内直呼び。Bot と /api は同一 FastAPI プロセスなので HTTP 自己呼び出しはしない。
+      failures は Python の list をそのまま受け取る(X-Missing-Assets ヘッダは
+      外部クライアント用に温存し、ここではパースしない)。
+    生成不能(None)の variant は image message を作らずスキップする。
+    生成の直列化は generation_service 側の _render_lock に任せる(ここで追加ロックしない)。
+    """
+    from services import generation_service  # 遅延 import(bot.main を env 非依存に保つ)
+
+    failures: List[dict] = []
+    messages: List[dict] = []
+
+    for variant in FLYER_VARIANTS:
+        try:
+            png = generation_service.render_flyer_png_for_project(
+                project_id, variant=variant, failures=failures
+            )
+        except Exception as e:
+            logger.error(
+                "flyer render failed: pid=%s variant=%s: %s", project_id, variant, e,
+                exc_info=True,
+            )
+            continue
+        if not png:
+            logger.warning("flyer not generated: pid=%s variant=%s", project_id, variant)
+            continue
+
+        original_url = upload_generated_png(png, project_id, variant)
+        if not original_url:
+            continue
+        preview_url = upload_generated_png(
+            build_preview_png(png), project_id, "%s_preview" % variant
+        )
+        messages.append(build_image_message(original_url, preview_url or original_url))
+
+    return (messages, failures)
+
+
+def build_failure_notice(failures: List[dict]) -> Optional[str]:
+    """素材取得に失敗した一覧を人間向けの 1 通にまとめる。無ければ None。
+
+    §5 の構造化エントリ {"kind","name","url","reason"} を前提にする。
+    2 枚は送ったうえで添える警告なので、断定せず「反映待ちの可能性」に留める。
+    """
+    if not failures:
+        return None
+    photos, others = [], []
+    for f in failures:
+        kind = f.get("kind")
+        if kind == "artist_photo":
+            name = f.get("name")
+            if name and name not in photos:
+                photos.append(name)
+        elif kind == "flyer_bg":
+            others.append("背景画像")
+        elif kind == "flyer_logo":
+            others.append("ロゴ画像")
+
+    parts = []
+    if photos:
+        parts.append("アー写: " + " / ".join(photos))
+    for o in dict.fromkeys(others):
+        parts.append(o)
+    if not parts:
+        return None
+    return (
+        "※ 一部の素材を取得できませんでした(" + " , ".join(parts) + ")。\n"
+        "アップロード直後で反映待ちの可能性があります。少し待ってからもう一度お試しください。"
+    )
+
+
+# ---------------------------------------------------------------------------
 # アー写更新(既存 service へ委譲。DB/画像 import はここで遅延)
 # ---------------------------------------------------------------------------
 def _ext_from_content_type(content_type: str) -> str:
