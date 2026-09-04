@@ -237,6 +237,99 @@ def _apply_editor_state_to_df(df, editor_state):
     return new_df
 
 
+# =========================================================
+# 保存ハンドラから呼ばれる公開関数(統合保存ボタン用)
+# =========================================================
+# 各タブの「設定反映」ボタンは廃止され、保存はワークスペース唯一の
+# 「💾 プロジェクトを保存する」に集約された。生成はその保存ハンドラの中だけで
+# 走る(レンダー毎の自動生成は罠16 / Phase 3 stop-autogen で禁止)。
+
+
+def build_gen_list_from_draft():
+    """draft_rows から画像生成用リストを組み立てる。
+
+    render 側は data_editor の出力 (edited_df) から同じものを作っているが、
+    セル編集は「先取り確定」ブロックで毎 run draft_rows に反映されるので
+    両者は一致する。保存ハンドラは TT タブを描画していないことがあるため、
+    ウィジェットに依存しない draft_rows 側から組み立てる。
+    """
+    rows = session_manager.get_draft_rows()
+    if not rows:
+        return []
+    df = draft_rows_to_df(rows)
+    calculated = calculate_timetable_flow(
+        df, st.session_state.tt_open_time, st.session_state.tt_start_time
+    )
+    hidden_flags = (
+        df["IS_HIDDEN"].tolist() if "IS_HIDDEN" in df.columns else [False] * len(df)
+    )
+
+    gen_list = []
+    idx = 0
+    for _, row in calculated.iterrows():
+        if row["ARTIST"] == "OPEN / START":
+            continue
+        is_hidden = hidden_flags[idx] if idx < len(hidden_flags) else False
+        idx += 1
+        if is_hidden:
+            continue
+        gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
+    return gen_list
+
+
+def fold_grid_order_from_rows():
+    """TT の「アー写グリッド表示順 / 非表示」を session の grid_* へ畳む。
+
+    ★保存の直前に呼ぶこと。sync_session_to_draft が _GRID_KEY_MAP 経由で
+    draft.grid_settings["order"] に載せ、apply_draft が grid_order_json へ書く。
+    draft_rows の純粋な関数で冪等なので、どのタブから保存しても実行してよい
+    (グリッドの並び順の唯一の正は TT の GRID_NO であるため・§43)。
+    """
+    rows = session_manager.get_draft_rows()
+    st.session_state.grid_order = build_grid_order_from_rows(rows)
+    # 該当ゼロでも [] を書くことが重要(このキーの存在が「移行済み」の印を兼ねる)
+    st.session_state.grid_hidden = build_grid_hidden_from_rows(rows)
+
+
+def regenerate_tt_preview():
+    """保存後の状態から TT プレビュー画像を作り直す。成功で True。
+
+    列数・フォントは保存された値(= session_state の値。保存直後なので DB と一致)
+    をそのまま使うため、web のプレビューと LINE/API の出力が必ず一致する。
+    """
+    if generate_timetable_image is None:
+        st.error(f"ロジックファイルの読み込みに失敗しています: {import_error_msg}")
+        return False
+
+    gen_list = build_gen_list_from_draft()
+    if not gen_list:
+        st.warning("タイムテーブルのデータがありません")
+        return False
+
+    db = SessionLocal()
+    try:
+        ensure_font_exists(db, st.session_state.tt_font)
+    finally:
+        db.close()
+
+    try:
+        font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
+        img = generate_timetable_image(
+            gen_list, font_path=font_path, columns=st.session_state.tt_columns
+        )
+    except Exception as e:
+        st.error(f"タイムテーブル画像の生成エラー: {e}")
+        return False
+
+    st.session_state.last_generated_tt_image = img
+    st.session_state.tt_last_generated_params = {
+        "gen_list": gen_list,
+        "font": st.session_state.tt_font,
+        "columns": st.session_state.tt_columns,
+    }
+    return True
+
+
 def render_timetable_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("⏱️ タイムテーブル作成")

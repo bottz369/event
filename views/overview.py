@@ -45,6 +45,37 @@ def update_free(i, field, project_id):
 # ==========================================
 # メイン描画関数
 # ==========================================
+# =========================================================
+# 保存ハンドラから呼ばれる公開関数(統合保存ボタン用)
+# =========================================================
+def mark_overview_saved():
+    """概要タブの「保存済みパラメータ」を現在値へ更新する。
+
+    概要タブのプレビュー(告知テキスト)は build_event_summary_text で
+    レンダーごとに session から組み立てられるので画像のような再生成は要らない。
+    保存後にこの印を更新しておくと「⚠️ 変更を保存すると…」の注意書きが
+    保存直後に消え、表示と DB の一致が UI 上も分かる。
+    """
+    st.session_state.overview_last_saved_params = _overview_params()
+    return True
+
+
+def _overview_params():
+    """変更検知に使うパラメータ辞書(render 側と同一の作り方)。"""
+    return {
+        "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
+        "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
+        "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
+        "title": st.session_state.get("proj_title", ""),
+        "subtitle": st.session_state.get("proj_subtitle", ""),
+        "venue": st.session_state.get("proj_venue", ""),
+        "url": st.session_state.get("proj_url", ""),
+        "date": str(st.session_state.get("proj_date", "")),
+        "open": st.session_state.get("tt_open_time", ""),
+        "start": st.session_state.get("tt_start_time", ""),
+    }
+
+
 def render_overview_page():
     
     project_id = st.session_state.get("ws_active_project_id")

@@ -88,6 +88,29 @@ def render_visual_selector(label, options, key_name, current_value, allow_none=F
                     st.rerun()
     st.divider()
 
+# =========================================================
+# 保存ハンドラから呼ばれる公開関数(統合保存ボタン用)
+# =========================================================
+def regenerate_flyer_preview(project_id):
+    """保存後の状態からフライヤーセット 2 枚を作り直す。成功で True。
+
+    フライヤーは grid 画像と TT 画像を素材にするため、呼び出し側
+    (workspace の保存ハンドラ)が先に両者を再生成しておくこと。
+    素材が古いまま合成すると「DL した画像と DB の設定が食い違う」
+    という症状1 の再発になる。
+    """
+    proj = project_service.get_project_flyer_view(project_id)
+    if proj is None:
+        st.error("プロジェクトの取得に失敗しました")
+        return False
+    try:
+        _generate_preview(proj)
+    except Exception as e:
+        st.error(f"フライヤー画像の生成エラー: {e}")
+        return False
+    return bool(st.session_state.get("flyer_result_grid"))
+
+
 # ==========================================
 # メイン画面描画
 # ==========================================

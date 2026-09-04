@@ -19,10 +19,14 @@ import streamlit as st
 from services import session_manager, project_service
 from models.flyer_keys import FLYER_KEY_REGISTRY
 
-from views.overview import render_overview_page
-from views.timetable import render_timetable_page
-from views.grid import render_grid_page
-from views.flyer import render_flyer_editor
+from views.overview import mark_overview_saved, render_overview_page
+from views.timetable import (
+    fold_grid_order_from_rows,
+    regenerate_tt_preview,
+    render_timetable_page,
+)
+from views.grid import regenerate_grid_preview, render_grid_page
+from views.flyer import regenerate_flyer_preview, render_flyer_editor
 
 
 # =========================================================
@@ -307,12 +311,43 @@ def _render_project_header(draft) -> None:
 
 
 def _handle_project_save() -> None:
-    """唯一の保存ハンドラ。
+    """アプリで唯一の保存ハンドラ。
 
-    C1 時点では save_active_project() を呼ぶだけ。保存後のプレビュー再生成は
-    C2 で足す(それまで各タブの旧ボタンも残っている)。
+    手順:
+      1. TT の GRID_NO を session の grid_order / grid_hidden へ畳む(保存前)
+      2. save_active_project() でプロジェクト全体(settings / grid / flyer)を保存
+      3. ★保存後の状態から、いま見ているタブのプレビューを作り直す
+
+    3 が肝心で、「生成した画像」と「保存された設定」が食い違う経路を塞ぐ。
+    以前は各タブが個別に生成→保存していたため、TT を 2 列で生成したあと
+    別タブから保存すると DB には別の列数が入り、それでも 2 列の画像が
+    ダウンロードできてしまった(症状1)。保存後に作り直すので
+    web のプレビュー = DB = LINE/API の出力が常に一致する。
+
+    生成はこのハンドラの中だけで走る。レンダー毎の自動生成は禁止
+    (罠16 / Phase 3 stop-autogen。プロジェクトを開くだけで 20 秒級の
+    画像生成が走る問題の再発防止)。
     """
-    if project_service.save_active_project():
-        st.toast("プロジェクトを保存しました", icon="✅")
-    else:
+    fold_grid_order_from_rows()
+
+    if not project_service.save_active_project():
         st.error("保存に失敗しました")
+        return
+
+    active_id = session_manager.get_active_project_id()
+    tab = current_tab()
+    with st.spinner("保存しました。プレビューを作成中..."):
+        if tab == TAB_TT:
+            regenerate_tt_preview()
+        elif tab == TAB_GRID:
+            regenerate_grid_preview()
+        elif tab == TAB_FLYER:
+            # フライヤーは grid 画像と TT 画像を素材にするので依存から順に作る
+            regenerate_grid_preview()
+            regenerate_tt_preview()
+            if active_id is not None:
+                regenerate_flyer_preview(active_id)
+        else:
+            mark_overview_saved()
+
+    st.toast("プロジェクトを保存しました", icon="✅")

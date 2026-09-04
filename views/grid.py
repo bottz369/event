@@ -25,6 +25,73 @@ except ImportError:
     load_image_from_url = None
 
 
+# =========================================================
+# 保存ハンドラから呼ばれる公開関数(統合保存ボタン用)
+# =========================================================
+def regenerate_grid_preview():
+    """保存後の状態からアー写グリッド画像を作り直す。成功で True。
+
+    並び順は TT の GRID_NO 由来 (fold_grid_order_from_rows が session の
+    grid_order へ畳んだもの) を使うので、プレビュー・生成画像・DB 保存値の
+    3 つが必ず一致する。生成はこの関数(= 保存ハンドラ)からのみ呼ぶ
+    (レンダー毎の自動生成は罠16 / Phase 3 stop-autogen で禁止)。
+    """
+    if generate_grid_image is None:
+        st.error("ロジックファイル (logic_grid) の読み込みに失敗しています")
+        return False
+
+    order = list(st.session_state.get("grid_order") or [])
+    target_artists = artist_service.get_artists_by_names(order)
+    if not target_artists:
+        st.warning("表示するアーティストデータがありません。")
+        return False
+
+    font_service.ensure_font_available(st.session_state.grid_font)
+
+    try:
+        parsed_counts = [
+            int(x.strip())
+            for x in str(st.session_state.grid_row_counts_str).split(",")
+            if x.strip()
+        ]
+    except Exception:
+        parsed_counts = []
+
+    try:
+        is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
+        align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
+        align_val = align_map.get(st.session_state.grid_alignment, "center")
+        abs_font_path = os.path.join(
+            os.path.abspath(FONT_DIR), st.session_state.grid_font
+        )
+        img = generate_grid_image(
+            target_artists,
+            IMAGE_DIR,
+            font_path=abs_font_path,
+            row_counts=parsed_counts or None,
+            is_brick_mode=is_brick,
+            alignment=align_val,
+        )
+    except Exception as e:
+        st.error(f"アー写グリッド画像の生成エラー: {e}")
+        return False
+
+    if not img:
+        st.error("アー写グリッド画像の生成に失敗しました")
+        return False
+
+    st.session_state.last_generated_grid_image = img
+    st.session_state.grid_last_generated_params = {
+        "order": order,
+        "row_counts": st.session_state.grid_row_counts_str,
+        "layout_mode": st.session_state.grid_layout_mode,
+        "alignment": st.session_state.grid_alignment,
+        "font": st.session_state.grid_font,
+        "rows": st.session_state.grid_rows,
+    }
+    return True
+
+
 def render_grid_page():
     if "ws_active_project_id" not in st.session_state or st.session_state.ws_active_project_id is None:
         st.title("🖼️ アー写グリッド作成")
