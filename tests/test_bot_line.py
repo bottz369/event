@@ -67,63 +67,33 @@ def test_strip_self_mentions_ignores_non_self():
 
 
 # --------------------------------------------------------------------------
-# 名前抽出
-# --------------------------------------------------------------------------
-def test_extract_name_no_particle():
-    assert main.extract_artist_name("バンドA アー写更新") == "バンドA"
-
-
-def test_extract_name_with_particle():
-    assert main.extract_artist_name("バンドAのアー写更新") == "バンドA"
-
-
-def test_extract_name_fullwidth_space():
-    assert main.extract_artist_name("バンドA　アー写") == "バンドA"
-
-
-def test_extract_name_short_form():
-    assert main.extract_artist_name("○○ アー写") == "○○"
-
-
-def test_extract_name_none_when_no_marker():
-    assert main.extract_artist_name("こんにちは") is None
-    assert main.extract_artist_name("") is None
-    assert main.extract_artist_name("アー写更新") is None  # 名前が無い
-
-
-def test_extract_name_keeps_no_in_middle():
-    # 途中の「の」は残し、末尾の助詞のみ 1 つ除去する
-    assert main.extract_artist_name("僕のバンドのアー写更新") == "僕のバンド"
-
-
-# --------------------------------------------------------------------------
 # pending TTL
 # --------------------------------------------------------------------------
 def test_pending_put_and_pop_within_ttl():
     store = main.PendingStore(ttl_seconds=300)
-    store.put("U1", "バンドA", now=1000.0)
-    assert store.pop_valid("U1", now=1200.0) == "バンドA"  # 200 秒後 = TTL 内
+    store.put("U1", 39, "バンドA", now=1000.0)
+    assert store.pop_valid("U1", now=1200.0) == (39, "バンドA")  # 200 秒後 = TTL 内
     # 消費済みなので 2 回目は None
     assert store.pop_valid("U1", now=1201.0) is None
 
 
 def test_pending_expires_after_ttl():
     store = main.PendingStore(ttl_seconds=300)
-    store.put("U1", "バンドA", now=1000.0)
+    store.put("U1", 39, "バンドA", now=1000.0)
     assert store.pop_valid("U1", now=1000.0 + 301) is None  # TTL 超過
 
 
 def test_pending_isolated_per_user():
     store = main.PendingStore(ttl_seconds=300)
-    store.put("U1", "バンドA", now=1000.0)
+    store.put("U1", 39, "バンドA", now=1000.0)
     assert store.pop_valid("U2", now=1000.0) is None
-    assert store.pop_valid("U1", now=1000.0) == "バンドA"
+    assert store.pop_valid("U1", now=1000.0) == (39, "バンドA")
 
 
 def test_pending_purge_expired():
     store = main.PendingStore(ttl_seconds=300)
-    store.put("U1", "A", now=1000.0)
-    store.put("U2", "B", now=1000.0)
+    store.put("U1", 1, "A", now=1000.0)
+    store.put("U2", 2, "B", now=1000.0)
     store.purge_expired(now=1000.0 + 301)
     assert store.pop_valid("U1", now=1000.0 + 302) is None
     assert store.pop_valid("U2", now=1000.0 + 302) is None

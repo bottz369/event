@@ -46,11 +46,13 @@ LINE_CONTENT_ENDPOINT = "https://api-data.line.me/v2/bot/message/{message_id}/co
 PENDING_TTL_SECONDS = 5 * 60
 
 # 名前抽出で「○○」の右端に来る合図(この手前を名前候補とみなす)。
-_ARTWORK_MARKERS = ("アー写", "アーティスト写真")
-
-# 段階B B-3 トリガー2(写真を送らずに最新の 2 枚だけ欲しい)の合図。
-# 名前の取り出し方はトリガー1 と同じロジックを使う(extract_artist_name の markers 引数)。
-_LATEST_MARKERS = ("最新", "再生成")
+# B-3.1: 入口の合図。★名前はテキストから読まない(完全ボタン対話)。
+# メンション + マーカーだけで、あとはボタンで選ばせる。
+#   REPLACE … アー写を差し替えてから 2 枚生成
+#   GET     … 写真は変えず 2 枚だけ取得
+_REPLACE_MARKERS = ("アー写変更", "アー写差し替え", "アー写差替", "アー写更新",
+                    "写真変更", "写真差し替え", "写真差替")
+_GET_MARKERS = ("最新", "フライヤー", "再生成")
 
 
 # ---------------------------------------------------------------------------
@@ -122,59 +124,39 @@ def strip_self_mentions(text: str, mentionees: Optional[List[dict]]) -> str:
     return result
 
 
-def extract_artist_name(text: str, markers: Optional[Tuple[str, ...]] = None) -> Optional[str]:
-    """メンション除去後テキストから「○○のアー写更新 / ○○ アー写」の ○○ を取り出す。
-
-    見つからなければ None。全角スペースは半角に正規化し、合図(アー写等)の手前を名前候補、
-    末尾の助詞「の」を 1 つだけ除去する。
-
-    markers を渡すとその合図で切る(段階B B-3 のトリガー2 用。既定は _ARTWORK_MARKERS)。
-    """
-    if not text:
-        return None
-    s = text.replace("　", " ").strip()
-    marker_pos = -1
-    for marker in (markers or _ARTWORK_MARKERS):
-        i = s.find(marker)
-        if i != -1:
-            marker_pos = i if marker_pos == -1 else min(marker_pos, i)
-    if marker_pos <= 0:  # 合図が無い / 先頭にある(名前が無い)
-        return None
-    name = s[:marker_pos].strip()
-    if name.endswith("の"):
-        name = name[:-1].strip()
-    return name or None
-
-
 # ---------------------------------------------------------------------------
 # pending ストア(テキスト → 画像の順待ち・userId 単位・TTL 付き)
 # ---------------------------------------------------------------------------
 class PendingStore:
-    """userId ごとに「更新対象アーティスト名 + 記録時刻」を TTL 付きで保持する。
+    """userId ごとに「画像待ちの (project_id, アーティスト名) + 記録時刻」を TTL 付きで保持する。
 
+    ★B-3.1: payload を名前だけから (pid, artist) に拡張した。
+      どのイベント向けの差し替えかはボタンで確定済みなので、画像を受けたら
+      そのまま「更新 → その pid の 2 枚生成」まで進める。
+    ★ここに入るのは「画像待ち」だけ。会話の選択状態は postback data に埋める。
     時刻(now)は呼び出し側から注入する(テスト決定性のため)。スレッド安全。
     """
 
     def __init__(self, ttl_seconds: int = PENDING_TTL_SECONDS):
         self._ttl = ttl_seconds
-        self._data: Dict[str, Tuple[str, float]] = {}
+        self._data: Dict[str, Tuple[Tuple[int, str], float]] = {}
         self._lock = threading.Lock()
 
-    def put(self, user_id: str, name: str, now: float) -> None:
+    def put(self, user_id: str, project_id: int, name: str, now: float) -> None:
         with self._lock:
-            self._data[user_id] = (name, now)
+            self._data[user_id] = ((int(project_id), name), now)
 
-    def pop_valid(self, user_id: str, now: float) -> Optional[str]:
-        """TTL 内の pending があれば名前を返して消費する。無効/期限切れは None。"""
+    def pop_valid(self, user_id: str, now: float) -> Optional[Tuple[int, str]]:
+        """TTL 内の pending があれば (pid, artist) を返して消費する。無効/期限切れは None。"""
         with self._lock:
             item = self._data.get(user_id)
             if item is None:
                 return None
-            name, created = item
+            payload, created = item
             del self._data[user_id]
             if now - created > self._ttl:
                 return None
-            return name
+            return payload
 
     def purge_expired(self, now: float) -> None:
         with self._lock:
@@ -248,8 +230,20 @@ QUICKREPLY_MAX_ITEMS = 13
 QUICKREPLY_LABEL_MAX = 20
 POSTBACK_DATA_MAX_BYTES = 300
 
-# postback data の書式: "regen|pid=<int>|artist=<name>"
-POSTBACK_ACTION_REGEN = "regen"
+# postback data の書式(B-3.1: 完全ボタン対話の 4 種別)
+#   evt|flow=<replace|get>|pid=<int>   … イベント選択
+#   more_evt|flow=<replace|get>|page=<n> … イベント次ページ
+#   art|pid=<int>|artist=<name>        … アーティスト選択(差し替え対象)
+#   more_art|pid=<int>|page=<n>        … アーティスト次ページ
+# ★選択状態はすべてここに埋める(サーバ側の会話ステートは増やさない)。
+ACTION_EVENT = "evt"
+ACTION_MORE_EVENT = "more_evt"
+ACTION_ARTIST = "art"
+ACTION_MORE_ARTIST = "more_art"
+
+FLOW_REPLACE = "replace"  # アー写を差し替えてから 2 枚生成
+FLOW_GET = "get"          # 写真は変えず 2 枚だけ取得
+_FLOWS = (FLOW_REPLACE, FLOW_GET)
 
 
 def _truncate_label(text: str, limit: int = QUICKREPLY_LABEL_MAX) -> str:
@@ -260,69 +254,165 @@ def _truncate_label(text: str, limit: int = QUICKREPLY_LABEL_MAX) -> str:
     return s[: limit - 1] + "…"
 
 
-def build_postback_data(project_id: int, artist: str) -> str:
-    """postback data を組む。300 bytes を超えないようアーティスト名側を削る。"""
-    head = "%s|pid=%d|artist=" % (POSTBACK_ACTION_REGEN, int(project_id))
+def _truncate_utf8(text: str, budget: int) -> str:
+    """UTF-8 で budget bytes 以内に収める(マルチバイトの途中で切らない)。"""
+    if budget <= 0:
+        return ""
+    out = []
+    used = 0
+    for ch in text or "":
+        b = len(ch.encode("utf-8"))
+        if used + b > budget:
+            break
+        out.append(ch)
+        used += b
+    return "".join(out)
+
+
+def build_postback_data(action: str, **fields) -> str:
+    """postback data を組む。300 bytes を超えないよう最後のフィールドだけ丸める。
+
+    例: build_postback_data("art", pid=39, artist="手羽先センセーション")
+        -> "art|pid=39|artist=手羽先センセーション"
+    丸め対象は可変長になりうる末尾フィールド(artist)のみ。pid / page / flow は短い。
+    """
+    parts = [action]
+    tail_key = None
+    tail_val = None
+    for k, v in fields.items():
+        if k == "artist":
+            tail_key, tail_val = k, str(v or "")
+            continue
+        parts.append("%s=%s" % (k, v))
+    head = "|".join(parts)
+    if tail_key is None:
+        return head
+    head = head + "|" + tail_key + "="
     budget = POSTBACK_DATA_MAX_BYTES - len(head.encode("utf-8"))
-    name = artist or ""
-    encoded = name.encode("utf-8")
-    if len(encoded) > budget:
-        # UTF-8 の途中で切らないよう 1 文字ずつ詰める
-        out = []
-        used = 0
-        for ch in name:
-            b = len(ch.encode("utf-8"))
-            if used + b > budget:
-                break
-            out.append(ch)
-            used += b
-        name = "".join(out)
-    return head + name
+    return head + _truncate_utf8(tail_val, budget)
 
 
-def parse_postback_data(data: str) -> Optional[Tuple[int, str]]:
-    """postback data を (project_id, artist) に戻す。不正なら None。"""
+def parse_postback_data(data: str) -> Optional[dict]:
+    """postback data を {"action":..., ...} に戻す。不正なら None。
+
+    pid / page は int 化する(数値でなければ不正扱い)。未知の action も None。
+    """
     if not data:
         return None
     parts = data.split("|")
-    if not parts or parts[0] != POSTBACK_ACTION_REGEN:
+    action = parts[0]
+    if action not in (ACTION_EVENT, ACTION_MORE_EVENT, ACTION_ARTIST, ACTION_MORE_ARTIST):
         return None
-    pid = None
-    artist = ""
+    out = {"action": action}
     for p in parts[1:]:
-        if p.startswith("pid="):
+        if "=" not in p:
+            continue
+        k, v = p.split("=", 1)
+        if k in ("pid", "page"):
             try:
-                pid = int(p[len("pid="):])
+                out[k] = int(v)
             except ValueError:
                 return None
-        elif p.startswith("artist="):
-            artist = p[len("artist="):]
-    if pid is None:
-        return None
-    return (pid, artist)
+        else:
+            out[k] = v
+
+    # 種別ごとの必須フィールド検査
+    if action == ACTION_EVENT:
+        if "pid" not in out or out.get("flow") not in _FLOWS:
+            return None
+    elif action == ACTION_MORE_EVENT:
+        if "page" not in out or out.get("flow") not in _FLOWS:
+            return None
+    elif action == ACTION_ARTIST:
+        if "pid" not in out or not out.get("artist"):
+            return None
+    elif action == ACTION_MORE_ARTIST:
+        if "pid" not in out or "page" not in out:
+            return None
+    return out
 
 
-def build_event_quickreply(events: List[object], artist: str) -> dict:
-    """イベント選択のクイックリプライ付きテキストメッセージを組む。
+def _event_label(e) -> Tuple[str, str]:
+    """(丸めたラベル, 丸めていない表示テキスト)を返す。"""
+    date_part = e.event_date.strftime("%m/%d") if getattr(e, "event_date", None) else "日付未定"
+    full = "%s %s" % (date_part, e.title)
+    return (_truncate_label(full), full)
 
-    events は models.event.EventOption のリスト(project_id / title / event_date)。
+
+def build_event_quickreply(
+    events: List[object], flow: str, page: int = 0, has_more: bool = False
+) -> dict:
+    """イベント選択のクイックリプライを組む(B-3.1)。
+
+    flow="replace" … 差し替えたいイベントを選ぶ
+    flow="get"     … フライヤーを出したいイベントを選ぶ
+    has_more のとき末尾に【さらに前のイベントを表示】を足す。
+    items は 12 件 + ページングボタン 1 = 13(LINE の上限)に収める。
     """
     items = []
-    for e in events[:QUICKREPLY_MAX_ITEMS]:
-        date_part = e.event_date.strftime("%m/%d") if getattr(e, "event_date", None) else "日付未定"
-        label = _truncate_label("%s %s" % (date_part, e.title))
+    for e in events[:QUICKREPLY_MAX_ITEMS - (1 if has_more else 0)]:
+        label, full = _event_label(e)
         items.append({
             "type": "action",
             "action": {
                 "type": "postback",
                 "label": label,
-                "data": build_postback_data(e.project_id, artist),
-                "displayText": "%s %s" % (date_part, e.title),
+                "data": build_postback_data(ACTION_EVENT, flow=flow, pid=e.project_id),
+                "displayText": full,
+            },
+        })
+    if has_more:
+        items.append({
+            "type": "action",
+            "action": {
+                "type": "postback",
+                "label": "さらに前のイベントを表示",
+                "data": build_postback_data(ACTION_MORE_EVENT, flow=flow, page=int(page) + 1),
+                "displayText": "さらに前のイベントを表示",
+            },
+        })
+
+    prompt = (
+        "どのイベントのアー写を差し替えますか?"
+        if flow == FLOW_REPLACE
+        else "どのイベントのフライヤーを出しますか?"
+    )
+    return {"type": "text", "text": prompt, "quickReply": {"items": items}}
+
+
+def build_artist_quickreply(
+    project_id: int, artists: List[str], page: int = 0, has_more: bool = False
+) -> dict:
+    """アーティスト選択のクイックリプライを組む(B-3.1)。
+
+    has_more のとき末尾に【さらに表示】を足す(29 組など 13 を超えるイベント用)。
+    """
+    items = []
+    for name in artists[:QUICKREPLY_MAX_ITEMS - (1 if has_more else 0)]:
+        items.append({
+            "type": "action",
+            "action": {
+                "type": "postback",
+                "label": _truncate_label(name),
+                "data": build_postback_data(ACTION_ARTIST, pid=project_id, artist=name),
+                "displayText": name,
+            },
+        })
+    if has_more:
+        items.append({
+            "type": "action",
+            "action": {
+                "type": "postback",
+                "label": "さらに表示",
+                "data": build_postback_data(
+                    ACTION_MORE_ARTIST, pid=project_id, page=int(page) + 1
+                ),
+                "displayText": "さらに表示",
             },
         })
     return {
         "type": "text",
-        "text": "どのイベントを再生成しますか?",
+        "text": "どのアーティストのアー写を差し替えますか?",
         "quickReply": {"items": items},
     }
 
@@ -525,32 +615,166 @@ def _passes_group_guard(group_id: Optional[str], config: BotConfig) -> bool:
     return True
 
 
-def _reply_event_choices(reply_token: str, artist: str, config: BotConfig,
-                         prefix: Optional[str] = None) -> None:
-    """artist の直近イベントをクイックリプライで提示する。0 件ならその旨だけ返す。"""
+_USAGE_TEXT = (
+    "使い方(名前の入力は不要です):\n"
+    "・アー写を差し替える → 「アー写変更」とメンションしてください\n"
+    "・最新のフライヤーだけ欲しい → 「フライヤー」とメンションしてください\n"
+    "そのあとはボタンで選べます。"
+)
+
+
+def _detect_flow(text: str) -> Optional[str]:
+    """メンション除去後テキストから flow を判定する。合図が無ければ None。
+
+    ★B-3.1: アーティスト名はここでは読まない(完全ボタン対話)。
+      差し替え(REPLACE)を先に判定する。「アー写更新」は差し替え側の合図。
+    """
+    if not text:
+        return None
+    s = text.replace("　", " ")
+    if any(m in s for m in _REPLACE_MARKERS):
+        return FLOW_REPLACE
+    if any(m in s for m in _GET_MARKERS):
+        return FLOW_GET
+    return None
+
+
+def _reply_event_page(reply_token: str, flow: str, page: int, config: BotConfig) -> None:
+    """イベント選択ボタンの page ページ目を返す。0 件ならその旨。"""
     from services import event_service  # 遅延 import(bot.main を env 非依存に保つ)
 
     try:
-        events = event_service.list_recent_events_for_artist(artist)
+        events, has_more = event_service.list_recent_events(page=page)
     except Exception as e:
-        logger.error("event lookup failed: %s", e, exc_info=True)
-        events = []
+        logger.error("event listing failed: %s", e, exc_info=True)
+        events, has_more = [], False
 
     if not events:
-        text = "「%s」が出演する直近イベントは見つかりませんでした。" % artist
-        if prefix:
-            text = prefix + "\n" + text
-        reply_text(reply_token, text, config.channel_access_token)
+        reply_text(reply_token, "対象のイベントが見つかりませんでした。",
+                   config.channel_access_token)
+        return
+    reply_messages(
+        reply_token,
+        [build_event_quickreply(events, flow, page=page, has_more=has_more)],
+        config.channel_access_token,
+    )
+
+
+def _reply_artist_page(reply_token: str, project_id: int, page: int,
+                       config: BotConfig) -> None:
+    """アーティスト選択ボタンの page ページ目を返す。0 件ならその旨。"""
+    from services import event_service  # 遅延 import
+
+    try:
+        artists, has_more = event_service.list_event_artists(project_id, page=page)
+    except Exception as e:
+        logger.error("artist listing failed: pid=%s: %s", project_id, e, exc_info=True)
+        artists, has_more = [], False
+
+    if not artists:
+        reply_text(reply_token, "このイベントには出演アーティストが登録されていません。",
+                   config.channel_access_token)
+        return
+    reply_messages(
+        reply_token,
+        [build_artist_quickreply(project_id, artists, page=page, has_more=has_more)],
+        config.channel_access_token,
+    )
+
+
+def _handle_postback(parsed: dict, reply_token: str, user_id: Optional[str],
+                     config: BotConfig) -> None:
+    """postback の 4 種別を捌く(B-3.1)。"""
+    action = parsed.get("action")
+
+    if action == ACTION_EVENT:
+        if parsed.get("flow") == FLOW_GET:
+            # 写真は変えず 2 枚だけ生成 → 別スレッド(callback は 200 を即返す)
+            _spawn_regeneration(parsed["pid"], reply_token, config)
+        else:
+            _reply_artist_page(reply_token, parsed["pid"], page=0, config=config)
         return
 
-    messages: List[dict] = []
-    if prefix:
-        messages.append({"type": "text", "text": prefix})
-    messages.append(build_event_quickreply(events, artist))
+    if action == ACTION_MORE_EVENT:
+        _reply_event_page(reply_token, parsed["flow"], page=parsed["page"], config=config)
+        return
+
+    if action == ACTION_MORE_ARTIST:
+        _reply_artist_page(reply_token, parsed["pid"], page=parsed["page"], config=config)
+        return
+
+    if action == ACTION_ARTIST:
+        if not user_id:
+            return  # pending は userId 単位。取れないなら写真待ちに入れない
+        artist = parsed["artist"]
+        pending_store.put(user_id, parsed["pid"], artist, time.time())
+        reply_text(
+            reply_token,
+            "「%s」の新しい画像を送ってください(5分以内)。" % artist,
+            config.channel_access_token,
+        )
+        return
+
+
+def _update_photo_and_reply(project_id: int, artist: str, message_id: str,
+                            reply_token: str, config: BotConfig) -> None:
+    """画像 DL → アー写更新 → 2 枚生成 を 1 回の reply にまとめて返す。
+
+    ★別スレッドから呼ばれる想定。DB 書き込みは既存 B4 の update_artist_photo だけ。
+    例外は握って必ず何かを返す(無反応が一番困るため)。
+    """
+    try:
+        image_bytes, content_type = download_image(message_id, config.channel_access_token)
+    except Exception as e:
+        logger.warning("image download failed: %s", e)
+        reply_text(reply_token, "画像の取得に失敗しました。", config.channel_access_token)
+        return
+
+    try:
+        ok, reply = update_artist_photo(artist, image_bytes, content_type)
+    except Exception as e:
+        logger.error("update_artist_photo failed: %s", e, exc_info=True)
+        ok, reply = False, "「%s」の更新に失敗しました" % artist
+
+    if not ok:
+        reply_text(reply_token, reply, config.channel_access_token)
+        return
+
+    # 更新できたら、そのまま選択済みイベントの 2 枚を作って同じ reply にまとめる。
+    try:
+        images, failures = render_flyer_set_for_project(project_id)
+    except Exception as e:
+        logger.error("regenerate after update failed: pid=%s: %s", project_id, e, exc_info=True)
+        images, failures = [], []
+
+    messages: List[dict] = [{"type": "text", "text": reply}]
+    if images:
+        messages.extend(images)
+        notice = build_failure_notice(failures)
+        if notice:
+            messages.append({"type": "text", "text": notice})
+    else:
+        messages.append({
+            "type": "text",
+            "text": "画像の再生成に失敗しました(アー写の更新は完了しています)。",
+        })
     reply_messages(reply_token, messages, config.channel_access_token)
 
 
-def _regenerate_and_reply(project_id: int, artist: str, reply_token: str,
+def _spawn_photo_update(project_id: int, artist: str, message_id: str,
+                        reply_token: str, config: BotConfig) -> threading.Thread:
+    """写真更新 + 再生成を daemon thread に逃がして即座に戻る。"""
+    t = threading.Thread(
+        target=_update_photo_and_reply,
+        args=(project_id, artist, message_id, reply_token, config),
+        daemon=True,
+        name="photo-update-%s" % project_id,
+    )
+    t.start()
+    return t
+
+
+def _regenerate_and_reply(project_id: int, reply_token: str,
                           config: BotConfig) -> None:
     """フライヤー 2 枚を生成して reply する。★別スレッドから呼ばれる想定。
 
@@ -578,12 +802,12 @@ def _regenerate_and_reply(project_id: int, artist: str, reply_token: str,
     reply_messages(reply_token, messages, config.channel_access_token)
 
 
-def _spawn_regeneration(project_id: int, artist: str, reply_token: str,
+def _spawn_regeneration(project_id: int, reply_token: str,
                         config: BotConfig) -> threading.Thread:
     """再生成を daemon thread に逃がして即座に戻る(callback は 200 をすぐ返す)。"""
     t = threading.Thread(
         target=_regenerate_and_reply,
-        args=(project_id, artist, reply_token, config),
+        args=(project_id, reply_token, config),
         daemon=True,
         name="flyer-regen-%s" % project_id,
     )
@@ -611,16 +835,14 @@ def handle_event(event: dict, config: BotConfig) -> None:
     if not _passes_group_guard(group_id, config):
         return
 
-    # --- postback(イベント選択ボタン)---
+    # --- postback(ボタン)---
     # ボタンはメンション起動フローの続きなので、ここではメンションを要求しない
     # (グループ許可リストのガードは上で通過済み)。
     if event_type == "postback":
         parsed = parse_postback_data(((event.get("postback") or {}).get("data")) or "")
         if not parsed:
             return  # 不正 data は静かに無視
-        project_id, artist = parsed
-        # ★重い生成は別スレッド。callback は 200 を即返す。
-        _spawn_regeneration(project_id, artist, reply_token, config)
+        _handle_postback(parsed, reply_token, source.get("userId"), config)
         return
 
     msg_type = message.get("type")
@@ -633,55 +855,24 @@ def handle_event(event: dict, config: BotConfig) -> None:
             return  # 自ボット宛でないテキストは無視
         cleaned = strip_self_mentions(message.get("text", ""), mentionees)
 
-        # トリガー1(アー写差し替え)を先に判定し、無ければトリガー2(最新を取得)。
-        name = extract_artist_name(cleaned)
-        if not name:
-            latest_name = extract_artist_name(cleaned, markers=_LATEST_MARKERS)
-            if latest_name:
-                # 段階B B-3 トリガー2: 写真を待たずにイベント選択へ進む
-                _reply_event_choices(reply_token, latest_name, config)
-                return
-            reply_text(
-                reply_token,
-                "アー写更新は「<アーティスト名>のアー写更新」と送ってから画像を送ってください。\n"
-                "写真を変えずに最新の画像だけ欲しいときは「<アーティスト名>の最新」と送ってください。",
-                config.channel_access_token,
-            )
+        # ★B-3.1: 名前はテキストから読まない。マーカーで flow を決めてボタンに渡す。
+        flow = _detect_flow(cleaned)
+        if flow is None:
+            reply_text(reply_token, _USAGE_TEXT, config.channel_access_token)
             return
-        if not user_id:
-            return  # pending は userId 単位。取れないなら写真待ちに入れない
-        pending_store.put(user_id, name, now)
-        reply_text(
-            reply_token,
-            f"「{name}」のアー写を待っています。画像を送ってください(5分以内)。",
-            config.channel_access_token,
-        )
+        _reply_event_page(reply_token, flow, page=0, config=config)
         return
 
     if msg_type == "image":
-        name = pending_store.pop_valid(user_id, now)
-        if not name:
+        pending = pending_store.pop_valid(user_id, now)
+        if not pending:
             return  # 直近の pending が無い画像は無視
-        try:
-            image_bytes, content_type = download_image(
-                message.get("id"), config.channel_access_token
-            )
-        except Exception as e:
-            logger.warning("image download failed: %s", e)
-            reply_text(reply_token, "画像の取得に失敗しました。", config.channel_access_token)
-            return
-        try:
-            ok, reply = update_artist_photo(name, image_bytes, content_type)
-        except Exception as e:
-            logger.error("update_artist_photo failed: %s", e, exc_info=True)
-            ok, reply = False, f"「{name}」の更新に失敗しました"
-
-        if not ok:
-            reply_text(reply_token, reply, config.channel_access_token)
-            return
-
-        # 段階B B-3 トリガー1 の後段: 更新できたら、そのまま再生成するイベントを選ばせる。
-        _reply_event_choices(reply_token, name, config, prefix=reply)
+        project_id, artist = pending
+        # ★download → 更新 → 2 枚生成 まで数十秒かかるのでバックグラウンドへ。
+        #   callback は 200 を即返す(reply token は約 1 分有効)。
+        _spawn_photo_update(
+            project_id, artist, message.get("id"), reply_token, config
+        )
         return
 
     # その他のメッセージ種別は無視
