@@ -119,10 +119,15 @@ def test_group_guard_empty_allowlist_allows_any_group():
     assert main._passes_group_guard("Gany", _cfg(groups=())) is True
 
 
-def test_group_guard_respects_allowlist():
+def test_group_guard_ignores_static_allowlist():
+    """★B-4: 静的許可リスト(ALLOWED_GROUP_IDS)によるゲートは撤去した。
+
+    どのグループが使えるかは activation_service(オーナーが「起動」と送ったか)が決める。
+    _passes_group_guard は「グループ発かどうか」だけを見る。
+    """
     cfg = _cfg(groups=("Gok",))
     assert main._passes_group_guard("Gok", cfg) is True
-    assert main._passes_group_guard("Gng", cfg) is False
+    assert main._passes_group_guard("Gng", cfg) is True, "許可リスト外でもガードは通す"
 
 
 def test_parse_id_set():

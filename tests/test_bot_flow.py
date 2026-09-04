@@ -422,9 +422,12 @@ def test_text_without_mention_is_ignored(sent, stub_events):
     assert sent == []
 
 
-def test_group_not_allowed_is_ignored(sent, stub_events):
+def test_unknown_group_gets_not_activated_hint(sent, stub_events, activation):
+    """★B-4: 静的許可リストは撤去された。未起動グループは「無反応」ではなく
+    「まだ起動していません」のヒントを返す(招待された人が次にどうすればいいか分かる)。
+    """
     bm.handle_event(_text_event("@Bot アー写変更", group="Gother"), _config())
-    assert sent == []
+    assert sent[0][1][0]["text"] == bm.MSG_NOT_ACTIVATED
 
 
 def test_dm_is_ignored(sent, stub_events):
@@ -703,3 +706,202 @@ def test_callback_rejects_bad_signature(line_env):
     r = line_env.post("/callback", content=b'{"events":[]}',
                       headers={"X-Line-Signature": "bogus"})
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# B-4: グループ起動制御
+# ---------------------------------------------------------------------------
+OWNER = "Uowner"
+
+
+def _cfg_b4(owners=(OWNER,)):
+    """B-4: ALLOWED_GROUP_IDS はゲートに使われないので空で渡す。"""
+    return bm.BotConfig(
+        channel_secret="s",
+        channel_access_token="AT",
+        owner_user_ids=frozenset(owners),
+        allowed_group_ids=frozenset(),
+    )
+
+
+@pytest.fixture(autouse=True)
+def activation(monkeypatch):
+    """activation_service をメモリ集合で差し替える(Storage に触らない)。
+
+    ★autouse: B-4 でグループ起動制御が入ったため、既存の会話フローのテストは
+      「起動済みのグループ」を前提にする。未起動を試すテストは
+      activation["active"].clear() してから実行すること。
+    """
+    state = {"active": {GROUP}}
+    import services.activation_service as act
+
+    monkeypatch.setattr(act, "is_group_active", lambda gid: gid in state["active"])
+    monkeypatch.setattr(act, "activate_group",
+                        lambda gid, uid: state["active"].add(gid))
+    monkeypatch.setattr(act, "deactivate_group",
+                        lambda gid: state["active"].discard(gid))
+    return state
+
+
+def _member_left_event(user_ids, group=GROUP):
+    return {
+        "type": "memberLeft",
+        "replyToken": "RT",
+        "source": {"type": "group", "groupId": group},
+        "left": {"members": [{"type": "user", "userId": u} for u in user_ids]},
+    }
+
+
+# --- 起動 ---
+def test_owner_activates_group(sent, activation):
+    """★オーナーの「起動」で有効化 + 起動文言。"""
+    activation["active"].clear()
+    bm.handle_event(_text_event("@Bot 起動", user=OWNER), _cfg_b4())
+    assert GROUP in activation["active"]
+    assert sent[0][1][0]["text"] == bm.MSG_ACTIVATED
+
+
+def test_non_owner_cannot_activate(sent, activation):
+    """★非オーナーの「起動」は拒否文言(有効化しない)。"""
+    activation["active"].clear()
+    bm.handle_event(_text_event("@Bot 起動", user="Ustranger"), _cfg_b4())
+    assert GROUP not in activation["active"]
+    assert sent[0][1][0]["text"] == bm.MSG_ACTIVATE_DENIED
+
+
+def test_activate_when_already_active(sent, activation):
+    """★既に有効なら「すでに起動しています」。"""
+    bm.handle_event(_text_event("@Bot 起動", user=OWNER), _cfg_b4())
+    assert sent[0][1][0]["text"] == bm.MSG_ALREADY_ACTIVE
+
+
+def test_already_active_message_even_for_non_owner(sent, activation):
+    """有効なグループでは非オーナーの「起動」も「すでに起動」を返す(拒否ではない)。"""
+    bm.handle_event(_text_event("@Bot 起動", user="Ustranger"), _cfg_b4())
+    assert sent[0][1][0]["text"] == bm.MSG_ALREADY_ACTIVE
+
+
+# --- 通常依頼のゲート ---
+def test_request_in_inactive_group_gets_hint(sent, activation, stub_events):
+    """★未起動グループの依頼は無反応ではなくヒント文言を返す。"""
+    activation["active"].clear()
+    bm.handle_event(_text_event("@Bot アー写変更"), _cfg_b4())
+    assert sent[0][1][0]["text"] == bm.MSG_NOT_ACTIVATED
+
+
+def test_request_in_active_group_proceeds(sent, activation, stub_events):
+    bm.handle_event(_text_event("@Bot アー写変更"), _cfg_b4())
+    assert "quickReply" in sent[0][1][0]
+
+
+def test_postback_in_inactive_group_gets_hint(sent, activation):
+    """★無効化後に古いボタンを押されても処理しない。"""
+    activation["active"].clear()
+    bm.handle_event(_postback_event("evt|flow=replace|pid=39"), _cfg_b4())
+    assert sent[0][1][0]["text"] == bm.MSG_NOT_ACTIVATED
+
+
+def test_image_in_inactive_group_is_ignored(monkeypatch, activation):
+    activation["active"].clear()
+    bm.pending_store._data.clear()
+    bm.pending_store.put(USER, 39, "A", _time.time())
+    monkeypatch.setattr(bm, "_spawn_photo_update",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+    bm.handle_event(_image_event(), _cfg_b4())
+
+
+def test_any_group_can_be_activated_no_static_allowlist(sent, activation):
+    """★ALLOWED_GROUP_IDS ゲートは撤去済み。どのグループでも起動できる。"""
+    bm.handle_event(_text_event("@Bot 起動", group="Gbrandnew", user=OWNER), _cfg_b4())
+    assert "Gbrandnew" in activation["active"]
+
+
+# --- @All(isSelf 無し)は無反応のまま ---
+def test_at_all_does_not_activate(sent, activation):
+    """★@All(自ボット宛メンションでない)では起動も依頼も無反応(回帰固定)。"""
+    activation["active"].clear()
+    bm.handle_event(_text_event("起動", mentioned=False, user=OWNER), _cfg_b4())
+    assert sent == []
+    assert activation["active"] == set()
+
+
+def test_at_all_does_not_trigger_request(sent, activation, stub_events):
+    bm.handle_event(_text_event("アー写変更", mentioned=False), _cfg_b4())
+    assert sent == []
+
+
+# --- memberLeft / leave / join ---
+def test_owner_leaving_deactivates_and_notifies(sent, activation):
+    """★オーナー退会 → 無効化 + 停止文言。"""
+    bm.handle_event(_member_left_event([OWNER]), _cfg_b4())
+    assert GROUP not in activation["active"]
+    assert sent[0][1][0]["text"] == bm.MSG_OWNER_LEFT
+
+
+def test_non_owner_leaving_does_nothing(sent, activation):
+    bm.handle_event(_member_left_event(["Ustranger"]), _cfg_b4())
+    assert GROUP in activation["active"]
+    assert sent == []
+
+
+def test_owner_leaving_inactive_group_is_silent(sent, activation):
+    """もともと無効なら通知しない(ノイズ防止)。"""
+    activation["active"].clear()
+    bm.handle_event(_member_left_event([OWNER]), _cfg_b4())
+    assert sent == []
+
+
+def test_bot_leave_removes_group_silently(sent, activation):
+    """★bot 自身の退出は静かに掃除するだけ(発言しない)。"""
+    bm.handle_event(
+        {"type": "leave", "source": {"type": "group", "groupId": GROUP}}, _cfg_b4()
+    )
+    assert GROUP not in activation["active"]
+    assert sent == []
+
+
+def test_bot_join_does_nothing(sent, activation):
+    """★join ではデフォルト無効のまま(勝手に有効化しない)。"""
+    activation["active"].clear()
+    bm.handle_event(
+        {"type": "join", "source": {"type": "group", "groupId": GROUP}}, _cfg_b4()
+    )
+    assert activation["active"] == set()
+    assert sent == []
+
+
+def test_dm_events_are_ignored(sent, activation):
+    ev = _member_left_event([OWNER])
+    ev["source"] = {"type": "user", "userId": OWNER}
+    bm.handle_event(ev, _cfg_b4())
+    assert sent == []
+
+
+# --- webhook レベル ---
+@pytest.mark.parametrize("payload_event", [
+    {"type": "memberLeft", "replyToken": "RT",
+     "source": {"type": "group", "groupId": GROUP},
+     "left": {"members": [{"type": "user", "userId": OWNER}]}},
+    {"type": "leave", "source": {"type": "group", "groupId": GROUP}},
+    {"type": "join", "source": {"type": "group", "groupId": GROUP}},
+])
+def test_callback_returns_200_for_membership_events(line_env, monkeypatch, payload_event):
+    monkeypatch.setenv("OWNER_USER_IDS", OWNER)
+    monkeypatch.setattr(bm, "_is_group_active", lambda gid: True)
+    monkeypatch.setattr(bm, "_deactivate_group", lambda gid: None)
+    monkeypatch.setattr(bm, "reply_text", lambda *a, **k: None)
+    r = _signed_post(line_env, {"events": [payload_event]})
+    assert r.status_code == 200
+
+
+def test_activation_lookup_failure_falls_back_to_inactive(monkeypatch, sent, stub_events, activation):
+    """★Storage 障害で判定不能なら「無効」に倒す(勝手に使えてしまうより安全)。"""
+    activation["active"].clear()
+    import services.activation_service as act
+
+    def _boom(gid):
+        raise RuntimeError("storage down")
+
+    monkeypatch.setattr(act, "is_group_active", _boom)
+    bm.handle_event(_text_event("@Bot アー写変更"), _cfg_b4())
+    assert sent[0][1][0]["text"] == bm.MSG_NOT_ACTIVATED

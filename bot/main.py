@@ -54,6 +54,29 @@ _REPLACE_MARKERS = ("アー写変更", "アー写差し替え", "アー写差替
                     "写真変更", "写真差し替え", "写真差替")
 _GET_MARKERS = ("最新", "フライヤー", "再生成")
 
+# B-4: グループ起動の合図
+_ACTIVATE_MARKERS = ("起動",)
+
+# ---------------------------------------------------------------------------
+# 返信文言(B-4)。★後で文言だけ直したいときのために 1 箇所へ集約する。
+# ---------------------------------------------------------------------------
+MSG_ALREADY_ACTIVE = "すでに起動しています。メンションを付けてご依頼ください。"
+MSG_ACTIVATED = (
+    "起動しました。メンションを付けてご依頼ください。"
+    "グループラインに参加している【全員】が僕を利用可能です。"
+)
+MSG_ACTIVATE_DENIED = (
+    "BOTTZからの指示で起動します。BOTTZをこのグループラインへ招待してください。"
+)
+MSG_NOT_ACTIVATED = (
+    "このグループはまだ起動していません。"
+    "オーナーが「起動」と送ると、参加者全員が使えるようになります。"
+)
+MSG_OWNER_LEFT = (
+    "BOTTZがグループラインから退会したので機能を停止します。"
+    "再開する場合はBOTTZをこのグループラインへ招待してください。"
+)
+
 
 # ---------------------------------------------------------------------------
 # 設定(環境変数からの遅延読み込み。import 時には読まない)
@@ -607,12 +630,13 @@ def _source_group_id(source: dict) -> Optional[str]:
 
 
 def _passes_group_guard(group_id: Optional[str], config: BotConfig) -> bool:
-    """グループ発 & (許可リストが空なら全許可 / 非空なら含まれること)。"""
-    if group_id is None:  # グループ以外(DM/ルーム)は不可
-        return False
-    if config.allowed_group_ids and group_id not in config.allowed_group_ids:
-        return False
-    return True
+    """グループ発かどうかだけを見る。DM / ルームは従来どおり不可。
+
+    ★B-4: 静的許可リスト(ALLOWED_GROUP_IDS)によるゲートは撤去した。
+      どのグループが使えるかは activation_service(オーナーが「起動」と送ったか)が決める。
+      env ALLOWED_GROUP_IDS は互換のため BotConfig に残すが、もう判定には使わない。
+    """
+    return group_id is not None
 
 
 _USAGE_TEXT = (
@@ -621,6 +645,72 @@ _USAGE_TEXT = (
     "・最新のフライヤーだけ欲しい → 「フライヤー」とメンションしてください\n"
     "そのあとはボタンで選べます。"
 )
+
+
+def _handle_member_left(event: dict, group_id: Optional[str], reply_token: str,
+                        config: BotConfig) -> None:
+    """オーナーが退会したら、そのグループを無効化して停止を通知する(B-4)。
+
+    オーナー以外の退会は何もしない。既に無効なグループでも何もしない
+    (無効化済みに対して停止文言を出すとノイズになる)。
+    ★オーナーが再参加しても自動では再有効化しない。再開はオーナーの「起動」で行う。
+    """
+    members = ((event.get("left") or {}).get("members")) or []
+    left_ids = {m.get("userId") for m in members if isinstance(m, dict)}
+    if not (left_ids & set(config.owner_user_ids)):
+        return  # 退会したのはオーナーではない
+    if not _is_group_active(group_id):
+        return  # もともと無効
+    _deactivate_group(group_id)
+    logger.info("group deactivated by owner leave: %s", group_id)
+    reply_text(reply_token, MSG_OWNER_LEFT, config.channel_access_token)
+
+
+def _is_group_active(group_id: Optional[str]) -> bool:
+    """グループが起動済みか(activation_service への薄いラッパ)。
+
+    遅延 import で bot.main を env 非依存に保つ。Storage 障害でも webhook を落とさない。
+    """
+    if not group_id:
+        return False
+    try:
+        from services import activation_service
+
+        return activation_service.is_group_active(group_id)
+    except Exception as e:
+        logger.error("activation lookup failed: %s", e, exc_info=True)
+        return False  # 判定不能なら「無効」に倒す(勝手に使えてしまうより安全)
+
+
+def _activate_group(group_id: str, user_id: Optional[str]) -> None:
+    try:
+        from services import activation_service
+
+        activation_service.activate_group(group_id, user_id)
+    except Exception as e:
+        logger.error("activate failed: %s", e, exc_info=True)
+
+
+def _deactivate_group(group_id: str) -> None:
+    try:
+        from services import activation_service
+
+        activation_service.deactivate_group(group_id)
+    except Exception as e:
+        logger.error("deactivate failed: %s", e, exc_info=True)
+
+
+def _is_owner(user_id: Optional[str], config: BotConfig) -> bool:
+    """送信者がオーナー(OWNER_USER_IDS に含まれる)か。"""
+    return bool(user_id) and user_id in config.owner_user_ids
+
+
+def _is_activation_request(text: str) -> bool:
+    """メンション除去後テキストが「起動」の合図を含むか。"""
+    if not text:
+        return False
+    s = text.replace("　", " ")
+    return any(m in s for m in _ACTIVATE_MARKERS)
 
 
 def _detect_flow(text: str) -> Optional[str]:
@@ -818,7 +908,7 @@ def _spawn_regeneration(project_id: int, reply_token: str,
 def handle_event(event: dict, config: BotConfig) -> None:
     """1 イベントを処理する。ガード非通過は静かに無視(reply しない)。"""
     event_type = event.get("type")
-    if event_type not in ("message", "postback"):
+    if event_type not in ("message", "postback", "memberLeft", "leave", "join"):
         return
     source = event.get("source") or {}
     message = event.get("message") or {}
@@ -835,10 +925,29 @@ def handle_event(event: dict, config: BotConfig) -> None:
     if not _passes_group_guard(group_id, config):
         return
 
+    # --- B-4: メンバー/ボット自身の出入り ---
+    if event_type == "memberLeft":
+        _handle_member_left(event, group_id, reply_token, config)
+        return
+    if event_type == "leave":
+        # Bot 自身が退出 / kick された。もう発言できないので静かに掃除するだけ。
+        logger.info("bot left group: %s", group_id)
+        _deactivate_group(group_id)
+        return
+    if event_type == "join":
+        # Bot が追加された。★デフォルト無効なので何もしない(オーナーの「起動」待ち)。
+        logger.info("bot joined group: %s (inactive until owner activates)", group_id)
+        return
+
     # --- postback(ボタン)---
     # ボタンはメンション起動フローの続きなので、ここではメンションを要求しない
     # (グループ許可リストのガードは上で通過済み)。
     if event_type == "postback":
+        # B-4: ボタンは有効グループにしか出さないが、念のため再チェックする
+        # (古いボタンを無効化後に押された場合など)。
+        if not _is_group_active(group_id):
+            reply_text(reply_token, MSG_NOT_ACTIVATED, config.channel_access_token)
+            return
         parsed = parse_postback_data(((event.get("postback") or {}).get("data")) or "")
         if not parsed:
             return  # 不正 data は静かに無視
@@ -855,6 +964,23 @@ def handle_event(event: dict, config: BotConfig) -> None:
             return  # 自ボット宛でないテキストは無視
         cleaned = strip_self_mentions(message.get("text", ""), mentionees)
 
+        # --- B-4: 起動制御を最上流で捌く ---
+        active = _is_group_active(group_id)
+        if _is_activation_request(cleaned):
+            if active:
+                reply_text(reply_token, MSG_ALREADY_ACTIVE, config.channel_access_token)
+            elif _is_owner(user_id, config):
+                _activate_group(group_id, user_id)
+                reply_text(reply_token, MSG_ACTIVATED, config.channel_access_token)
+            else:
+                reply_text(reply_token, MSG_ACTIVATE_DENIED, config.channel_access_token)
+            return
+
+        # 通常の依頼は有効グループのときだけ処理する
+        if not active:
+            reply_text(reply_token, MSG_NOT_ACTIVATED, config.channel_access_token)
+            return
+
         # ★B-3.1: 名前はテキストから読まない。マーカーで flow を決めてボタンに渡す。
         flow = _detect_flow(cleaned)
         if flow is None:
@@ -864,6 +990,8 @@ def handle_event(event: dict, config: BotConfig) -> None:
         return
 
     if msg_type == "image":
+        if not _is_group_active(group_id):
+            return  # 無効グループの画像は静かに無視(pending も持たないはず)
         pending = pending_store.pop_valid(user_id, now)
         if not pending:
             return  # 直近の pending が無い画像は無視
