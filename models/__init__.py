@@ -5,6 +5,7 @@
 - DB と Session State の間に立つ「型のしっかりした中間表現」
 - 各 view はこの型を介してデータをやり取りする
 """
+from models.event import EventOption
 from models.project import (
     ProjectDraft,
     ProjectView,
@@ -22,6 +23,7 @@ from models.timetable import (
 )
 
 __all__ = [
+    "EventOption",
     "ProjectDraft",
     "ProjectView",
     "TicketDraft",

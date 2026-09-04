@@ -125,3 +125,42 @@ def _draft_to_row(project_id: int, sort_order: int, d: TimetableRowDraft) -> Tim
         add_goods_place=d.add_goods_place,
         is_hidden=bool(d.is_hidden),
     )
+
+
+# ---------------------------------------------------------
+# 段階B B-3: アーティスト出演プロジェクトの read 窓口
+# ---------------------------------------------------------
+def find_projects_by_artist_name(db: Session, name: str) -> List[tuple]:
+    """artist_name にその名前の行を持つプロジェクトを (id, title, event_date) で返す。
+
+    名前解決は既存(artist 検索)と同型:
+      1. 完全一致
+      2. 0 件なら空白を除いた文字列で ilike 部分一致にフォールバック
+
+    ★1 クエリ(JOIN + DISTINCT)で返す。プロジェクトごとに rows を引く N+1 は作らない。
+    read only(commit しない)。ORM は返さず素の tuple を返し、DTO 化は service で行う。
+    """
+    if not name:
+        return []
+
+    def _query(condition):
+        return (
+            db.query(
+                TimetableProject.id,
+                TimetableProject.title,
+                TimetableProject.event_date,
+            )
+            .join(TimetableRow, TimetableRow.project_id == TimetableProject.id)
+            .filter(condition)
+            .distinct()
+            .all()
+        )
+
+    rows = _query(TimetableRow.artist_name == name)
+    if rows:
+        return list(rows)
+
+    clean = name.replace(" ", "").replace("\u3000", "")
+    if not clean:
+        return []
+    return list(_query(TimetableRow.artist_name.ilike("%%%s%%" % clean)))
