@@ -349,3 +349,68 @@ def test_intake_path_does_not_touch_db(monkeypatch, sent, run_inline):
     bm.handle_event(_postback_event("newproj|type=mens"), _config())
     bm.handle_event(_text_event("@Bot " + FILLED), _config())          # 解析→エコー
     assert len(sent) == 4
+
+
+# ---------------------------------------------------------------------------
+# C-1.2 (3): ワンショット投入(テンプレを配らずに概要を直接投げる)
+# ---------------------------------------------------------------------------
+def test_oneshot_concept_only_parses_without_asking_type(
+    monkeypatch, sent, run_inline
+):
+    """メンション + 概要だけ(「新規作成」なし)→ 種別ボタンを出さず直接解析。
+
+    テンプレを配ってもらわず、手元の告知文をそのまま投げる使い方を正式仕様にした。
+    """
+    monkeypatch.setattr(ei, "parse_event_template", lambda text: PARSED_OK)
+    bm.handle_event(_text_event("@Bot " + FILLED), _config())
+
+    assert len(run_inline) == 1, "解析に流れていない"
+    text = _only_text(sent)
+    assert text != bm.MSG_ASK_EVENT_TYPE, "種別ボタンを出してしまっている"
+    assert "イベント種別: ガールズ" in text
+
+
+def test_oneshot_with_shinki_sakusei_in_same_message_parses(
+    monkeypatch, sent, run_inline
+):
+    """「新規作成」と概要が同じメッセージ → 概要があるので直接解析。"""
+    monkeypatch.setattr(ei, "parse_event_template", lambda text: PARSED_OK)
+    bm.handle_event(_text_event("@Bot 新規作成\n" + FILLED), _config())
+
+    assert len(run_inline) == 1
+    assert _only_text(sent) != bm.MSG_ASK_EVENT_TYPE
+
+
+def test_shinki_sakusei_alone_still_asks_type(sent, run_inline):
+    """「新規作成」だけ(概要なし)→ 従来どおり種別ボタン。"""
+    bm.handle_event(_text_event("@Bot 新規作成"), _config())
+
+    assert run_inline == [], "概要が無いのに解析へ流れている"
+    assert _only_text(sent) == bm.MSG_ASK_EVENT_TYPE
+
+
+def test_oneshot_without_type_marker_echoes_undetermined(
+    monkeypatch, sent, run_inline
+):
+    """種別行の無い告知文で LLM も判定できなければ、その旨をエコーに出す。"""
+    undetermined = {"ok": True, "reason": None,
+                    "data": dict(PARSED_OK["data"], event_type=None)}
+    monkeypatch.setattr(ei, "parse_event_template", lambda text: undetermined)
+
+    body = FILLED.split("\n", 2)[2]        # 先頭の【イベント種別】行を落とす
+    assert ei.EVENT_TYPE_MARKER not in body
+    bm.handle_event(_text_event("@Bot " + body), _config())
+
+    assert len(run_inline) == 1
+    assert ei.ECHO_EVENT_TYPE_UNKNOWN in _only_text(sent)
+
+
+def test_oneshot_still_requires_mention_and_active_group(sent, run_inline, activation):
+    """ワンショットでもガードは従来どおり(メンション必須 / 起動済みグループ)。"""
+    bm.handle_event(_text_event(FILLED, mentioned=False), _config())
+    assert sent == [] and run_inline == []
+
+    activation["active"].clear()
+    bm.handle_event(_text_event("@Bot " + FILLED), _config())
+    assert run_inline == []
+    assert _only_text(sent) == bm.MSG_NOT_ACTIVATED
