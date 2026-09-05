@@ -149,6 +149,137 @@ def create_no_image_placeholder(width, height):
     draw.text(((width - (bbox[2]-bbox[0])) / 2, (height - (bbox[3]-bbox[1])) / 2), text, fill="white")
     return img
 
+# =========================================================
+# アー写未登録枠のプレースホルダ(段階C C-6a)
+# =========================================================
+# 写真が引けない枠を黒背景 + 案内文で描く。新規イベントで出演者がまだ未登録でも
+# グリッド/フライヤーが穴あきに見えず、次に何をすればいいかが画像から分かる。
+#
+# ★create_no_image_placeholder(既存の "No Image")とは別関数にしてある。
+#   あちらは views/artists.py のアー写プレビューでも使われており、そちらに
+#   LINE 向けの案内文が出るのは筋が違うため。グリッド生成だけがこちらを使う。
+UNREGISTERED_PHOTO_TITLE = "アー写未登録"
+UNREGISTERED_PHOTO_GUIDE = "メンションを付けて\nアー写の新規登録を進めてください"
+
+# タイル高に対する文字サイズの比率(収まらなければ縮めていく)
+_PLACEHOLDER_TITLE_RATIO = 0.13
+_PLACEHOLDER_GUIDE_RATIO = 0.075
+_PLACEHOLDER_MIN_FONT = 10
+
+
+def _load_font(font_path, size):
+    """指定サイズでフォントを開く。開けなければ PIL 既定フォント。"""
+    if font_path:
+        try:
+            return ImageFont.truetype(font_path, int(size))
+        except Exception:
+            pass
+    try:
+        return ImageFont.load_default()
+    except Exception:
+        return None
+
+
+def _wrap_to_width(draw, text, font, max_width):
+    """max_width に収まるよう文字単位で折り返す(日本語なので単語境界を使わない)。
+
+    元テキストの改行は尊重する。
+    """
+    lines = []
+    for paragraph in str(text).split("\n"):
+        if not paragraph:
+            lines.append("")
+            continue
+        current = ""
+        for ch in paragraph:
+            trial = current + ch
+            if draw.textlength(trial, font=font) <= max_width or not current:
+                current = trial
+            else:
+                lines.append(current)
+                current = ch
+        if current:
+            lines.append(current)
+    return lines
+
+
+def _measure(draw, lines, font, line_gap):
+    """折り返し済みの行群の (幅, 高さ) を返す。"""
+    if not lines:
+        return 0, 0
+    widths = [draw.textlength(l, font=font) for l in lines]
+    bbox = draw.textbbox((0, 0), "あA", font=font)
+    line_h = (bbox[3] - bbox[1]) + line_gap
+    return max(widths), line_h * len(lines)
+
+
+def create_unregistered_photo_placeholder(width, height, font_path=None):
+    """アー写が無い枠を黒背景 + 案内文で描く。
+
+    中央に「アー写未登録」と、その下に登録手順の案内を出す。案内はセル幅に
+    合わせて折り返し、それでも収まらなければ文字サイズを下げる。最後まで
+    収まらない極端に小さいセルでは、タイトルだけでも読めるようにする。
+
+    font_path には materialize 済みの実パスを渡すこと(渡さないと PIL 既定
+    フォントになり日本語が豆腐化する・罠40)。
+    """
+    width = max(int(width), 1)
+    height = max(int(height), 1)
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 255))
+    draw = ImageDraw.Draw(img)
+
+    # 枠線(黒背景だけだと隣のセルとの境界が分からないため)
+    draw.rectangle([(0, 0), (width - 1, height - 1)], outline=(70, 70, 70), width=2)
+
+    inner_w = width * 0.86
+    inner_h = height * 0.86
+    line_gap = max(int(height * 0.012), 1)
+    block_gap = max(int(height * 0.05), 2)
+
+    title_size = max(height * _PLACEHOLDER_TITLE_RATIO, _PLACEHOLDER_MIN_FONT)
+    guide_size = max(height * _PLACEHOLDER_GUIDE_RATIO, _PLACEHOLDER_MIN_FONT)
+
+    title_lines = guide_lines = []
+    title_font = guide_font = None
+    total_h = 0
+    # 収まるまで縮める(タイトルと案内を同じ比率で下げる)
+    for _ in range(12):
+        title_font = _load_font(font_path, title_size)
+        guide_font = _load_font(font_path, guide_size)
+        if title_font is None or guide_font is None:
+            return img  # フォントが全く使えない環境。黒枠だけ返す(落とさない)
+        title_lines = _wrap_to_width(draw, UNREGISTERED_PHOTO_TITLE, title_font, inner_w)
+        guide_lines = _wrap_to_width(draw, UNREGISTERED_PHOTO_GUIDE, guide_font, inner_w)
+        _, th = _measure(draw, title_lines, title_font, line_gap)
+        _, gh = _measure(draw, guide_lines, guide_font, line_gap)
+        total_h = th + block_gap + gh
+        if total_h <= inner_h:
+            break
+        if title_size <= _PLACEHOLDER_MIN_FONT and guide_size <= _PLACEHOLDER_MIN_FONT:
+            # これ以上小さくできない。案内を落としてタイトルだけ残す
+            guide_lines = []
+            _, total_h = _measure(draw, title_lines, title_font, line_gap)
+            break
+        title_size = max(title_size * 0.85, _PLACEHOLDER_MIN_FONT)
+        guide_size = max(guide_size * 0.85, _PLACEHOLDER_MIN_FONT)
+
+    def _draw_block(lines, font, y):
+        bbox = draw.textbbox((0, 0), "あA", font=font)
+        line_h = (bbox[3] - bbox[1]) + line_gap
+        for line in lines:
+            w = draw.textlength(line, font=font)
+            draw.text(((width - w) / 2, y), line, font=font, fill=(255, 255, 255, 255))
+            y += line_h
+        return y
+
+    y = (height - total_h) / 2
+    y = _draw_block(title_lines, title_font, y)
+    if guide_lines:
+        y += block_gap
+        _draw_block(guide_lines, guide_font, y)
+    return img
+
+
 def load_image_from_url(url):
     if not url:
         return None  # 空 URL は失敗ではない(ログも出さない)
@@ -228,7 +359,7 @@ def _fetch_grid_images_parallel(target_artists, failures=None):
     - HTTP 取得は max_workers=8 で並列
     - 失敗時は None を返す (既存 load_image_from_url の挙動と同じ)
     - image_filename が無い / URL が None の artist は dict に含めない
-      → 呼び出し側で None が返り、create_no_image_placeholder にフォールバック
+      → 呼び出し側で None が返り、create_unregistered_photo_placeholder にフォールバック
     """
     # dedupe (artist.id がキー)
     by_id = {}
@@ -438,13 +569,22 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                     # 呼ばないだけ)。
                     cropped = apply_manual_crop(img, crop_scale, crop_x, crop_y, TILE_WIDTH, TILE_HEIGHT)
                 else:
-                    cropped = create_no_image_placeholder(TILE_WIDTH, TILE_HEIGHT)
+                    # C-6a: アー写が無い/引けない枠は黒プレースホルダ + 案内文。
+                    # 解決済みフォントを渡さないと案内が豆腐になる(罠40)。
+                    cropped = create_unregistered_photo_placeholder(
+                        TILE_WIDTH, TILE_HEIGHT,
+                        font_path=valid_font_path if font_exists else None,
+                    )
                 
                 resized_final = cropped.resize((w, h), Image.LANCZOS)
                 canvas.paste(resized_final, (int(x), int(current_y)))
             except Exception as e:
-                print(f"Image Error ({artist_name}): {e}")
-                ph = create_no_image_placeholder(w, h)
+                logger.warning("artist photo render failed: name=%r: %s",
+                               artist_name, e, exc_info=True)
+                # 加工中の例外でも、利用者から見れば「写真が出ていない枠」なので
+                # 同じ案内を出す(やることも同じ = アー写を登録し直す)。
+                ph = create_unregistered_photo_placeholder(
+                    w, h, font_path=valid_font_path if font_exists else None)
                 canvas.paste(ph, (int(x), int(current_y)))
 
             # --- テキストエリア背景 ---
