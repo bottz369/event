@@ -55,6 +55,7 @@ DB/画像ロジックは新規に書きません(§40 モノリス Bot)。
 | `OWNER_USER_IDS` | **グループを「起動」できる人の userId**(カンマ区切り)。B-4 の起動可否判定に使う |
 | `ALLOWED_GROUP_IDS` | ~~反応を許可する groupId~~ **B-4 で未使用**(起動ストアが置き換えた)。空でよい |
 | `EVENT_API_KEY` | read 専用 `/api/*` の認証キー(`Authorization: Bearer <key>` / `X-API-Key` で照合。Webhook の LINE 署名検証とは別系統) |
+| `ANTHROPIC_API_KEY` | 記入テンプレの LLM 解析(段階C C-1・§52)。**未設定でも Bot は起動する**が、テンプレ解析だけが「解析機能が未設定です」と案内して終わる |
 
 `EVENT_API_KEY` は Railway では他の変数と同じく Variables に設定する。ローカルで `/api` を叩くときは
 `export EVENT_API_KEY='任意の長いランダム文字列'` してから uvicorn を起動する(未設定だと `/api/*` は全て 401)。

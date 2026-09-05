@@ -57,6 +57,9 @@ _GET_MARKERS = ("最新", "フライヤー", "再生成")
 # B-4: グループ起動の合図
 _ACTIVATE_MARKERS = ("起動",)
 
+# 段階C C-1: 記入テンプレを配る合図(§52)
+_INTAKE_MARKERS = ("新規作成",)
+
 # ---------------------------------------------------------------------------
 # 返信文言(B-4)。★後で文言だけ直したいときのために 1 箇所へ集約する。
 # ---------------------------------------------------------------------------
@@ -72,6 +75,19 @@ MSG_NOT_ACTIVATED = (
     "このグループはまだ起動していません。"
     "オーナーが「起動」と送ると、参加者全員が使えるようになります。"
 )
+# --- 段階C C-1: 記入テンプレのやりとり ---
+MSG_INTAKE_PARSING = "受け取りました。読み取り中です…(数秒お待ちください)"
+MSG_INTAKE_FAILED = "解析に失敗しました。もう一度お試しください。"
+MSG_INTAKE_NO_API_KEY = (
+    "解析機能が未設定のため読み取れませんでした。管理者にご連絡ください。"
+)
+
+
+def build_intake_missing_message(missing) -> str:
+    """必須項目が読み取れなかったときの案内文。"""
+    return "%s が読み取れませんでした。記入して再送してください。" % "、".join(missing)
+
+
 MSG_OWNER_LEFT = (
     "BOTTZがグループラインから退会したので機能を停止します。"
     "再開する場合はBOTTZをこのグループラインへ招待してください。"
@@ -641,6 +657,7 @@ def _passes_group_guard(group_id: Optional[str], config: BotConfig) -> bool:
 
 _USAGE_TEXT = (
     "使い方(名前の入力は不要です):\n"
+    "・新しいイベントを作る → 「新規作成」とメンションしてください\n"
     "・アー写を差し替える → 「アー写変更」とメンションしてください\n"
     "・最新のフライヤーだけ欲しい → 「フライヤー」とメンションしてください\n"
     "そのあとはボタンで選べます。"
@@ -711,6 +728,97 @@ def _is_activation_request(text: str) -> bool:
         return False
     s = text.replace("　", " ")
     return any(m in s for m in _ACTIVATE_MARKERS)
+
+
+def _is_intake_request(text: str) -> bool:
+    """メンション除去後テキストが「新規作成」の合図を含むか(C-1)。"""
+    if not text:
+        return False
+    s = text.replace("　", " ")
+    return any(m in s for m in _INTAKE_MARKERS)
+
+
+def _looks_like_filled_intake(text: str) -> bool:
+    """埋めて返ってきた記入テンプレか(ステートレス判定・C-1)。
+
+    pending を持たないので本文のセクション見出しだけで判定する。判定ロジックは
+    services 側(3層規律)。services が読めない環境でも webhook は落とさない。
+    """
+    try:
+        from services import event_intake
+
+        return event_intake.looks_like_filled_template(text)
+    except Exception as e:
+        logger.error("intake shape check failed: %s", e, exc_info=True)
+        return False
+
+
+def _reply_intake_template(reply_token: str, config: BotConfig) -> None:
+    """記入テンプレを返信する(C-1 (A))。"""
+    try:
+        from services import event_intake
+
+        template = event_intake.MSG_INTAKE_TEMPLATE
+    except Exception as e:
+        logger.error("intake template unavailable: %s", e, exc_info=True)
+        reply_text(reply_token, MSG_INTAKE_FAILED, config.channel_access_token)
+        return
+    reply_text(reply_token, template, config.channel_access_token)
+
+
+def _parse_intake_and_reply(text: str, reply_token: str, config: BotConfig) -> None:
+    """記入テンプレを解析してエコー確認を返す。★別スレッドから呼ばれる想定。
+
+    LLM 呼び出しは数秒かかるので callback を待たせない(reply token は約 1 分有効)。
+    例外は握って必ず何かを返す(無反応が一番困るため)。
+    ★C-1 は DB に一切書き込まない。作成は C-2。
+    """
+    try:
+        from services import event_intake
+
+        parsed = event_intake.parse_event_template(text)
+        if not parsed.get("ok"):
+            reason = parsed.get("reason")
+            if reason == event_intake.REASON_NO_API_KEY:
+                reply_text(reply_token, MSG_INTAKE_NO_API_KEY, config.channel_access_token)
+            else:
+                logger.warning("intake parse failed: reason=%s", reason)
+                reply_text(reply_token, MSG_INTAKE_FAILED, config.channel_access_token)
+            return
+
+        ok, missing = event_intake.validate_intake(parsed)
+        if not ok:
+            reply_text(
+                reply_token,
+                build_intake_missing_message(missing),
+                config.channel_access_token,
+            )
+            return
+
+        reply_text(
+            reply_token,
+            event_intake.format_intake_echo(parsed),
+            config.channel_access_token,
+        )
+    except Exception as e:
+        logger.error("intake parse crashed: %s", e, exc_info=True)
+        try:
+            reply_text(reply_token, MSG_INTAKE_FAILED, config.channel_access_token)
+        except Exception:
+            logger.error("intake failure reply also failed", exc_info=True)
+
+
+def _spawn_intake_parse(text: str, reply_token: str,
+                        config: BotConfig) -> threading.Thread:
+    """テンプレ解析を daemon thread に逃がして即座に戻る(callback は 200 をすぐ返す)。"""
+    t = threading.Thread(
+        target=_parse_intake_and_reply,
+        args=(text, reply_token, config),
+        daemon=True,
+        name="intake-parse",
+    )
+    t.start()
+    return t
 
 
 def _detect_flow(text: str) -> Optional[str]:
@@ -979,6 +1087,17 @@ def handle_event(event: dict, config: BotConfig) -> None:
         # 通常の依頼は有効グループのときだけ処理する
         if not active:
             reply_text(reply_token, MSG_NOT_ACTIVATED, config.channel_access_token)
+            return
+
+        # --- 段階C C-1: 記入テンプレのやりとり ---
+        # ★「埋めたテンプレ」判定を先に置く。テンプレ本文が「新規作成」等の語を
+        #   含んでいても、テンプレを配り直さずに解析へ進めるため(見出しの有無で
+        #   判定するので、素の「新規作成」はここに掛からない)。
+        if _looks_like_filled_intake(cleaned):
+            _spawn_intake_parse(cleaned, reply_token, config)
+            return
+        if _is_intake_request(cleaned):
+            _reply_intake_template(reply_token, config)
             return
 
         # ★B-3.1: 名前はテキストから読まない。マーカーで flow を決めてボタンに渡す。

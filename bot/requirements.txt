@@ -13,3 +13,7 @@ supabase==2.31.0
 requests==2.34.2
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+# 段階C C-1(§52): 記入テンプレの LLM 解析。httpx ベースで starlette には触れないため
+# streamlit 1.59.2 / fastapi 0.115.6 の共存(罠39)に影響しない。
+# 追加されるのは anthropic / distro / docstring_parser / jiter / sniffio のみ(依存解決で確認済み)。
+anthropic==0.125.0
