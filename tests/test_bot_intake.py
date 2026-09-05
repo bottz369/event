@@ -60,6 +60,31 @@ def sent(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def draft_store(monkeypatch):
+    """intake_draft_store をメモリの偽物に差し替える(実 Storage に触らせない)。
+
+    ★autouse: C-2 でエコー生成時に下書きを保存するようになったため、
+      すべての intake テストがこれを通る。
+    """
+    from services import intake_draft_store as ds
+
+    state = {"saved": {}, "deleted": [], "next_id": "d" * 32, "fail_save": False}
+
+    def _save(data):
+        if state["fail_save"]:
+            return None
+        did = state["next_id"]
+        state["saved"][did] = data
+        return did
+
+    monkeypatch.setattr(ds, "save_draft", _save)
+    monkeypatch.setattr(ds, "load_draft", lambda did: state["saved"].get(did))
+    monkeypatch.setattr(ds, "delete_draft",
+                        lambda did: bool(state["deleted"].append(did)) or True)
+    return state
+
+
+@pytest.fixture(autouse=True)
 def activation(monkeypatch):
     """activation_service をメモリ集合で差し替える(Storage に触らない)。"""
     state = {"active": {GROUP}}
@@ -138,11 +163,24 @@ PARSED_OK = {
 }
 
 
-def _only_text(sent):
+def _only_text_or_msg(sent):
+    """返信が 1 通であることを確かめ、そのメッセージ dict を返す。"""
     assert len(sent) == 1, f"返信が 1 通ではない: {sent}"
     msgs = sent[0][1]
     assert len(msgs) == 1 and msgs[0]["type"] == "text"
-    return msgs[0]["text"]
+    return msgs[0]
+
+
+def _only_text(sent):
+    return _only_text_or_msg(sent)["text"]
+
+
+def _labels(msg):
+    return [i["action"]["label"] for i in msg.get("quickReply", {}).get("items", [])]
+
+
+def _datas(msg):
+    return [i["action"]["data"] for i in msg.get("quickReply", {}).get("items", [])]
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +295,7 @@ def test_dm_is_ignored(sent, run_inline):
 def test_successful_parse_replies_echo(monkeypatch, sent, run_inline):
     monkeypatch.setattr(ei, "parse_event_template", lambda text: PARSED_OK)
     bm.handle_event(_text_event("@Bot " + FILLED), _config())
-    text = _only_text(sent)
+    text = _only_text_or_msg(sent)["text"]
     assert "rock field ULTRA LIVE" in text and "2026-11-03" in text
     assert "1. NecroA" in text
     assert "イベント種別: ガールズ" in text, "エコーに種別が出ていない"
@@ -414,3 +452,271 @@ def test_oneshot_still_requires_mention_and_active_group(sent, run_inline, activ
     bm.handle_event(_text_event("@Bot " + FILLED), _config())
     assert run_inline == []
     assert _only_text(sent) == bm.MSG_NOT_ACTIVATED
+
+
+# ---------------------------------------------------------------------------
+# C-2: エコーの作成ボタン
+# ---------------------------------------------------------------------------
+DID = "d" * 32
+
+
+@pytest.fixture
+def creation_spy(monkeypatch):
+    """作成サービスを記録用スタブに差し替える(実 DB に書かない)。"""
+    from services import intake_creation as ic
+
+    calls = {"created": [], "found": []}
+    state = {"duplicates": [], "pid": 55, "fail": False}
+
+    def _create(data, event_type=None, overwrite_project_id=None):
+        calls["created"].append({"data": data, "event_type": event_type,
+                                 "overwrite": overwrite_project_id})
+        return None if state["fail"] else state["pid"]
+
+    def _find(date):
+        calls["found"].append(date)
+        return list(state["duplicates"])
+
+    monkeypatch.setattr(ic, "create_project_from_intake", _create)
+    monkeypatch.setattr(ic, "find_projects_by_event_date", _find)
+    monkeypatch.setattr(bm, "render_draft_set_for_project",
+                        lambda pid: ([{"type": "image", "originalContentUrl": "o",
+                                       "previewImageUrl": "p"}], []))
+    calls["state"] = state
+    return calls
+
+
+def test_echo_offers_create_button_when_type_is_known(monkeypatch, sent, run_inline):
+    monkeypatch.setattr(ei, "parse_event_template", lambda text: PARSED_OK)
+    bm.handle_event(_text_event("@Bot " + FILLED), _config())
+
+    msg = _only_text_or_msg(sent)
+    assert _labels(msg) == ["この内容で作成", "やり直し"]
+    assert _datas(msg) == ["%s|draft=%s" % (bm.ACTION_CREATE, DID),
+                           "%s|draft=%s" % (bm.ACTION_CANCEL, DID)]
+
+
+def test_echo_offers_both_types_when_undetermined(monkeypatch, sent, run_inline):
+    """種別が判定できないときは、種別を確定しながら作れる 3 択にする。"""
+    undetermined = {"ok": True, "reason": None,
+                    "data": dict(PARSED_OK["data"], event_type=None)}
+    monkeypatch.setattr(ei, "parse_event_template", lambda text: undetermined)
+    bm.handle_event(_text_event("@Bot " + FILLED), _config())
+
+    msg = _only_text_or_msg(sent)
+    assert _labels(msg) == ["ガールズで作成", "メンズで作成", "やり直し"]
+    assert _datas(msg) == [
+        "%s|type=girls|draft=%s" % (bm.ACTION_CREATE, DID),
+        "%s|type=mens|draft=%s" % (bm.ACTION_CREATE, DID),
+        "%s|draft=%s" % (bm.ACTION_CANCEL, DID),
+    ]
+
+
+def test_echo_has_no_buttons_when_draft_cannot_be_saved(
+    monkeypatch, sent, run_inline, draft_store
+):
+    """取り置きに失敗したら、押しても作れないボタンは出さない。"""
+    draft_store["fail_save"] = True
+    monkeypatch.setattr(ei, "parse_event_template", lambda text: PARSED_OK)
+    bm.handle_event(_text_event("@Bot " + FILLED), _config())
+
+    msg = _only_text_or_msg(sent)
+    assert "quickReply" not in msg
+    assert ei.ECHO_FOOTER in msg["text"]
+
+
+# ---------------------------------------------------------------------------
+# C-2: postback の検証
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "data,expected",
+    [
+        ("newproj_create|draft=" + DID, {"action": "newproj_create", "draft": DID}),
+        ("newproj_create|type=girls|draft=" + DID,
+         {"action": "newproj_create", "type": "girls", "draft": DID}),
+        ("newproj_overwrite|pid=7|draft=" + DID,
+         {"action": "newproj_overwrite", "pid": 7, "draft": DID}),
+        ("newproj_forcenew|draft=" + DID, {"action": "newproj_forcenew", "draft": DID}),
+        ("newproj_cancel|draft=" + DID, {"action": "newproj_cancel", "draft": DID}),
+    ],
+)
+def test_create_postback_data_parses(data, expected):
+    assert bm.parse_postback_data(data) == expected
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "newproj_create",                      # draft が無い
+        "newproj_create|type=other|draft=" + DID,   # 未知の種別
+        "newproj_overwrite|draft=" + DID,      # pid が無い
+        "newproj_overwrite|pid=abc|draft=" + DID,   # pid が数値でない
+    ],
+)
+def test_malformed_create_postback_is_rejected(data):
+    assert bm.parse_postback_data(data) is None
+
+
+# ---------------------------------------------------------------------------
+# C-2: 作成フロー
+# ---------------------------------------------------------------------------
+def _run_create(monkeypatch, data, draft_store, payload=None):
+    """作成系 postback を同期実行して結果を見る(スレッドを外して決定的にする)。"""
+    draft_store["saved"][DID] = payload if payload is not None else PARSED_OK["data"]
+
+    def _inline(draft_id, reply_token, config, **kw):
+        bm._create_and_reply(draft_id, reply_token, config, **kw)
+        return None
+
+    monkeypatch.setattr(bm, "_spawn_creation", _inline)
+    bm.handle_event(_postback_event(data), _config())
+
+
+def test_create_without_duplicates_creates_and_returns_images(
+    monkeypatch, sent, creation_spy, draft_store
+):
+    _run_create(monkeypatch, "newproj_create|draft=" + DID, draft_store)
+
+    assert creation_spy["found"] == ["2026-11-03"], "日付重複を調べていない"
+    assert len(creation_spy["created"]) == 1
+    call = creation_spy["created"][0]
+    assert call["overwrite"] is None
+
+    msgs = sent[0][1]
+    assert msgs[0]["type"] == "image", "たたき台の画像を返していない"
+    assert "たたき台を作成しました" in msgs[-1]["text"]
+    assert draft_store["deleted"] == [DID], "作成後に下書きを片付けていない"
+
+
+def test_create_passes_event_type_from_button(monkeypatch, sent, creation_spy,
+                                              draft_store):
+    _run_create(monkeypatch, "newproj_create|type=mens|draft=" + DID, draft_store,
+                payload=dict(PARSED_OK["data"], event_type=None))
+    assert creation_spy["created"][0]["event_type"] == "mens"
+
+
+def test_duplicate_date_offers_three_choices_without_creating(
+    monkeypatch, sent, creation_spy, draft_store
+):
+    creation_spy["state"]["duplicates"] = [
+        {"id": 7, "title": "既存イベント", "event_date": "2026-11-03"}]
+    _run_create(monkeypatch, "newproj_create|draft=" + DID, draft_store)
+
+    assert creation_spy["created"] == [], "重複を確認する前に作成している"
+    msg = _only_text_or_msg(sent)
+    assert _labels(msg) == ["上書き保存", "別で新規作成", "中止"]
+    assert _datas(msg) == [
+        "%s|pid=7|draft=%s" % (bm.ACTION_OVERWRITE, DID),
+        "%s|draft=%s" % (bm.ACTION_FORCE_NEW, DID),
+        "%s|draft=%s" % (bm.ACTION_CANCEL, DID),
+    ]
+    assert "既存イベント" in msg["text"]
+    assert draft_store["deleted"] == [], "まだ下書きを消してはいけない"
+
+
+def test_overwrite_replaces_the_existing_project(monkeypatch, sent, creation_spy,
+                                                 draft_store):
+    _run_create(monkeypatch, "newproj_overwrite|pid=7|draft=" + DID, draft_store)
+
+    assert creation_spy["found"] == [], "上書き指定なのに重複を再確認している"
+    assert creation_spy["created"][0]["overwrite"] == 7
+    assert "上書きしました" in sent[0][1][-1]["text"]
+
+
+def test_force_new_skips_duplicate_check(monkeypatch, sent, creation_spy, draft_store):
+    creation_spy["state"]["duplicates"] = [
+        {"id": 7, "title": "既存", "event_date": "2026-11-03"}]
+    _run_create(monkeypatch, "newproj_forcenew|draft=" + DID, draft_store)
+
+    assert creation_spy["found"] == [], "別で新規なのに重複を聞き直している"
+    assert creation_spy["created"][0]["overwrite"] is None
+    assert sent[0][1][0]["type"] == "image"
+
+
+def test_cancel_deletes_draft_and_writes_nothing(monkeypatch, sent, creation_spy,
+                                                 draft_store):
+    draft_store["saved"][DID] = PARSED_OK["data"]
+    bm.handle_event(_postback_event("newproj_cancel|draft=" + DID), _config())
+
+    assert creation_spy["created"] == [], "中止なのに作成している"
+    assert draft_store["deleted"] == [DID]
+    assert _only_text(sent) == bm.MSG_CANCELLED
+
+
+def test_expired_draft_is_reported(monkeypatch, sent, creation_spy, draft_store):
+    monkeypatch.setattr(bm, "_spawn_creation",
+                        lambda did, tok, cfg, **kw: bm._create_and_reply(did, tok, cfg, **kw))
+    bm.handle_event(_postback_event("newproj_create|draft=" + "e" * 32), _config())
+
+    assert creation_spy["created"] == []
+    assert _only_text(sent) == bm.MSG_DRAFT_EXPIRED
+
+
+def test_creation_failure_is_reported(monkeypatch, sent, creation_spy, draft_store):
+    creation_spy["state"]["fail"] = True
+    _run_create(monkeypatch, "newproj_create|draft=" + DID, draft_store)
+    assert _only_text(sent) == bm.MSG_CREATE_FAILED
+
+
+def test_creation_runs_in_daemon_thread(monkeypatch):
+    done = []
+    monkeypatch.setattr(bm, "_create_and_reply",
+                        lambda did, tok, cfg, **kw: done.append((did, kw)))
+    t = bm._spawn_creation(DID, "RT", _config(), overwrite_project_id=7)
+    assert t.daemon is True
+    t.join(timeout=5)
+    assert done == [(DID, {"overwrite_project_id": 7})]
+
+
+def test_create_postback_needs_active_group(sent, activation, creation_spy):
+    activation["active"].clear()
+    bm.handle_event(_postback_event("newproj_create|draft=" + DID), _config())
+    assert creation_spy["created"] == []
+    assert _only_text(sent) == bm.MSG_NOT_ACTIVATED
+
+
+def test_callback_returns_200_immediately_for_create_postback(monkeypatch, draft_store):
+    """作成ボタンでも webhook は 200 を即返し、作成は別スレッドに逃げる。"""
+    monkeypatch.setattr(bm, "load_config", lambda: _config())
+    monkeypatch.setattr(bm, "reply_messages", lambda *a, **k: None)
+
+    spawned = []
+    monkeypatch.setattr(bm, "_spawn_creation",
+                        lambda did, tok, cfg, **kw: spawned.append((did, kw)))
+
+    body = json.dumps({"events": [
+        _postback_event("newproj_create|draft=" + DID)]}).encode("utf-8")
+    sig = base64.b64encode(
+        hmac.new(SECRET.encode("utf-8"), body, hashlib.sha256).digest()
+    ).decode("utf-8")
+
+    client = TestClient(bm.app)
+    res = client.post("/callback", content=body,
+                      headers={"X-Line-Signature": sig,
+                               "Content-Type": "application/json"})
+    assert res.status_code == 200
+    assert len(spawned) == 1, "作成がバックグラウンドに投げられていない"
+
+
+def test_intake_path_never_calls_project_service_create():
+    """streamlit を引く project_service / session_manager を Bot 経路で使わない。
+
+    説明文では両者に触れているので、文字列検索ではなく AST の import を見る。
+    """
+    import ast
+
+    tree = ast.parse(open("services/intake_creation.py", encoding="utf-8").read())
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                imported.add(a.name.split(".")[-1])
+        elif isinstance(node, ast.ImportFrom):
+            imported.add((node.module or "").split(".")[-1])
+            for a in node.names:
+                imported.add(a.name.split(".")[-1])
+
+    for forbidden in ("streamlit", "project_service", "session_manager"):
+        assert forbidden not in imported, f"{forbidden} を import している"
+    # 書き込みに使うのは repo だけ
+    assert {"project_repo", "timetable_repo"} <= imported

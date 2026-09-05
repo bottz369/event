@@ -88,6 +88,56 @@ def build_intake_missing_message(missing) -> str:
     return "%s が読み取れませんでした。記入して再送してください。" % "、".join(missing)
 
 
+# --- 段階C C-2: たたき台プロジェクトの作成 ---
+MSG_DRAFT_EXPIRED = (
+    "この内容は期限切れです(24時間)。お手数ですが概要をもう一度送ってください。"
+)
+MSG_CREATE_FAILED = "プロジェクトの作成に失敗しました。もう一度お試しください。"
+MSG_CANCELLED = "取り消しました。内容を直してもう一度送ってください。"
+MSG_CREATING = "作成中です。画像ができるまで少しお待ちください。"
+
+
+def build_duplicate_prompt(found: list, draft_id: str) -> dict:
+    """同じ開催日の既存プロジェクトが見つかったときの 3 択(C-2)。"""
+    top = found[0]
+    items = [
+        {"type": "action", "action": {
+            "type": "postback", "label": "上書き保存",
+            "data": build_postback_data(ACTION_OVERWRITE, pid=top["id"],
+                                        draft=draft_id),
+            "displayText": "上書き保存"}},
+        {"type": "action", "action": {
+            "type": "postback", "label": "別で新規作成",
+            "data": build_postback_data(ACTION_FORCE_NEW, draft=draft_id),
+            "displayText": "別で新規作成"}},
+        {"type": "action", "action": {
+            "type": "postback", "label": "中止",
+            "data": build_postback_data(ACTION_CANCEL, draft=draft_id),
+            "displayText": "中止"}},
+    ]
+    names = "、".join("「%s」" % (f["title"] or "(無題)") for f in found[:3])
+    text = (
+        "同じ開催日(%s)のイベントが既にあります: %s\n"
+        "上書き保存すると、その内容は今回の解釈で置き換わります。"
+        % (top.get("event_date") or "?", names)
+    )
+    return {"type": "text", "text": text, "quickReply": {"items": items}}
+
+
+def build_created_notice(project_id: int, artists: int, rows: int,
+                         overwritten: bool = False) -> str:
+    """作成完了の確認文。"""
+    head = "既存のイベントを上書きしました。" if overwritten else "たたき台を作成しました。"
+    return (
+        "%s\n"
+        "出演者 %d組 / タイムテーブル %d行\n"
+        "アー写が未登録の枠は黒いプレースホルダで表示されます。"
+        "アー写を入れるには「アー写変更」とメンションしてください。\n"
+        "細かい調整はアプリからも行えます。"
+        % (head, artists, rows)
+    )
+
+
 MSG_OWNER_LEFT = (
     "BOTTZがグループラインから退会したので機能を停止します。"
     "再開する場合はBOTTZをこのグループラインへ招待してください。"
@@ -281,6 +331,12 @@ ACTION_ARTIST = "art"
 ACTION_MORE_ARTIST = "more_art"
 # 段階C C-1.1: 新規作成のイベント種別選択(§53)
 ACTION_NEW_PROJECT = "newproj"
+# 段階C C-2: たたき台プロジェクトの作成(§52)
+ACTION_CREATE = "newproj_create"        # エコーの「この内容で作成」
+ACTION_OVERWRITE = "newproj_overwrite"  # 同日の既存を上書き
+ACTION_FORCE_NEW = "newproj_forcenew"   # 同日でも別で新規作成
+ACTION_CANCEL = "newproj_cancel"        # やり直し / 中止(下書きを消すだけ)
+_CREATE_ACTIONS = (ACTION_CREATE, ACTION_OVERWRITE, ACTION_FORCE_NEW, ACTION_CANCEL)
 
 FLOW_REPLACE = "replace"  # アー写を差し替えてから 2 枚生成
 FLOW_GET = "get"          # 写真は変えず 2 枚だけ取得
@@ -343,7 +399,7 @@ def parse_postback_data(data: str) -> Optional[dict]:
     parts = data.split("|")
     action = parts[0]
     if action not in (ACTION_EVENT, ACTION_MORE_EVENT, ACTION_ARTIST,
-                      ACTION_MORE_ARTIST, ACTION_NEW_PROJECT):
+                      ACTION_MORE_ARTIST, ACTION_NEW_PROJECT) + _CREATE_ACTIONS:
         return None
     out = {"action": action}
     for p in parts[1:]:
@@ -375,6 +431,14 @@ def parse_postback_data(data: str) -> Optional[dict]:
         # type は services 側の EVENT_TYPES に限る。未知の値は不正扱いにする
         # (テンプレを引けないボタンを通さない)。
         if out.get("type") not in _event_type_values():
+            return None
+    elif action in _CREATE_ACTIONS:
+        # 下書き id は必須。type が付く場合は既知の種別だけ通す。
+        if not out.get("draft"):
+            return None
+        if "type" in out and out["type"] not in _event_type_values():
+            return None
+        if action == ACTION_OVERWRITE and "pid" not in out:
             return None
     return out
 
@@ -560,6 +624,49 @@ def render_flyer_set_for_project(project_id: int) -> Tuple[List[dict], List[dict
             continue
         preview_url = upload_generated_png(
             build_preview_png(png), project_id, "%s_preview" % variant
+        )
+        messages.append(build_image_message(original_url, preview_url or original_url))
+
+    return (messages, failures)
+
+
+# 段階C C-2: たたき台として返す画像(styled フライヤーは標準テンプレ確定後)
+DRAFT_VARIANTS = ("tt", "grid")
+_DRAFT_VARIANT_LABEL = {"tt": "タイムテーブル", "grid": "アー写グリッド"}
+
+
+def render_draft_set_for_project(project_id: int) -> Tuple[List[dict], List[dict]]:
+    """pid の TT 画像とアー写グリッド画像を生成し、(image message, failures) を返す。
+
+    render_flyer_set_for_project と同型だが、合成前の素の 2 枚を返す。
+    アー写が未登録の枠は logic_grid が黒プレースホルダで描く(C-6a)ので、
+    出演者が 1 人も登録されていない新規イベントでも穴あきにならない。
+    """
+    from services import generation_service  # 遅延 import(bot.main を env 非依存に保つ)
+
+    renderers = {
+        "tt": generation_service.render_timetable_png_for_project,
+        "grid": generation_service.render_grid_png_for_project,
+    }
+
+    failures: List[dict] = []
+    messages: List[dict] = []
+    for variant in DRAFT_VARIANTS:
+        try:
+            png = renderers[variant](project_id, failures=failures)
+        except Exception as e:
+            logger.error("draft render failed: pid=%s variant=%s: %s",
+                         project_id, variant, e, exc_info=True)
+            continue
+        if not png:
+            logger.warning("draft not generated: pid=%s variant=%s", project_id, variant)
+            continue
+
+        original_url = upload_generated_png(png, project_id, "draft_%s" % variant)
+        if not original_url:
+            continue
+        preview_url = upload_generated_png(
+            build_preview_png(png), project_id, "draft_%s_preview" % variant
         )
         messages.append(build_image_message(original_url, preview_url or original_url))
 
@@ -855,9 +962,22 @@ def _parse_intake_and_reply(text: str, reply_token: str, config: BotConfig) -> N
             )
             return
 
-        reply_text(
+        # C-2: 解析結果を Storage に取り置き、postback には id だけを載せる
+        # (postback data は 300 bytes しか無く、解析結果は載らない)。
+        from services import intake_draft_store
+
+        data = parsed.get("data") or {}
+        draft_id = intake_draft_store.save_draft(data)
+        echo = event_intake.format_intake_echo(parsed)
+        if not draft_id:
+            # 取り置きに失敗したらボタンを出さない(押しても作れないボタンを出さない)
+            logger.error("intake draft could not be saved; replying echo only")
+            reply_text(reply_token, echo, config.channel_access_token)
+            return
+
+        reply_messages(
             reply_token,
-            event_intake.format_intake_echo(parsed),
+            [build_intake_echo_message(echo, draft_id, data.get("event_type"))],
             config.channel_access_token,
         )
     except Exception as e:
@@ -866,6 +986,112 @@ def _parse_intake_and_reply(text: str, reply_token: str, config: BotConfig) -> N
             reply_text(reply_token, MSG_INTAKE_FAILED, config.channel_access_token)
         except Exception:
             logger.error("intake failure reply also failed", exc_info=True)
+
+
+def build_intake_echo_message(echo: str, draft_id: str, event_type=None) -> dict:
+    """エコー本文に作成ボタンを付けたメッセージを組む(C-2)。
+
+    種別が分かっていれば [この内容で作成][やり直し]。
+    分からなければ種別を確定しながら作れるよう
+    [ガールズで作成][メンズで作成][やり直し] にする(§52 の安全弁)。
+    """
+    known = event_type in _event_type_values()
+    items = []
+    if known:
+        items.append({"type": "action", "action": {
+            "type": "postback", "label": "この内容で作成",
+            "data": build_postback_data(ACTION_CREATE, draft=draft_id),
+            "displayText": "この内容で作成"}})
+    else:
+        for value, label in _EVENT_TYPE_BUTTONS:
+            items.append({"type": "action", "action": {
+                "type": "postback", "label": "%sで作成" % label.replace("イベント", ""),
+                "data": build_postback_data(ACTION_CREATE, type=value, draft=draft_id),
+                "displayText": "%sで作成" % label.replace("イベント", "")}})
+    items.append({"type": "action", "action": {
+        "type": "postback", "label": "やり直し",
+        "data": build_postback_data(ACTION_CANCEL, draft=draft_id),
+        "displayText": "やり直し"}})
+    return {"type": "text", "text": echo, "quickReply": {"items": items}}
+
+
+def _create_and_reply(draft_id: str, reply_token: str, config: BotConfig,
+                      event_type=None, overwrite_project_id=None,
+                      skip_duplicate_check: bool = False) -> None:
+    """下書きからプロジェクトを作り、たたき台 2 枚を返す。★別スレッドから呼ばれる想定。
+
+    作成 + 画像生成で数十秒かかりうるので callback を待たせない。
+    例外は握って必ず何かを返す(無反応が一番困るため)。
+    """
+    try:
+        from services import intake_creation, intake_draft_store
+
+        data = intake_draft_store.load_draft(draft_id)
+        if not data:
+            reply_text(reply_token, MSG_DRAFT_EXPIRED, config.channel_access_token)
+            return
+
+        # 日付重複: まだ聞いていなければ先に 3 択を出す(この時点では作らない)
+        if overwrite_project_id is None and not skip_duplicate_check:
+            found = intake_creation.find_projects_by_event_date(data.get("event_date"))
+            if found:
+                reply_messages(reply_token,
+                               [build_duplicate_prompt(found, draft_id)],
+                               config.channel_access_token)
+                return
+
+        pid = intake_creation.create_project_from_intake(
+            data, event_type=event_type, overwrite_project_id=overwrite_project_id)
+        if pid is None:
+            reply_text(reply_token, MSG_CREATE_FAILED, config.channel_access_token)
+            return
+
+        # 作成できたので下書きは役目を終える(失敗しても TTL で消える)
+        intake_draft_store.delete_draft(draft_id)
+
+        messages, failures = render_draft_set_for_project(pid)
+        notice = build_created_notice(
+            pid,
+            artists=len(data.get("artists") or []),
+            rows=len(intake_creation.build_rows_from_intake(data)),
+            overwritten=overwrite_project_id is not None,
+        )
+        messages = messages + [{"type": "text", "text": notice}]
+        warn = build_failure_notice(failures)
+        if warn:
+            messages.append({"type": "text", "text": warn})
+        reply_messages(reply_token, messages, config.channel_access_token)
+    except Exception as e:
+        logger.error("intake creation crashed: draft=%s: %s", draft_id, e, exc_info=True)
+        try:
+            reply_text(reply_token, MSG_CREATE_FAILED, config.channel_access_token)
+        except Exception:
+            logger.error("creation failure reply also failed", exc_info=True)
+
+
+def _spawn_creation(draft_id: str, reply_token: str, config: BotConfig,
+                    **kwargs) -> threading.Thread:
+    """作成を daemon thread に逃がして即座に戻る(callback は 200 をすぐ返す)。"""
+    t = threading.Thread(
+        target=_create_and_reply,
+        args=(draft_id, reply_token, config),
+        kwargs=kwargs,
+        daemon=True,
+        name="intake-create",
+    )
+    t.start()
+    return t
+
+
+def _cancel_draft(draft_id: str, reply_token: str, config: BotConfig) -> None:
+    """やり直し / 中止。★消すのは Storage の下書きだけで DB には触らない。"""
+    try:
+        from services import intake_draft_store
+
+        intake_draft_store.delete_draft(draft_id)
+    except Exception as e:
+        logger.error("draft cancel failed: %s", e, exc_info=True)
+    reply_text(reply_token, MSG_CANCELLED, config.channel_access_token)
 
 
 def _spawn_intake_parse(text: str, reply_token: str,
@@ -955,6 +1181,23 @@ def _handle_postback(parsed: dict, reply_token: str, user_id: Optional[str],
 
     if action == ACTION_NEW_PROJECT:
         _reply_intake_template(parsed["type"], reply_token, config)
+        return
+
+    # --- C-2: たたき台の作成系(いずれも重いので背景スレッドへ) ---
+    if action == ACTION_CANCEL:
+        _cancel_draft(parsed["draft"], reply_token, config)
+        return
+    if action == ACTION_CREATE:
+        _spawn_creation(parsed["draft"], reply_token, config,
+                        event_type=parsed.get("type"))
+        return
+    if action == ACTION_OVERWRITE:
+        _spawn_creation(parsed["draft"], reply_token, config,
+                        overwrite_project_id=parsed["pid"])
+        return
+    if action == ACTION_FORCE_NEW:
+        _spawn_creation(parsed["draft"], reply_token, config,
+                        skip_duplicate_check=True)
         return
 
     if action == ACTION_MORE_EVENT:

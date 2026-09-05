@@ -49,6 +49,13 @@ def jp_font_path():
     import streamlit.runtime.secrets as st_secrets
 
     st_secrets.secrets_singleton._secrets = {"supabase": dict(creds)}
+    # ★他のテスト(test_generation_service_import)が database を sys.modules から
+    #   purge するため、streamlit を封じた状態で database が再 import されうる。
+    #   そのとき st.secrets を読めないので env フォールバックを用意しておく
+    #   (これが無いと実行順によってだけ落ちる)。
+    os.environ.setdefault("SUPABASE_DB_URL", creds["DB_URL"])
+    os.environ.setdefault("SUPABASE_URL", creds["URL"])
+    os.environ.setdefault("SUPABASE_KEY", creds["KEY"])
 
     tmp = tempfile.mkdtemp(prefix="c6a_font_")
     import constants
