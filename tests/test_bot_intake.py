@@ -42,6 +42,15 @@ def _text_event(text, mentioned=True, group=GROUP, user=USER):
     }
 
 
+def _postback_event(data, group=GROUP, user=USER):
+    return {
+        "type": "postback",
+        "replyToken": "RT",
+        "source": {"type": "group", "groupId": group, "userId": user},
+        "postback": {"data": data},
+    }
+
+
 @pytest.fixture
 def sent(monkeypatch):
     box = []
@@ -82,27 +91,47 @@ def run_inline(monkeypatch):
 
 
 FILLED = (
-    "■ 公演概要の設定\n開催日: 2026-11-03\nイベント名: 秋フェス\n"
-    "■ 料金設定\nチケット1 名前: 前売\n"
-    "■ アー写グリッド設定\n出演者1: NecroA\n"
-    "■ タイムテーブル設定\n出演尺(分): 15"
+    "【イベント種別】ガールズ\n"
+    "\n"
+    "【公演概要】\n"
+    "2026年11月3日(月)\n"
+    "「rock field ULTRA LIVE - AUTUMN」\n"
+    "\n"
+    "■会場:上野恩賜公園野外ステージ\n"
+    "https://maps.app.goo.gl/example\n"
+    "\n"
+    "■時間:\n"
+    "OPEN▶11:30\n"
+    "START▶12:00\n"
+    "\n"
+    "■料金\n"
+    "Sチケット ¥6,000(前方エリア)\n"
+    "\n"
+    "■出演者(3組予定)\n"
+    "1.NecroA\n"
+    "2.PRIBEAST\n"
+    "3.\n"
+    "\n"
+    "■チケット・入場に関して\n"
+    "入場はSチケット→Aチケット→当日券の順です。"
 )
 
 PARSED_OK = {
     "ok": True,
     "reason": None,
     "data": {
+        "event_type": "girls",
         "event_date": "2026-11-03",
-        "event_name": "秋フェス",
-        "subtitle": None, "venue": "上野音横丁", "venue_url": None,
+        "event_name": "rock field ULTRA LIVE",
+        "subtitle": "AUTUMN", "venue": "上野恩賜公園野外ステージ", "venue_url": None,
         "open_time": "11:30", "start_time": "12:00",
         "open_start_note": None, "ticket_common_note": None,
-        "tickets": [{"name": "前売", "price": 3000, "note": None}],
+        "tickets": [{"name": "Sチケット", "price": 6000, "note": "前方エリア"}],
         "artists": ["NecroA", "PRIBEAST"],
-        "tt_settings": {"goods_spaces": "A/B", "set_minutes": 15,
-                        "has_post_goods": True,
-                        "goods_start_offset_minutes": 5,
-                        "goods_duration_minutes": 60,
+        "tt_settings": {"goods_spaces": None, "set_minutes": None,
+                        "has_post_goods": None,
+                        "goods_start_offset_minutes": None,
+                        "goods_duration_minutes": None,
                         "changeover_every_n": None, "changeover_minutes": None},
         "free_texts": [],
     },
@@ -119,16 +148,54 @@ def _only_text(sent):
 # ---------------------------------------------------------------------------
 # (A) テンプレ送出
 # ---------------------------------------------------------------------------
-def test_shinki_sakusei_replies_template(sent):
+def test_shinki_sakusei_asks_event_type(sent):
+    """C-1.1: いきなりテンプレではなく、まず種別ボタンを出す。"""
     bm.handle_event(_text_event("@Bot 新規作成"), _config())
-    assert _only_text(sent) == ei.MSG_INTAKE_TEMPLATE
+    assert len(sent) == 1
+    msg = sent[0][1][0]
+    assert msg["text"] == bm.MSG_ASK_EVENT_TYPE
+    items = msg["quickReply"]["items"]
+    assert [i["action"]["label"] for i in items] == ["ガールズイベント", "メンズイベント"]
+    assert [i["action"]["data"] for i in items] == ["newproj|type=girls",
+                                                    "newproj|type=mens"]
+
+
+def test_shinki_sakusei_does_not_send_template_directly(sent):
+    """種別を選ぶ前にテンプレ本文を送ってしまわない。"""
+    bm.handle_event(_text_event("@Bot 新規作成"), _config())
+    text = _only_text(sent)
+    for event_type in ei.EVENT_TYPES:
+        assert text != ei.get_intake_template(event_type)
+
+
+@pytest.mark.parametrize(
+    "event_type,label", [("girls", "ガールズ"), ("mens", "メンズ")])
+def test_event_type_postback_sends_matching_template(sent, event_type, label):
+    """種別 postback → その種別のテンプレを送る(先頭に種別行が入る)。"""
+    bm.handle_event(_postback_event("newproj|type=%s" % event_type), _config())
+    text = _only_text(sent)
+    assert text == ei.get_intake_template(event_type)
+    assert text.splitlines()[0] == ei.EVENT_TYPE_MARKER + label
+
+
+def test_unknown_event_type_postback_is_ignored(sent):
+    """未知の種別ボタンは静かに無視する(テンプレを引けないため)。"""
+    bm.handle_event(_postback_event("newproj|type=other"), _config())
+    assert sent == []
+
+
+def test_event_type_postback_needs_active_group(sent, activation):
+    activation["active"].clear()
+    bm.handle_event(_postback_event("newproj|type=girls"), _config())
+    assert _only_text(sent) == bm.MSG_NOT_ACTIVATED
 
 
 def test_template_is_not_sent_for_other_text(sent):
     """関係ないテキストではテンプレを返さない(使い方案内になる)。"""
     bm.handle_event(_text_event("@Bot こんにちは"), _config())
     text = _only_text(sent)
-    assert text != ei.MSG_INTAKE_TEMPLATE
+    for event_type in ei.EVENT_TYPES:
+        assert text != ei.get_intake_template(event_type)
     assert "新規作成" in text, "使い方案内に「新規作成」の導線が無い"
 
 
@@ -143,7 +210,8 @@ def test_filled_template_goes_to_parse_not_template(monkeypatch, sent, run_inlin
     # (strip_self_mentions はメンション直後の空白を残すので strip して比較する)
     assert len(run_inline) == 1, "解析が呼ばれていない: %r" % (run_inline,)
     assert run_inline[0].strip() == FILLED, "解析に渡る本文が欠けている"
-    assert _only_text(sent) != ei.MSG_INTAKE_TEMPLATE
+    for event_type in ei.EVENT_TYPES:
+        assert _only_text(sent) != ei.get_intake_template(event_type)
 
 
 def test_filled_template_wins_over_shinki_sakusei(monkeypatch, sent, run_inline):
@@ -151,7 +219,7 @@ def test_filled_template_wins_over_shinki_sakusei(monkeypatch, sent, run_inline)
     monkeypatch.setattr(ei, "parse_event_template", lambda text: PARSED_OK)
     bm.handle_event(_text_event("@Bot 新規作成\n" + FILLED), _config())
     assert len(run_inline) == 1
-    assert _only_text(sent) != ei.MSG_INTAKE_TEMPLATE
+    assert _only_text(sent) != bm.MSG_ASK_EVENT_TYPE
 
 
 def test_bare_shinki_sakusei_is_not_treated_as_filled(sent, run_inline):
@@ -190,8 +258,9 @@ def test_successful_parse_replies_echo(monkeypatch, sent, run_inline):
     monkeypatch.setattr(ei, "parse_event_template", lambda text: PARSED_OK)
     bm.handle_event(_text_event("@Bot " + FILLED), _config())
     text = _only_text(sent)
-    assert "秋フェス" in text and "2026-11-03" in text
+    assert "rock field ULTRA LIVE" in text and "2026-11-03" in text
     assert "1. NecroA" in text
+    assert "イベント種別: ガールズ" in text, "エコーに種別が出ていない"
     assert text.rstrip().endswith(ei.ECHO_FOOTER)
 
 
@@ -275,6 +344,8 @@ def test_intake_path_does_not_touch_db(monkeypatch, sent, run_inline):
                         lambda *a, **k: pytest.fail("C-1 は DB に触ってはいけない"))
     monkeypatch.setattr(ei, "parse_event_template", lambda text: PARSED_OK)
 
-    bm.handle_event(_text_event("@Bot 新規作成"), _config())
-    bm.handle_event(_text_event("@Bot " + FILLED), _config())
-    assert len(sent) == 2
+    bm.handle_event(_text_event("@Bot 新規作成"), _config())          # 種別ボタン
+    bm.handle_event(_postback_event("newproj|type=girls"), _config())  # テンプレ送信
+    bm.handle_event(_postback_event("newproj|type=mens"), _config())
+    bm.handle_event(_text_event("@Bot " + FILLED), _config())          # 解析→エコー
+    assert len(sent) == 4

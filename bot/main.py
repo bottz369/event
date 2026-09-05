@@ -279,6 +279,8 @@ ACTION_EVENT = "evt"
 ACTION_MORE_EVENT = "more_evt"
 ACTION_ARTIST = "art"
 ACTION_MORE_ARTIST = "more_art"
+# 段階C C-1.1: 新規作成のイベント種別選択(§53)
+ACTION_NEW_PROJECT = "newproj"
 
 FLOW_REPLACE = "replace"  # アー写を差し替えてから 2 枚生成
 FLOW_GET = "get"          # 写真は変えず 2 枚だけ取得
@@ -340,7 +342,8 @@ def parse_postback_data(data: str) -> Optional[dict]:
         return None
     parts = data.split("|")
     action = parts[0]
-    if action not in (ACTION_EVENT, ACTION_MORE_EVENT, ACTION_ARTIST, ACTION_MORE_ARTIST):
+    if action not in (ACTION_EVENT, ACTION_MORE_EVENT, ACTION_ARTIST,
+                      ACTION_MORE_ARTIST, ACTION_NEW_PROJECT):
         return None
     out = {"action": action}
     for p in parts[1:]:
@@ -367,6 +370,11 @@ def parse_postback_data(data: str) -> Optional[dict]:
             return None
     elif action == ACTION_MORE_ARTIST:
         if "pid" not in out or "page" not in out:
+            return None
+    elif action == ACTION_NEW_PROJECT:
+        # type は services 側の EVENT_TYPES に限る。未知の値は不正扱いにする
+        # (テンプレを引けないボタンを通さない)。
+        if out.get("type") not in _event_type_values():
             return None
     return out
 
@@ -730,6 +738,49 @@ def _is_activation_request(text: str) -> bool:
     return any(m in s for m in _ACTIVATE_MARKERS)
 
 
+def _event_type_values() -> tuple:
+    """services 側が認める種別の値。services が読めない環境でも落とさない。"""
+    try:
+        from services import event_intake
+
+        return tuple(event_intake.EVENT_TYPES)
+    except Exception as e:
+        logger.error("event type lookup failed: %s", e, exc_info=True)
+        return ()
+
+
+MSG_ASK_EVENT_TYPE = "イベントの種類はどちらですか?"
+
+_EVENT_TYPE_BUTTONS = (
+    ("girls", "ガールズイベント"),
+    ("mens", "メンズイベント"),
+)
+
+
+def build_event_type_quickreply() -> dict:
+    """新規作成の入口で出すイベント種別のクイックリプライ(C-1.1)。
+
+    ボタンの文言は「ガールズイベント」等だが、これは記入テンプレの見出しを
+    含まないので、埋めテンプレ判定(looks_like_filled_template)には掛からない。
+    """
+    items = [{
+        "type": "action",
+        "action": {
+            "type": "postback",
+            "label": label,
+            "data": build_postback_data(ACTION_NEW_PROJECT, type=value),
+            "displayText": label,
+        },
+    } for value, label in _EVENT_TYPE_BUTTONS]
+    return {"type": "text", "text": MSG_ASK_EVENT_TYPE,
+            "quickReply": {"items": items}}
+
+
+def _reply_event_type_choices(reply_token: str, config: BotConfig) -> None:
+    reply_messages(reply_token, [build_event_type_quickreply()],
+                   config.channel_access_token)
+
+
 def _is_intake_request(text: str) -> bool:
     """メンション除去後テキストが「新規作成」の合図を含むか(C-1)。"""
     if not text:
@@ -753,14 +804,23 @@ def _looks_like_filled_intake(text: str) -> bool:
         return False
 
 
-def _reply_intake_template(reply_token: str, config: BotConfig) -> None:
-    """記入テンプレを返信する(C-1 (A))。"""
+def _reply_intake_template(event_type: str, reply_token: str,
+                           config: BotConfig) -> None:
+    """選ばれた種別の記入テンプレを返信する(C-1.1 (A))。
+
+    テンプレ先頭には【イベント種別】行が入っており、ユーザーが埋めて返信した
+    本文にもそれが残るので、pending を持たずに種別を復元できる。
+    """
     try:
         from services import event_intake
 
-        template = event_intake.MSG_INTAKE_TEMPLATE
+        template = event_intake.get_intake_template(event_type)
     except Exception as e:
         logger.error("intake template unavailable: %s", e, exc_info=True)
+        reply_text(reply_token, MSG_INTAKE_FAILED, config.channel_access_token)
+        return
+    if not template:
+        logger.error("no intake template for event_type=%r", event_type)
         reply_text(reply_token, MSG_INTAKE_FAILED, config.channel_access_token)
         return
     reply_text(reply_token, template, config.channel_access_token)
@@ -891,6 +951,10 @@ def _handle_postback(parsed: dict, reply_token: str, user_id: Optional[str],
             _spawn_regeneration(parsed["pid"], reply_token, config)
         else:
             _reply_artist_page(reply_token, parsed["pid"], page=0, config=config)
+        return
+
+    if action == ACTION_NEW_PROJECT:
+        _reply_intake_template(parsed["type"], reply_token, config)
         return
 
     if action == ACTION_MORE_EVENT:
@@ -1097,7 +1161,9 @@ def handle_event(event: dict, config: BotConfig) -> None:
             _spawn_intake_parse(cleaned, reply_token, config)
             return
         if _is_intake_request(cleaned):
-            _reply_intake_template(reply_token, config)
+            # C-1.1: いきなりテンプレを出さず、まず種別を選ばせる
+            # (種別で自由記述と料金の既定値が違うため)
+            _reply_event_type_choices(reply_token, config)
             return
 
         # ★B-3.1: 名前はテキストから読まない。マーカーで flow を決めてボタンに渡す。
