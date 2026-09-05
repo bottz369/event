@@ -905,3 +905,51 @@ def test_activation_lookup_failure_falls_back_to_inactive(monkeypatch, sent, stu
     monkeypatch.setattr(act, "is_group_active", _boom)
     bm.handle_event(_text_event("@Bot アー写変更"), _cfg_b4())
     assert sent[0][1][0]["text"] == bm.MSG_NOT_ACTIVATED
+
+
+# ---------------------------------------------------------------------------
+# #4 案2: 未登録アーティストの通知
+# ---------------------------------------------------------------------------
+def test_failure_notice_reports_unregistered_artists():
+    notice = bm.build_failure_notice(
+        [{"kind": "artist_not_registered", "name": "Luna moon"}])
+    assert "Luna moon はアー写未登録です" in notice
+    assert "黒い枠" in notice, "グリッド上どう見えているかが伝わらない"
+    assert "アー写変更" in notice, "次にやることの導線が無い"
+    # 取得失敗とは原因も対処も違うので、そちらの文言は混ぜない
+    assert "取得できませんでした" not in notice
+    assert "反映待ち" not in notice
+
+
+def test_failure_notice_dedupes_unregistered_names():
+    notice = bm.build_failure_notice([
+        {"kind": "artist_not_registered", "name": "X"},
+        {"kind": "artist_not_registered", "name": "X"},
+        {"kind": "artist_not_registered", "name": "Y"},
+    ])
+    assert notice.count("X") == 1
+    assert "X / Y" in notice
+
+
+def test_failure_notice_keeps_fetch_failure_wording_unchanged():
+    """既存の取得失敗の文言は変えない(未登録が無いときは従来どおり)。"""
+    notice = bm.build_failure_notice([{"kind": "artist_photo", "name": "A"}])
+    assert notice == (
+        "※ 一部の素材を取得できませんでした(アー写: A)。\n"
+        "アップロード直後で反映待ちの可能性があります。少し待ってからもう一度お試しください。"
+    )
+
+
+def test_failure_notice_shows_both_blocks_separately():
+    notice = bm.build_failure_notice([
+        {"kind": "artist_photo", "name": "A"},
+        {"kind": "artist_not_registered", "name": "Luna moon"},
+    ])
+    blocks = notice.split("\n\n")
+    assert len(blocks) == 2, "2 つの事情が 1 段落に混ざっている"
+    assert "取得できませんでした" in blocks[0]
+    assert "アー写未登録" in blocks[1]
+
+
+def test_failure_notice_ignores_unknown_kind_only():
+    assert bm.build_failure_notice([{"kind": "something_else"}]) is None

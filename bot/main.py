@@ -673,15 +673,25 @@ def render_draft_set_for_project(project_id: int) -> Tuple[List[dict], List[dict
     return (messages, failures)
 
 
+# #4 案2: アー写グリッドに未登録の名前があったときの案内。
+# 「取得に失敗した(= 反映待ちかもしれない)」とは原因も対処も違うので、
+# 同じ括弧にまとめず別の段落として出す。
+UNREGISTERED_ARTIST_KIND = "artist_not_registered"
+
+
 def build_failure_notice(failures: List[dict]) -> Optional[str]:
     """素材取得に失敗した一覧を人間向けの 1 通にまとめる。無ければ None。
 
     §5 の構造化エントリ {"kind","name","url","reason"} を前提にする。
     2 枚は送ったうえで添える警告なので、断定せず「反映待ちの可能性」に留める。
+
+    #4: kind="artist_not_registered"(アー写グリッドの名前が artists に無い)は
+    取得失敗ではないので別の段落にする。グリッド上は黒いプレースホルダで
+    見えている状態なので、やることは「新規登録」だと伝える。
     """
     if not failures:
         return None
-    photos, others = [], []
+    photos, others, unregistered = [], [], []
     for f in failures:
         kind = f.get("kind")
         if kind == "artist_photo":
@@ -692,18 +702,34 @@ def build_failure_notice(failures: List[dict]) -> Optional[str]:
             others.append("背景画像")
         elif kind == "flyer_logo":
             others.append("ロゴ画像")
+        elif kind == UNREGISTERED_ARTIST_KIND:
+            name = f.get("name")
+            if name and name not in unregistered:
+                unregistered.append(name)
+
+    blocks = []
 
     parts = []
     if photos:
         parts.append("アー写: " + " / ".join(photos))
     for o in dict.fromkeys(others):
         parts.append(o)
-    if not parts:
+    if parts:
+        blocks.append(
+            "※ 一部の素材を取得できませんでした(" + " , ".join(parts) + ")。\n"
+            "アップロード直後で反映待ちの可能性があります。少し待ってからもう一度お試しください。"
+        )
+
+    if unregistered:
+        blocks.append(
+            "※ " + " / ".join(unregistered) + " はアー写未登録です"
+            "(グリッドでは黒い枠で表示されています)。\n"
+            "「アー写変更」とメンションして新規登録を進めてください。"
+        )
+
+    if not blocks:
         return None
-    return (
-        "※ 一部の素材を取得できませんでした(" + " , ".join(parts) + ")。\n"
-        "アップロード直後で反映待ちの可能性があります。少し待ってからもう一度お試しください。"
-    )
+    return "\n\n".join(blocks)
 
 
 # ---------------------------------------------------------------------------
