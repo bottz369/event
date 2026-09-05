@@ -2079,6 +2079,40 @@ DB スキーマを変えずに、Railway の再デプロイ・再起動をまた
 
 ---
 
+## 53. 段階C C-1(記入テンプレ送出 + LLM解析 + エコー確認)= 完了・本番稼働(2026-09-05)
+
+✅ LINE で `@Bot 新規作成` → 記入テンプレ返信 → 埋めて返信 → **LLM が構造化抽出 → エコー確認**まで本番で動作確認。
+commit `be783a3`(services 新設)/ `46244de`(bot 配線 + anthropic 追加)/ `4fe5733`(確定版テンプレ + プロンプト + ログ強化)/
+`752ac86`(tool use 切替)。
+
+### 実装
+- `services/event_intake.py`(streamlit-free・`anthropic` 遅延 import):`MSG_INTAKE_TEMPLATE`(谷内さん確定版・
+  ■見出し / `→` 区切り / 出演者30枠 / チケット3種 / TT設定 / 自由記述2件)、`SECTION_HEADINGS`(受信判定用)、
+  `parse_event_template`(LLM 構造化抽出)、`validate_intake`、`format_intake_echo`。
+- bot 配線:メンション付きテキストで「新規作成」→ テンプレ送出 / セクション見出し2つ以上 → 解析フロー(ステートレス・
+  pending 不使用)。解析は **daemon thread**(webhook は 200 を即返す)。ガードは起動済みグループ + メンション必須。
+- **C-1 は DB 無書き込み**(SessionLocal 非接触を機械証明)。`ANTHROPIC_API_KEY` 未設定でも例外にせず案内文。
+- 正規化を LLM プロンプトで指示(`2026/11/03`→`2026-11-03` / `¥6,000`→`6000` / `15分`→`15` / `５組ごと`→`5` /
+  `なし`→`False` / `yyyy/mm/dd`・`00:00` 等のプレースホルダは null)。
+
+### ★罠43: Anthropic の構造化出力(厳格スキーマ)は「union型パラメータ ≤16」の制限がある
+- `output_config`(effort 指定)や tool use の **strict** は、スキーマを厳格コンパイルし、
+  **nullable / anyOf など union 型のパラメータが16個を超えると 400 `invalid_request`**(`too many parameters with
+  union types`)で落ちる。記入テンプレの抽出スキーマは nullable 項目が21個あり抵触した(本番で「解析に失敗」の真因)。
+- **回避 = tool use(function calling)+ `tool_choice` 強制・strict なし**。厳格コンパイルを通らないので union 数の
+  制限を受けず、かつ tool_use.input で構造化 JSON が確実に返る(実 API で抽出正常を確認)。
+  - モデル・キー・課金はすべて無罪だった(診断スクリプトで messages.create 単体・models.list は成功していた)。
+  - 切り分けは「素の疎通 → output_config → output_config(effort無) → tool use強制 → tool use strict」を1スクリプトで
+    全部試して request-id 付きで比較するのが速い。
+- 回帰固定:スキーマの union 数が16超であること、`output_config`/`strict` を使わず `tool_choice` 強制であることを
+  テストで assert(`test_schema_exceeds_structured_output_union_limit` 等)。
+
+### 申し送り
+- モデルは `INTAKE_MODEL = "claude-sonnet-5"`(モジュール定数・1行で差し替え可)。
+- 実 API 検証は scratch スクリプト(diag / verify)で行い、後片付け予定。テストは Anthropic をモックし実 API を叩かない。
+
+---
+
 ## フェーズ計画 現在地(2026-09-05 時点)
 
 - **Phase 5(残りビュー移行)= ✅ 完全クローズ(2026-07-14)**: artists / grid(§24〜§28)/
@@ -2137,9 +2171,11 @@ DB スキーマを変えずに、Railway の再デプロイ・再起動をまた
 - ✅ **保存周りのバグ潰しパス = 完了・本番稼働(§51)**。🔗リンクの scale_h 破壊を根絶し、各タブの保存/生成
   ボタンを **プロジェクト単位の1ボタンに統合**。保存後に保存済み状態からプレビュー再生成 → **web=DB=LINE 一致**
   (症状1 根治)。タブは st.tabs→遅延描画(st.radio)+ ピン留め層。フォント欠損(id=5/6)も Torono_H1 へ張替。
-- 🎯 **次アクション = 段階C(概要→たたき台自動生成)着手(§52 設計済み)**。記入テンプレ + LLM 寛容パース +
-  エコー確認 → プロジェクト作成 → たたき台フライヤー/TT。前提: Anthropic API キーを Railway env に追加。
-  スライス C-1〜C-6。
+- ✅ **段階C C-1(記入テンプレ + LLM解析 + エコー確認)= 完了・本番稼働(§53、2026-09-05)**。
+  Anthropic tool use 方式(罠43 回避)。`ANTHROPIC_API_KEY` は Railway 設定済み。実機で解釈エコーまで確認。
+- 🎯 **次アクション = 段階C C-3(TT engine 純関数)→ C-2(プロジェクト作成 + 日付重複検出 + たたき台フライヤー)**。
+  C-2 の作成にTT行が要るため、純関数の C-3(逆順・15分・物販・転換・A-E循環)を先に作ると C-2 が楽。
+  残り C-4(TT自動編集)/ C-5(調整入口)/ C-6(新規アー写登録 + 黒プレースホルダ)。
 - 📋 **残タスク(低優先)**: 🔗リンクで過去に平坦化された17件(scale_h=scale_w・復元不可)は必要時に手直し /
   削除経路が services 非経由(§21)。
 
