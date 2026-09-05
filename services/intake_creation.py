@@ -55,7 +55,13 @@ def _parse_date(value) -> Optional[datetime.date]:
 
 
 def _price_to_str(price) -> str:
-    """TicketDraft.price は文字列。数値で来たら文字列にそろえる。"""
+    """TicketDraft.price は表示文字列。
+
+    抽出側(event_intake)が告知文の表記のまま("¥6,000" / "各+¥1,000")返すので、
+    ここでは加工しない。None だけ空文字にそろえる。
+    ★数値化しないこと: Web のチケット欄は text_input で、そこに入る値が
+      そのままフライヤーに出る(通貨記号や「各+」を落とすと表示が変わる)。
+    """
     if price is None:
         return ""
     return str(price)

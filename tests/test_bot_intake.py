@@ -151,7 +151,7 @@ PARSED_OK = {
         "subtitle": "AUTUMN", "venue": "上野恩賜公園野外ステージ", "venue_url": None,
         "open_time": "11:30", "start_time": "12:00",
         "open_start_note": None, "ticket_common_note": None,
-        "tickets": [{"name": "Sチケット", "price": 6000, "note": "前方エリア"}],
+        "tickets": [{"name": "Sチケット", "price": "¥6,000", "note": "前方エリア"}],
         "artists": ["NecroA", "PRIBEAST"],
         "tt_settings": {"goods_spaces": None, "set_minutes": None,
                         "has_post_goods": None,

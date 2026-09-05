@@ -39,8 +39,9 @@ FULL_PAYLOAD = {
     "open_start_note": "雨天決行",
     "ticket_common_note": "ドリンク代別途",
     "tickets": [
-        {"name": "前売", "price": 3000, "note": None},
-        {"name": "当日", "price": 3500, "note": "整理番号なし"},
+        # 金額は告知文の表記のまま(数値に潰さない)
+        {"name": "前売", "price": "¥3,000", "note": None},
+        {"name": "当日", "price": "各+¥1,000", "note": "整理番号なし"},
         {"name": None, "price": None, "note": None},          # ← 空行は落ちる
     ],
     "artists": ["NecroA", "  ", "PRIBEAST", "", "ZEKECODE"],   # ← 空欄は落ちる
@@ -311,8 +312,9 @@ def test_echo_contains_key_fields_and_numbered_artists(monkeypatch):
     assert "2026-11-03" in echo
     assert "上野音横丁" in echo
     assert "11:30 / 12:00" in echo
-    assert "前売 3000円" in echo
-    assert "当日 3500円" in echo
+    assert "前売 ¥3,000" in echo, "金額に単位を足したり数値化したりしていないこと"
+    assert "当日 各+¥1,000" in echo, "「各+」が金額から落ちている"
+    assert "当日 各+¥1,000" in echo
     assert "【出演者 3組】" in echo
     assert "1. NecroA" in echo and "3. ZEKECODE" in echo
     assert echo.rstrip().endswith(ei.ECHO_FOOTER), "作成は次のステップ、の一文が末尾に無い"
@@ -553,3 +555,40 @@ def test_fixed_event_name_flows_through_normalize(monkeypatch, name, subtitle):
     data = ei.parse_event_template("x")["data"]
     assert data["event_name"] == name
     assert data["subtitle"] == subtitle
+
+
+# ---------------------------------------------------------------------------
+# #3b: チケット金額は表記のまま持つ
+# ---------------------------------------------------------------------------
+def test_ticket_price_is_kept_as_written(monkeypatch):
+    """金額を int に潰さない(Web のチケット欄は表示文字列の text_input)。"""
+    _install_fake_anthropic(monkeypatch, payload=FULL_PAYLOAD)
+    tickets = ei.parse_event_template("x")["data"]["tickets"]
+    assert [t["price"] for t in tickets] == ["¥3,000", "各+¥1,000"]
+
+
+def test_ticket_price_schema_is_string_not_integer():
+    """スキーマ側でも文字列。int に戻すと通貨記号と「各+」が落ちる。"""
+    prop = ei._INTAKE_SCHEMA["properties"]["tickets"]["items"]["properties"]["price"]
+    assert prop["type"] == ["string", "null"], "price を数値型に戻してはいけない"
+
+
+def test_prompt_forbids_numeric_price_and_note_leakage():
+    """プロンプトの固定ルール(消えると抽出が元の壊れ方に戻る)。"""
+    p = ei._SYSTEM_PROMPT
+    assert "書かれているとおりの文字列" in p
+    assert "数値に直さない" in p
+    assert "各+¥1,000" in p, "「各+」を金額に含める具体例が無い"
+    assert "括弧の中だけ" in p, "備考が括弧内だけ、という規則が無い"
+
+
+def test_ticket_note_keeps_only_parenthetical(monkeypatch):
+    """備考は括弧内のみ。当日行のように括弧が無ければ空。"""
+    payload = dict(FULL_PAYLOAD, tickets=[
+        {"name": "Sチケット", "price": "¥6,000", "note": "前方エリア"},
+        {"name": "当日", "price": "各+¥1,000", "note": None},
+    ])
+    _install_fake_anthropic(monkeypatch, payload=payload)
+    tickets = ei.parse_event_template("x")["data"]["tickets"]
+    assert tickets[0]["note"] == "前方エリア"
+    assert tickets[1]["note"] is None, "「各+」を備考へ移していない"

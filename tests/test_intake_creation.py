@@ -29,8 +29,8 @@ PARSED_DATA = {
     "open_start_note": "※変更の場合あり",
     "ticket_common_note": "※各ドリンク代別",
     "tickets": [
-        {"name": "Sチケット", "price": 6000, "note": "前方エリア"},
-        {"name": "Aチケット", "price": 2000, "note": None},
+        {"name": "Sチケット", "price": "¥6,000", "note": "前方エリア"},
+        {"name": "当日", "price": "各+¥1,000", "note": None},
     ],
     "artists": ["アルテミスの翼", "Luna moon", "リルリボン"],
     "tt_settings": {},
@@ -166,8 +166,10 @@ def test_draft_mapping_basic_fields():
 def test_draft_mapping_tickets_go_to_tickets_json_not_flyer_json():
     """チケットの実データは tickets_json(flyer_json のチケット系は書式キー)。"""
     d = ic.build_draft_from_intake(PARSED_DATA)
-    assert [t.name for t in d.tickets] == ["Sチケット", "Aチケット"]
-    assert [t.price for t in d.tickets] == ["6000", "2000"]
+    assert [t.name for t in d.tickets] == ["Sチケット", "当日"]
+    # ★金額は告知文の表記のまま。Web の tickets_json も "¥6,000" 形式
+    #   (手作業で作った id=34/38/39 の実データと同じ形)。
+    assert [t.price for t in d.tickets] == ["¥6,000", "各+¥1,000"]
     assert [t.note for t in d.tickets] == ["前方エリア", ""]
     # flyer_settings に混ぜ込んでいないこと
     assert "ticket_name" not in d.flyer_settings
