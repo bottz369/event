@@ -21,11 +21,19 @@ def build_event_summary_text(
     title, subtitle, date_val, venue, url,
     open_time, start_time,
     tickets, ticket_notes,
-    artists, free_texts
+    artists, free_texts,
+    planned_artist_count=None
 ):
     """
     イベント概要テキストを構築して返す純粋な関数
     StreamlitやDBの依存を持たせず、渡されたデータだけでテキストを作ります
+
+    planned_artist_count (#3c):
+        「■出演者（N組予定）」の N に使う「予定組数」。概要に書かれた予定数
+        (例 27)を保持しているときだけ渡す。たたき台は一部しか埋まっていない
+        ことがあるので、実際に並ぶ名前の数(len)とは別に持てるようにした。
+        ★None / 0 / int でない値のときは従来どおり len(valid_artists) を使う。
+          渡さなければ出力はバイト単位で従来と同じ(既存プロジェクトは不変)。
     """
     date_str = ""
     if date_val:
@@ -91,7 +99,14 @@ def build_event_summary_text(
         valid_artists = []
 
     if valid_artists:
-        text += f"\n\n■出演者（{len(valid_artists)}組予定）"
+        # #3c: 予定数を保持していればそれを、無ければ実組数を出す。
+        # bool は int のサブクラスなので明示的に除く(True が 1 組扱いになるのを防ぐ)。
+        if isinstance(planned_artist_count, int) and not isinstance(planned_artist_count, bool) \
+                and planned_artist_count > 0:
+            shown_count = planned_artist_count
+        else:
+            shown_count = len(valid_artists)
+        text += f"\n\n■出演者（{shown_count}組予定）"
         for i, artist_name in enumerate(valid_artists, 1):
             c_num = get_circled_number(i)
             text += f"\n{c_num}{artist_name}"

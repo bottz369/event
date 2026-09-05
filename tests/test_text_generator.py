@@ -98,3 +98,45 @@ def test_output_is_byte_identical_without_planned_count():
         "■■注意事項\n"
         "ジャンプの禁止"
     )
+
+
+# ---------------------------------------------------------------------------
+# #3c: 予定組数
+# ---------------------------------------------------------------------------
+def test_planned_artist_count_is_used_when_given():
+    text = build_event_summary_text(title="T", subtitle="",
+                                    planned_artist_count=27, **BASE)
+    assert "■出演者（27組予定）" in text
+    assert "■出演者（3組予定）" not in text
+    # 実際に並ぶ名前は変わらない(予定数は見出しの数字だけ)
+    for name in BASE["artists"]:
+        assert name in text
+
+
+@pytest.mark.parametrize("planned", [None, 0, -1, "", "27", True, 1.5])
+def test_invalid_or_absent_planned_count_falls_back_to_length(planned):
+    """None / 0 / 負 / 文字列 / bool / float は保持していない扱いにして len へ。
+
+    bool を弾くのは、True が int のサブクラスなので「1組予定」になってしまうため。
+    """
+    text = build_event_summary_text(title="T", subtitle="",
+                                    planned_artist_count=planned, **BASE)
+    assert "■出演者（3組予定）" in text
+
+
+def test_planned_count_changes_only_the_headline_number():
+    """予定数の有無で変わるのは出演者見出しの数字だけ(他はバイト一致)。"""
+    without = build_event_summary_text(title="T", subtitle="S", **BASE)
+    with_planned = build_event_summary_text(title="T", subtitle="S",
+                                            planned_artist_count=27, **BASE)
+    assert without.replace("（3組予定）", "（27組予定）") == with_planned
+
+
+def test_planned_count_is_the_last_optional_argument():
+    """位置引数で呼んでいる既存コードを壊さない(末尾のオプション引数)。"""
+    import inspect
+
+    params = list(inspect.signature(build_event_summary_text).parameters)
+    assert params[-1] == "planned_artist_count"
+    assert inspect.signature(build_event_summary_text).parameters[
+        "planned_artist_count"].default is None

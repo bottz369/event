@@ -583,7 +583,9 @@ def render_flyer_editor(project_id):
             title=proj.title, subtitle=proj.subtitle, date_val=proj.event_date,
             venue=proj.venue_name, url=proj.venue_url, open_time=format_time_str(proj.open_time),
             start_time=format_time_str(proj.start_time), tickets=tickets, ticket_notes=notes,
-            artists=filtered_artists, free_texts=free_texts
+            artists=filtered_artists, free_texts=free_texts,
+            # #3c: 保持していれば概要に書かれた予定組数を使う(無ければ実組数)
+            planned_artist_count=st.session_state.get("flyer_planned_artist_count"),
         )
 
         with t3:

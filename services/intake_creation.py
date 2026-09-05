@@ -35,8 +35,12 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# flyer_json に載せるイベント種別のキー(スキーマ変更を避けるため JSON に持つ)
+# flyer_json に載せるキー(スキーマ変更を避けるため JSON に持つ)。
+# ★flyer_json を選ぶ理由: apply_draft が既存とマージするので、web からの保存で
+#   draft.flyer_settings に含まれなくても値が残る(settings_json は全置換)。
 EVENT_TYPE_FLYER_KEY = "event_type"
+# #3c: 概要に書かれた「■出演者(N組予定)」の N。実際に埋まっている組数とは別物。
+PLANNED_ARTIST_COUNT_FLYER_KEY = "planned_artist_count"
 
 # 抽出できなかったときの既定。アプリ側の既定(project_repo._format_time_str)と揃える。
 DEFAULT_OPEN_TIME = "10:00"
@@ -132,6 +136,15 @@ def build_draft_from_intake(data: dict, event_type=None, project_id=None) -> Pro
 
     et = event_type or data.get("event_type")
 
+    # flyer_json は apply_draft がマージするので、こちらが持つキーだけを載せる
+    # (フォント・位置など見た目のキーには触らない)。
+    flyer_settings = {}
+    if et:
+        flyer_settings[EVENT_TYPE_FLYER_KEY] = et
+    planned = data.get("planned_artist_count")
+    if isinstance(planned, int) and not isinstance(planned, bool) and planned > 0:
+        flyer_settings[PLANNED_ARTIST_COUNT_FLYER_KEY] = planned
+
     return ProjectDraft(
         id=project_id,
         title=str(data.get("event_name") or DEFAULT_TITLE),
@@ -147,8 +160,7 @@ def build_draft_from_intake(data: dict, event_type=None, project_id=None) -> Pro
         # settings_json は apply_draft が丸ごと置き換えるので、アプリ既定に合わせて明示する
         settings={"tt_font": "keifont.ttf", "grid_font": "keifont.ttf", "tt_columns": 2},
         grid_settings={"order": artists},
-        # flyer_json はマージされる。種別だけ載せ、見た目のキーには触らない。
-        flyer_settings=({EVENT_TYPE_FLYER_KEY: et} if et else {}),
+        flyer_settings=flyer_settings,
     )
 
 

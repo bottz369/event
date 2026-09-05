@@ -298,3 +298,21 @@ def test_render_timetable_warns_when_font_is_not_resolved(monkeypatch, tmp_path)
     assert any("tofu" in m for m in warnings), (
         "フォント未解決時に豆腐化の警告が出ていない: %r" % warnings
     )
+
+
+# ---------------------------------------------------------------------------
+# #3c: 告知テキストの予定組数(API/Bot 経路)
+# ---------------------------------------------------------------------------
+def test_planned_artist_count_from_flyer_json():
+    """flyer_json に保持していれば取り出す。無ければ None(= 実組数へ)。"""
+    import json as _json
+
+    from services import generation_service as gs
+
+    assert gs._planned_artist_count(_json.dumps({"planned_artist_count": 27})) == 27
+    assert gs._planned_artist_count(_json.dumps({})) is None
+    assert gs._planned_artist_count(None) is None
+    assert gs._planned_artist_count("{ not json") is None
+    # 保持できない値は None(実組数へフォールバック)
+    for bad in (0, -1, "27", True):
+        assert gs._planned_artist_count(_json.dumps({"planned_artist_count": bad})) is None

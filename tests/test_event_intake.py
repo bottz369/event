@@ -592,3 +592,48 @@ def test_ticket_note_keeps_only_parenthetical(monkeypatch):
     tickets = ei.parse_event_template("x")["data"]["tickets"]
     assert tickets[0]["note"] == "前方エリア"
     assert tickets[1]["note"] is None, "「各+」を備考へ移していない"
+
+
+# ---------------------------------------------------------------------------
+# #3c: 予定組数は正規表現で決定論的に拾う(LLM スキーマは触らない)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("■出演者(27組予定)", 27),
+        ("■出演者（27組予定）", 27),          # 全角括弧
+        ("■出演者 ( 20 組予定 )", 20),        # 空白ゆれ
+        ("■出演者(20組予定)\n1.\n2.", 20),
+        ("■出演者", None),                     # 予定数が書かれていない
+        ("出演者は27組です", None),             # 「組予定」でない
+        ("■出演者(0組予定)", None),            # 0 は保持しない
+        ("", None),
+        (None, None),
+    ],
+)
+def test_detect_planned_artist_count(text, expected):
+    assert ei.detect_planned_artist_count(text) == expected
+
+
+def test_planned_count_is_not_in_the_llm_schema():
+    """★LLM スキーマに足さない(罠43 の union 上限に近づけない)。正規表現で取る。"""
+    assert "planned_artist_count" not in ei._INTAKE_SCHEMA["properties"]
+    assert "planned_artist_count" not in ei._INTAKE_SCHEMA["required"]
+
+
+def test_parse_puts_planned_count_into_data(monkeypatch):
+    _install_fake_anthropic(monkeypatch, payload=FULL_PAYLOAD)
+    data = ei.parse_event_template("■出演者(27組予定)\n■料金\n【公演概要】")["data"]
+    assert data["planned_artist_count"] == 27
+
+
+def test_parse_sets_none_when_not_written(monkeypatch):
+    _install_fake_anthropic(monkeypatch, payload=FULL_PAYLOAD)
+    data = ei.parse_event_template("【公演概要】\n■料金")["data"]
+    assert data["planned_artist_count"] is None
+
+
+def test_templates_carry_the_planned_count_slot():
+    """配るテンプレ自体に予定数が書かれている(ガールズ27 / メンズ20)。"""
+    assert ei.detect_planned_artist_count(ei.TEMPLATE_GIRLS) == 27
+    assert ei.detect_planned_artist_count(ei.TEMPLATE_MENS) == 20

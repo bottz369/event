@@ -384,3 +384,27 @@ def test_find_projects_by_event_date_without_date(monkeypatch):
                         lambda db: pytest.fail("日付が無いのに DB を引いた"))
     assert ic.find_projects_by_event_date(None) == []
     assert ic.find_projects_by_event_date("未定") == []
+
+
+# ---------------------------------------------------------------------------
+# #3c: 予定組数の保持
+# ---------------------------------------------------------------------------
+def test_planned_count_is_saved_into_flyer_json():
+    d = ic.build_draft_from_intake(dict(PARSED_DATA, planned_artist_count=27))
+    assert d.flyer_settings[ic.PLANNED_ARTIST_COUNT_FLYER_KEY] == 27
+    # 種別と同居できる
+    assert d.flyer_settings[ic.EVENT_TYPE_FLYER_KEY] == "girls"
+
+
+@pytest.mark.parametrize("bad", [None, 0, -1, "27", True])
+def test_invalid_planned_count_is_not_saved(bad):
+    """保持できない値のときはキーごと入れない(= 実組数へフォールバックさせる)。"""
+    d = ic.build_draft_from_intake(dict(PARSED_DATA, planned_artist_count=bad))
+    assert ic.PLANNED_ARTIST_COUNT_FLYER_KEY not in d.flyer_settings
+
+
+def test_flyer_settings_only_carries_our_keys():
+    """見た目のキー(フォント・位置など)には触らない。"""
+    d = ic.build_draft_from_intake(dict(PARSED_DATA, planned_artist_count=27))
+    assert set(d.flyer_settings) == {ic.EVENT_TYPE_FLYER_KEY,
+                                     ic.PLANNED_ARTIST_COUNT_FLYER_KEY}

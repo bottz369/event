@@ -214,6 +214,33 @@ def get_intake_template(event_type: str):
     return INTAKE_TEMPLATES.get(event_type)
 
 
+# 「■出演者(27組予定)」の予定組数を拾う正規表現(#3c)。
+# ★LLM のスキーマには足さない。union を増やすと罠43(構造化出力の 16 union 制限)に
+#   近づくうえ、この値は決定論的に取れるので正規表現の方が確実で安い。
+_PLANNED_ARTIST_COUNT_RE = re.compile(
+    r"出演者\s*[(（]\s*(\d+)\s*組予定\s*[)）]"
+)
+
+
+def detect_planned_artist_count(text: str):
+    """告知文の「■出演者(N組予定)」から N を返す。無ければ None。
+
+    たたき台は出演者が一部しか埋まっていないことがあるので、実際に書かれた
+    名前の数とは別に「予定は何組か」を保持するために使う。
+    全角/半角の括弧と、括弧内の空白ゆれを吸収する。
+    """
+    if not text:
+        return None
+    m = _PLANNED_ARTIST_COUNT_RE.search(str(text))
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def detect_event_type(text: str):
     """本文先頭の「【イベント種別】…」行から種別を決定論的に読む。
 
@@ -500,6 +527,9 @@ def parse_event_template(text: str) -> dict:
     marked = detect_event_type(text)
     if marked is not None:
         normalized["event_type"] = marked
+
+    # #3c: 予定組数は本文から決定論的に拾う(LLM には聞かない)。
+    normalized["planned_artist_count"] = detect_planned_artist_count(text)
 
     return {"ok": True, "reason": None, "data": normalized}
 

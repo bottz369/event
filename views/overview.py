@@ -353,7 +353,9 @@ def render_overview_page():
         tickets=st.session_state.get("proj_tickets", []),
         ticket_notes=st.session_state.get("proj_ticket_notes", []),
         artists=artists_list,
-        free_texts=st.session_state.get("proj_free_text", [])
+        free_texts=st.session_state.get("proj_free_text", []),
+        # #3c: 保持していれば概要に書かれた予定組数を使う(無ければ実組数)
+        planned_artist_count=st.session_state.get("flyer_planned_artist_count"),
     )
 
     st.session_state.txt_overview_preview_area = generated_text

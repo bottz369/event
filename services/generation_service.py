@@ -79,6 +79,19 @@ def _loads_dict(raw) -> dict:
     return v if isinstance(v, dict) else {}
 
 
+# #3c: 予定組数は flyer_json に持つ(スキーマ変更なし・intake_creation が書く)。
+PLANNED_ARTIST_COUNT_KEY = "planned_artist_count"
+
+
+def _planned_artist_count(flyer_json_raw):
+    """flyer_json から予定組数を取り出す。無ければ None(= 実組数へフォールバック)。"""
+    data = _loads_dict(flyer_json_raw)
+    value = data.get(PLANNED_ARTIST_COUNT_KEY)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 def build_summary_text_for_project(project_id: int) -> Optional[str]:
     """project_id の告知テキストを DB から組んで返す。未検出は None。
 
@@ -123,6 +136,10 @@ def build_summary_text_for_project(project_id: int) -> Optional[str]:
             continue
         filtered_artists.append(name)
 
+    # #3c: 概要に書かれた予定組数を保持していれば、それを見出しに使う。
+    # 持っていなければ None を渡す = 従来どおり実組数(既存プロジェクトは不変)。
+    planned = _planned_artist_count(view.flyer_json)
+
     return build_event_summary_text(
         title=view.title,
         subtitle=view.subtitle,
@@ -135,6 +152,7 @@ def build_summary_text_for_project(project_id: int) -> Optional[str]:
         ticket_notes=ticket_notes,
         artists=filtered_artists,
         free_texts=free_texts,
+        planned_artist_count=planned,
     )
 
 
