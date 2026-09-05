@@ -59,20 +59,38 @@ FULL_PAYLOAD = {
 }
 
 
-class _FakeBlock:
+class _FakeToolUseBlock:
+    """tool_use ブロックの最小モック(.type / .name / .input だけ見ている)。"""
+
+    def __init__(self, name, payload):
+        self.type = "tool_use"
+        self.name = name
+        self.input = payload
+
+
+class _FakeTextBlock:
     def __init__(self, text):
         self.type = "text"
         self.text = text
 
 
 class _FakeResponse:
-    def __init__(self, payload):
-        self.content = [_FakeBlock(json.dumps(payload, ensure_ascii=False))]
+    def __init__(self, blocks, stop_reason="tool_use"):
+        self.content = blocks
+        self.stop_reason = stop_reason
 
 
-def _install_fake_anthropic(monkeypatch, payload=None, raise_exc=None, capture=None):
-    """anthropic モジュールを偽物に差し替える(実 API を叩かない)。"""
+def _install_fake_anthropic(monkeypatch, payload=None, raise_exc=None, capture=None,
+                            blocks=None):
+    """anthropic モジュールを偽物に差し替える(実 API を叩かない)。
+
+    既定では INTAKE_TOOL_NAME の tool_use ブロックを 1 つ返す。
+    blocks を渡すと応答ブロックをそのまま差し替えられる(異常系用)。
+    """
     module = types.ModuleType("anthropic")
+
+    if blocks is None:
+        blocks = [_FakeToolUseBlock(ei.INTAKE_TOOL_NAME, payload)]
 
     class _Messages:
         def create(self, **kwargs):
@@ -80,7 +98,7 @@ def _install_fake_anthropic(monkeypatch, payload=None, raise_exc=None, capture=N
                 capture.update(kwargs)
             if raise_exc is not None:
                 raise raise_exc
-            return _FakeResponse(payload)
+            return _FakeResponse(blocks)
 
     class _Client:
         def __init__(self, api_key=None):
@@ -170,17 +188,19 @@ def test_api_error_returns_reason_not_exception(monkeypatch):
     assert result["reason"] == ei.REASON_API_ERROR
 
 
-def test_non_json_output_returns_reason(monkeypatch):
-    _install_fake_anthropic(monkeypatch)
+def test_no_tool_use_block_returns_reason(monkeypatch):
+    """tool_choice で強制していても text しか返らなかった場合に落ちない。"""
+    _install_fake_anthropic(
+        monkeypatch, blocks=[_FakeTextBlock("すみません、読み取れませんでした")])
+    result = ei.parse_event_template("x")
+    assert result["ok"] is False
+    assert result["reason"] == ei.REASON_BAD_OUTPUT
 
-    class _BadResponse:
-        content = [_FakeBlock("これは JSON ではありません")]
 
-    import anthropic
-
-    anthropic.Anthropic.__init__ = lambda self, api_key=None: setattr(
-        self, "messages", type("M", (), {"create": lambda _s, **_k: _BadResponse()})()
-    )
+def test_tool_use_with_other_name_is_ignored(monkeypatch):
+    """別 tool の tool_use を誤って採用しない。"""
+    _install_fake_anthropic(
+        monkeypatch, blocks=[_FakeToolUseBlock("some_other_tool", FULL_PAYLOAD)])
     result = ei.parse_event_template("x")
     assert result["ok"] is False
     assert result["reason"] == ei.REASON_BAD_OUTPUT
@@ -189,16 +209,53 @@ def test_non_json_output_returns_reason(monkeypatch):
 # ---------------------------------------------------------------------------
 # 解析と正規化
 # ---------------------------------------------------------------------------
-def test_parse_uses_structured_output_and_configured_model(monkeypatch):
+def test_parse_uses_forced_tool_use_and_configured_model(monkeypatch):
+    """構造化は tool use + tool_choice 強制で行う。
+
+    ★output_config.format は使えない(厳格スキーマ検証の「union 型 ≤16」に
+      このスキーマの 21 union が引っかかり 400 invalid_request になる)。
+      同じ理由で strict も付けてはいけない。実 API で確認済みの制約なので、
+      うっかり戻さないようテストで固定する。
+    """
     capture = {}
     _install_fake_anthropic(monkeypatch, payload=FULL_PAYLOAD, capture=capture)
     result = ei.parse_event_template("■ 公演概要の設定\n■ タイムテーブル設定")
 
     assert result["ok"] is True
     assert capture["model"] == ei.INTAKE_MODEL
-    fmt = capture["output_config"]["format"]
-    assert fmt["type"] == "json_schema", "構造化出力を使っていない"
-    assert fmt["schema"]["additionalProperties"] is False
+
+    assert "output_config" not in capture, "output_config は 400 になるので使ってはいけない"
+
+    tools = capture["tools"]
+    assert len(tools) == 1
+    tool = tools[0]
+    assert tool["name"] == ei.INTAKE_TOOL_NAME
+    assert tool["input_schema"]["additionalProperties"] is False
+    assert "strict" not in tool, "strict を付けると 16 union 制限で 400 になる"
+
+    assert capture["tool_choice"] == {"type": "tool", "name": ei.INTAKE_TOOL_NAME}
+
+
+def test_schema_exceeds_structured_output_union_limit(monkeypatch):
+    """スキーマの union 数が 16 を超えることを記録しておく(切替の根拠)。
+
+    16 以下に収まるようになったら output_config へ戻せるが、その判断は
+    実 API で確認してから行うこと。
+    """
+    def count_unions(node):
+        n = 0
+        if isinstance(node, dict):
+            t = node.get("type")
+            if isinstance(t, list) and len(t) > 1:
+                n += 1
+            for v in node.values():
+                n += count_unions(v)
+        elif isinstance(node, list):
+            for v in node:
+                n += count_unions(v)
+        return n
+
+    assert count_unions(ei._INTAKE_SCHEMA) > 16
 
 
 def test_blank_artists_are_dropped(monkeypatch):

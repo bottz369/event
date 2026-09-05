@@ -35,6 +35,10 @@ MAX_ARTISTS = 30
 MAX_TICKETS = 3
 MAX_FREE_TEXTS = 2
 
+# 抽出に使う tool の名前。構造化出力(output_config.format)ではなく
+# tool use(function calling)で構造化する。理由は _INTAKE_SCHEMA のコメント参照。
+INTAKE_TOOL_NAME = "record_event_intake"
+
 # 解析結果の失敗理由(bot 側の文言出し分けに使う)
 REASON_NO_API_KEY = "no_api_key"
 REASON_SDK_MISSING = "sdk_missing"
@@ -204,6 +208,13 @@ _SYSTEM_PROMPT = (
     "- 書かれていない情報を推測して埋めない。分からないものは null にする。"
 )
 
+# 抽出スキーマ。tool の input_schema として渡す。
+#
+# ★output_config.format(構造化出力)では使えない。厳格スキーマ検証が
+#   「union 型のパラメータは 16 個まで」を要求し、このスキーマは 21 個の union
+#   (["string", "null"] 等)を持つため 400 invalid_request になる(実 API で確認)。
+#   tool use の input_schema には同じ制限が無く、そのまま通る。
+#   同じ理由で tool に strict=True を付けてはいけない(厳格検証が働き 400 になる)。
 _INTAKE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -324,7 +335,11 @@ def _log_api_error(e: Exception) -> None:
 
 
 def parse_event_template(text: str) -> dict:
-    """記入テンプレを Anthropic の構造化出力でパースする。
+    """記入テンプレを Anthropic の tool use(function calling)でパースする。
+
+    構造化の方法として tool use を使い、tool_choice でその tool の呼び出しを強制する。
+    返ってきた tool_use ブロックの .input が抽出結果の dict。
+    (output_config.format を使わない理由は _INTAKE_SCHEMA のコメント参照)
 
     戻り値: {"ok": bool, "reason": str|None, "data": dict|None}
     ★例外を外へ投げない。API キー未設定・SDK 未 install・API 障害はすべて
@@ -348,24 +363,31 @@ def parse_event_template(text: str) -> dict:
             max_tokens=16000,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": text}],
-            output_config={
-                # 抽出タスクなので思考は浅くてよい(速度とコストを優先)
-                "effort": "low",
-                "format": {"type": "json_schema", "schema": _INTAKE_SCHEMA},
-            },
+            tools=[{
+                "name": INTAKE_TOOL_NAME,
+                "description": "記入テンプレから読み取ったイベント情報を記録する",
+                # ★strict は付けない(付けると 16 union 制限で 400 になる)
+                "input_schema": _INTAKE_SCHEMA,
+            }],
+            # この tool の呼び出しを強制する(自由文で返させない)
+            tool_choice={"type": "tool", "name": INTAKE_TOOL_NAME},
         )
     except Exception as e:
         _log_api_error(e)
         return _fail(REASON_API_ERROR)
 
-    try:
-        raw = next(b.text for b in response.content if b.type == "text")
-        data = json.loads(raw)
-    except Exception as e:
-        logger.error("intake parse output was not valid JSON: %s", e, exc_info=True)
-        return _fail(REASON_BAD_OUTPUT)
-
+    data = next(
+        (b.input for b in response.content
+         if getattr(b, "type", None) == "tool_use"
+         and getattr(b, "name", None) == INTAKE_TOOL_NAME),
+        None,
+    )
     if not isinstance(data, dict):
+        logger.error(
+            "intake parse returned no tool_use block: stop_reason=%s types=%s",
+            getattr(response, "stop_reason", None),
+            [getattr(b, "type", None) for b in (response.content or [])],
+        )
         return _fail(REASON_BAD_OUTPUT)
 
     return {"ok": True, "reason": None, "data": _normalize(data)}
