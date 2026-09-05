@@ -36,11 +36,13 @@ def build_event_summary_text(
             date_str = str(date_val)
     
     # 基本情報
-    text = f"【公演概要】\n{date_str}\n『{title}』"
-    
-    if subtitle:
-        text += f"\n～{subtitle}～"
-        
+    # #3a: タイトルとサブタイトルは 1 行にまとめる(『名前 - サブタイトル』)。
+    # 旧仕様は『名前』の次行に ～サブタイトル～ を置いていたが、告知文の見出しは
+    # 1 行であってほしいという運用判断で共通フォーマットを変更した。
+    # サブタイトルが空のときの出力は従来と完全に同じ。
+    heading = f"{title} - {subtitle}" if subtitle else title
+    text = f"【公演概要】\n{date_str}\n『{heading}』"
+
     text += f"\n\n■会場: {venue}"
     if url:
         text += f"\n {url}"

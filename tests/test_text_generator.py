@@ -1,0 +1,100 @@
+"""utils.text_generator.build_event_summary_text のテスト(#3a / #3c)。
+
+純関数なので DB も streamlit も要らない。全プロジェクト共通の告知テキストを
+組む関数なので、**変えると決めた挙動以外はバイト単位で不変**であることを守る。
+"""
+from __future__ import annotations
+
+import datetime
+
+import pytest
+
+from utils.text_generator import build_event_summary_text
+
+BASE = dict(
+    date_val=datetime.date(2026, 11, 3),
+    venue="上野恩賜公園野外ステージ",
+    url="https://maps.example/xyz",
+    open_time="11:30",
+    start_time="12:00",
+    tickets=[{"name": "Sチケット", "price": "¥6,000", "note": "前方エリア"}],
+    ticket_notes=["※各ドリンク代別"],
+    artists=["アルテミスの翼", "Luna moon", "リルリボン"],
+    free_texts=[{"title": "■注意事項", "content": "ジャンプの禁止"}],
+)
+
+
+def _head(text):
+    """【公演概要】ブロック(会場の前まで)を返す。"""
+    return text.split("\n\n")[0]
+
+
+# ---------------------------------------------------------------------------
+# #3a: タイトル 1 行結合
+# ---------------------------------------------------------------------------
+def test_title_and_subtitle_are_joined_on_one_line():
+    text = build_event_summary_text(title="テスト", subtitle="ガールズテストフェス", **BASE)
+    assert _head(text) == (
+        "【公演概要】\n2026年11月03日(火)\n『テスト - ガールズテストフェス』"
+    )
+    # 旧仕様(次行に ～サブタイトル～)が残っていないこと
+    assert "～ガールズテストフェス～" not in text
+
+
+def test_title_without_subtitle_is_unchanged():
+    """サブタイトルが無いときの出力は従来と完全に同じ。"""
+    text = build_event_summary_text(title="テスト", subtitle="", **BASE)
+    assert _head(text) == "【公演概要】\n2026年11月03日(火)\n『テスト』"
+    assert " - " not in _head(text), "区切りが混ざっている"
+
+
+@pytest.mark.parametrize("subtitle", [None, "", 0])
+def test_falsy_subtitle_is_treated_as_absent(subtitle):
+    text = build_event_summary_text(title="テスト", subtitle=subtitle, **BASE)
+    assert "『テスト』" in text
+
+
+def test_subtitle_uses_ascii_hyphen_with_spaces():
+    """区切りは半角ハイフン前後スペース(告知文フォーマットと同じ)。"""
+    text = build_event_summary_text(title="A", subtitle="B", **BASE)
+    assert "『A - B』" in text
+
+
+# ---------------------------------------------------------------------------
+# 出演者見出し(#3c の前提: 予定数を渡さないときは実組数)
+# ---------------------------------------------------------------------------
+def test_artist_count_defaults_to_actual_length():
+    """予定数を渡さないときは従来どおり実組数(完全な後方互換)。"""
+    text = build_event_summary_text(title="T", subtitle="", **BASE)
+    assert "■出演者（3組予定）" in text
+
+
+def test_output_is_byte_identical_without_planned_count():
+    """★予定数を持たない既存プロジェクトの出力が変わっていないことの固定。
+
+    #3a のタイトル行だけが意図的な変更点。それ以外は 1 バイトも動かさない。
+    """
+    text = build_event_summary_text(title="テスト", subtitle="", **BASE)
+    assert text == (
+        "【公演概要】\n"
+        "2026年11月03日(火)\n"
+        "『テスト』\n"
+        "\n"
+        "■会場: 上野恩賜公園野外ステージ\n"
+        " https://maps.example/xyz\n"
+        "\n"
+        "OPEN▶11:30\n"
+        "START▶12:00\n"
+        "\n"
+        "■チケット\n"
+        "- Sチケット: ¥6,000 (前方エリア)\n"
+        "※※各ドリンク代別\n"
+        "\n"
+        "■出演者（3組予定）\n"
+        "①アルテミスの翼\n"
+        "②Luna moon\n"
+        "③リルリボン\n"
+        "\n"
+        "■■注意事項\n"
+        "ジャンプの禁止"
+    )
