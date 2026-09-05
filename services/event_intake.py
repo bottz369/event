@@ -273,7 +273,14 @@ _SYSTEM_PROMPT = (
     "- 全角/半角、空白、改行のゆれは吸収する。\n"
     "- 開催日は YYYY-MM-DD に正規化する(「2026年11月3日(月)」など)。"
     "年が書かれていなければ最も近い将来の年を補う。\n"
-    "- イベント名とサブタイトルは「 - 」で分ける。区切りが無ければ全部をイベント名にする。\n"
+    "- ★イベント名の固定ルール: 「rock field ULTRA LIVE」は常にイベント名。"
+    "その後ろに続く部分がサブタイトル。区切りは「-」でも空白だけでもよい"
+    "(「rock field ULTRA LIVE - Autumn Glow」も"
+    "「rock field ULTRA LIVE   Autumn Glow」も、"
+    "イベント名=「rock field ULTRA LIVE」/ サブタイトル=「Autumn Glow」)。"
+    "後ろに何も続かなければサブタイトルは null。\n"
+    "- 「rock field ULTRA LIVE」以外のタイトルのときは「 - 」で分ける。"
+    "区切りが無ければ全部をイベント名にする。\n"
     "- 時刻は HH:MM(24時間)に正規化する。\n"
     "- 金額は数値だけを取り出す(「¥6,000」→ 6000、「各+¥1,000」→ 1000)。"
     "読み取れなければ null。\n"
@@ -577,6 +584,16 @@ def validate_intake(parsed: dict) -> Tuple[bool, List[str]]:
 # ---------------------------------------------------------------------------
 ECHO_FOOTER = "※内容はこの解釈です。作成は次のステップ(準備中)"
 
+# 【タイムテーブル設定】ブロックの案内文。既定値は §52 の TT engine の決定に合わせる。
+TT_DEFAULTS_NOTICE = (
+    "タイムテーブルは次のステップで自動生成します"
+    "(既定:出演尺15分 / 物販 終演5分後から60分 / スペース A〜E / 転換 5組ごと5分)。"
+    "細かい調整は後で行えます。"
+)
+
+# 種別を決められなかったときのエコー表記(対話での確認は C-2 で行う)
+ECHO_EVENT_TYPE_UNKNOWN = "判定できませんでした(作成時に確認します)"
+
 _FREE_TEXT_PREVIEW = 40
 
 
@@ -602,7 +619,11 @@ def format_intake_echo(parsed: dict) -> str:
     lines: List[str] = ["読み取った内容を確認してください。", ""]
 
     lines.append("【公演概要】")
-    lines.append("イベント種別: %s" % event_type_label(data.get("event_type")))
+    _et = data.get("event_type")
+    lines.append(
+        "イベント種別: %s"
+        % (event_type_label(_et) if _et in EVENT_TYPES else ECHO_EVENT_TYPE_UNKNOWN)
+    )
     lines.append("イベント名: %s" % _or_dash(data.get("event_name")))
     if data.get("subtitle"):
         lines.append("サブタイトル: %s" % data["subtitle"])
@@ -641,18 +662,10 @@ def format_intake_echo(parsed: dict) -> str:
 
     lines.append("")
     lines.append("【タイムテーブル設定】")
-    tt = data.get("tt_settings") or {}
-    lines.append("物販スペース: %s" % _or_dash(tt.get("goods_spaces")))
-    lines.append("出演尺: %s分" % _or_dash(tt.get("set_minutes")))
-    if tt.get("has_post_goods") is not None:
-        lines.append("終演後物販: %s" % ("あり" if tt["has_post_goods"] else "なし"))
-    lines.append("物販: 終演%s分後から%s分"
-                 % (_or_dash(tt.get("goods_start_offset_minutes")),
-                    _or_dash(tt.get("goods_duration_minutes"))))
-    if tt.get("changeover_every_n") or tt.get("changeover_minutes"):
-        lines.append("転換: %s組ごとに%s分"
-                     % (_or_dash(tt.get("changeover_every_n")),
-                        _or_dash(tt.get("changeover_minutes"))))
+    # ★告知文フォーマットに TT / 物販の項目は無いので、ここが未記入なのは正常。
+    #   抽出値を「(未記入)」と並べると不安を招くため、次のステップで自動生成する
+    #   ことと既定値を案内する(実際の生成は C-3 の TT engine)。
+    lines.append(TT_DEFAULTS_NOTICE)
 
     free_texts = data.get("free_texts") or []
     if free_texts:

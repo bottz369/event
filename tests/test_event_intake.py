@@ -315,8 +315,6 @@ def test_echo_contains_key_fields_and_numbered_artists(monkeypatch):
     assert "当日 3500円" in echo
     assert "【出演者 3組】" in echo
     assert "1. NecroA" in echo and "3. ZEKECODE" in echo
-    assert "終演5分後から60分" in echo
-    assert "4組ごとに10分" in echo
     assert echo.rstrip().endswith(ei.ECHO_FOOTER), "作成は次のステップ、の一文が末尾に無い"
 
 
@@ -460,9 +458,16 @@ def test_echo_shows_event_type(monkeypatch):
     assert "イベント種別: ガールズ" in echo
 
 
-def test_echo_shows_unset_event_type():
-    echo = ei.format_intake_echo({"ok": True, "reason": None, "data": {}})
-    assert "イベント種別: 未設定" in echo
+@pytest.mark.parametrize("event_type", [None, "unknown", "", "other"])
+def test_echo_shows_undetermined_event_type(event_type):
+    """種別を決められなかったときは「判定できませんでした」と出す(C-1.2)。
+
+    対話での確認は C-2 で行うため、ここでは作成時に確認する旨を伝えるだけ。
+    """
+    echo = ei.format_intake_echo(
+        {"ok": True, "reason": None, "data": {"event_type": event_type}})
+    assert "イベント種別: %s" % ei.ECHO_EVENT_TYPE_UNKNOWN in echo
+    assert "未設定" not in echo
 
 
 # ---------------------------------------------------------------------------
@@ -485,3 +490,66 @@ def test_free_texts_allow_three_blocks(monkeypatch):
     assert len(data["free_texts"]) == 3
     assert data["free_texts"][2]["title"] == "■物販・特典会ご参加時の注意点"
     assert ei.MAX_FREE_TEXTS >= 3
+
+
+# ---------------------------------------------------------------------------
+# C-1.2 (1): 【タイムテーブル設定】は既定案内に置き換わる
+# ---------------------------------------------------------------------------
+def test_echo_tt_block_shows_defaults_notice(monkeypatch):
+    """告知文に TT 項目が無いのは正常なので「(未記入)」を並べず既定を案内する。"""
+    _install_fake_anthropic(monkeypatch, payload=FULL_PAYLOAD)
+    echo = ei.format_intake_echo(ei.parse_event_template("x"))
+
+    assert "【タイムテーブル設定】" in echo
+    assert ei.TT_DEFAULTS_NOTICE in echo
+    # 旧表示(不安を招いていたもの)が残っていないこと
+    for gone in ("物販スペース:", "出演尺:", "終演後物販:", "物販: 終演", "転換:"):
+        assert gone not in echo, f"旧 TT 表示 {gone} が残っている"
+
+
+def test_echo_tt_notice_contains_the_agreed_defaults():
+    """案内文の既定値が §52 の TT engine の決定と一致していること。"""
+    n = ei.TT_DEFAULTS_NOTICE
+    for token in ("出演尺15分", "終演5分後から60分", "A〜E", "5組ごと5分"):
+        assert token in n, f"既定値 {token} が案内文に無い"
+
+
+def test_echo_tt_notice_shown_even_when_tt_values_present(monkeypatch):
+    """TT 値が入っていてもブロックは案内文(告知文フォーマットには枠が無いため)。"""
+    _install_fake_anthropic(monkeypatch, payload=FULL_PAYLOAD)
+    parsed = ei.parse_event_template("x")
+    assert parsed["data"]["tt_settings"]["set_minutes"] == 15  # 値自体は保持される
+    assert ei.TT_DEFAULTS_NOTICE in ei.format_intake_echo(parsed)
+
+
+# ---------------------------------------------------------------------------
+# C-1.2 (2): イベント名の固定ルールがプロンプトに入っている
+# ---------------------------------------------------------------------------
+def test_prompt_states_fixed_event_name_rule():
+    """「rock field ULTRA LIVE」は常にイベント名、という固定ルールの明文化。
+
+    実際の分離は LLM が行うのでモックでは検証できない。ここではルールが
+    プロンプトから消えていないことを守る(消えると命名が揺れる)。
+    """
+    p = ei._SYSTEM_PROMPT
+    assert "rock field ULTRA LIVE" in p
+    assert "常にイベント名" in p
+    # ハイフン区切りと空白区切りの両方を許すと書いてあること
+    assert "空白だけでもよい" in p
+    assert "Autumn Glow" in p, "具体例が無いと LLM がゆれる"
+
+
+@pytest.mark.parametrize(
+    "name,subtitle",
+    [
+        ("rock field ULTRA LIVE", "Autumn Glow"),   # ハイフン区切り想定
+        ("rock field ULTRA LIVE", None),            # サブタイトル無し
+    ],
+)
+def test_fixed_event_name_flows_through_normalize(monkeypatch, name, subtitle):
+    """LLM がルールどおり分離して返した値が、正規化で壊れないこと。"""
+    _install_fake_anthropic(
+        monkeypatch, payload=dict(FULL_PAYLOAD, event_name=name, subtitle=subtitle))
+    data = ei.parse_event_template("x")["data"]
+    assert data["event_name"] == name
+    assert data["subtitle"] == subtitle
