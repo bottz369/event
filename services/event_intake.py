@@ -33,7 +33,11 @@ INTAKE_MODEL = "claude-sonnet-5"
 # 出演者・チケット・自由記述の上限(テンプレと schema の両方で使う)
 MAX_ARTISTS = 30
 MAX_TICKETS = 3
-MAX_FREE_TEXTS = 2
+# 自由記述はアプリ側に件数制限が無い(UI は「＋ 新しい項目を追加」で無制限、
+# free_text_json は生 list、概要テキスト生成も全件ループ)。メンズのテンプレは
+# 3 ブロック(チケット入場 / 注意事項 / 物販・特典会)あるので、結合せず
+# そのまま持つ。ここでの上限は LLM の暴走に対する安全弁。
+MAX_FREE_TEXTS = 5
 
 # 抽出に使う tool の名前。構造化出力(output_config.format)ではなく
 # tool use(function calling)で構造化する。理由は _INTAKE_SCHEMA のコメント参照。
@@ -51,93 +55,89 @@ REASON_BAD_OUTPUT = "bad_output"
 # セクション見出し。★ステートレス判定の要:埋めて返ってきたテンプレかどうかを
 # この見出しが本文に複数あるかで判定する(pending を持たないため)。
 SECTION_HEADINGS = (
-    "公演概要の設定",
-    "料金設定",
-    "アー写グリッド設定",
-    "タイムテーブル設定",
-    "自由記述",
+    "公演概要",
+    "会場",
+    "料金",
+    "出演者",
+    "チケット・入場",
 )
 
 # 「埋めたテンプレ」とみなす見出しの最低ヒット数
 FILLED_TEMPLATE_MIN_HEADINGS = 2
 
 
-def _artist_lines() -> str:
-    """出演者の記入枠(1〜MAX_ARTISTS)。区切りは確定版に合わせて「→」。"""
-    return "\n".join("出演者%d→" % i for i in range(1, MAX_ARTISTS + 1))
+# =========================================================
+# イベント種別
+# =========================================================
+# 種別で違うのは自由記述と料金の既定値だけで、抽出項目・スキーマは共通。
+# 将来フライヤーの見た目も種別で変えるため、抽出結果に event_type として載せて
+# 下流(C-2 のプロジェクト作成)へ渡す。
+EVENT_TYPE_GIRLS = "girls"
+EVENT_TYPE_MENS = "mens"
+EVENT_TYPES = (EVENT_TYPE_GIRLS, EVENT_TYPE_MENS)
+
+# 本文先頭に置く種別行。★ステートレスの要:埋めて返信された本文にもこの行が
+# 残るので、pending を持たずに種別を復元できる。
+EVENT_TYPE_MARKER = "【イベント種別】"
+_EVENT_TYPE_LABELS = {EVENT_TYPE_GIRLS: "ガールズ", EVENT_TYPE_MENS: "メンズ"}
 
 
-# 谷内さん確定版の記入テンプレ本文。
-# ★差し替えるときはこの文字列だけを直す。SECTION_HEADINGS を変えなければ
-#   受信判定(looks_like_filled_template)はそのまま動く。
-MSG_INTAKE_TEMPLATE = (
-    """以下をコピーして、分かる範囲で埋めて送り返してください。
-空欄のままでも大丈夫です(あとから直せます)。
-
-送り返す際は必ず【僕(@BOTTZ AI)にメンションを付けて】送信お願いします。
+def event_type_label(event_type) -> str:
+    """種別の表示名。未知/未設定は「未設定」。"""
+    return _EVENT_TYPE_LABELS.get(event_type, "未設定")
 
 
-
-■ 公演概要の設定
-開催日→yyyy/mm/dd
-イベント名→rock field ULTRA LIVE
-サブタイトル→
-会場→上野恩賜公園野外ステージ
-会場URL→https://maps.app.goo.gl/XcXRo38igMB97WGT7?g_st=ipc
-OPEN→00:00
-START→00:00
-開場開演備考→※開場開演時間は変更になる場合がございます
+def _artist_lines(count: int) -> str:
+    """告知文フォーマットの出演者欄(「1.」〜「N.」の空行)。"""
+    return "\n".join("%d." % i for i in range(1, count + 1))
 
 
-
-■ 料金設定
-チケット共通備考→※各ドリンク代別
-
-チケット1 名前→Sチケット
-チケット1 金額→¥6,000
-チケット1 備考→前方エリア・指定グループ静止画撮影可能
-
-チケット2 名前→Aチケット
-チケット2 金額→¥2,000
-チケット2 備考→撮影不可
-
-チケット3 名前→当日
-チケット3 金額→各+¥1,000
-チケット3 備考→なし
+_INTAKE_GUIDE = (
+    "以下を埋めて、@BOTTZ AI にメンションを付けて送り返してください"
+    "(空欄のままでもOK・あとで直せます)。"
+)
 
 
+def _build_template(event_type: str, head: str, artist_count: int, tail: str) -> str:
+    """種別行 + 案内 + 告知文本文 を組み立てる。"""
+    return "".join([
+        EVENT_TYPE_MARKER,
+        _EVENT_TYPE_LABELS[event_type],
+        "\n\n",
+        _INTAKE_GUIDE,
+        "\n\n",
+        head,
+        _artist_lines(artist_count),
+        "\n\n",
+        tail,
+        "\n",
+    ])
 
-■ アー写グリッド設定
-出演順に上から書いてください(空欄はとばします)。
+
+_GIRLS_HEAD = """【公演概要】
+2026年〇〇月〇〇(○)
+「rock field ULTRA LIVE - サブタイトル」
+
+■会場:上野恩賜公園野外ステージ
+https://maps.app.goo.gl/XcXRo38igMB97WGT7?g_st=ipc
+
+■時間:
+OPEN▶00:00
+START▶00:00
+※開場開演時間は変更になる場合がございます
+
+■料金
+Sチケット ¥6,000(前方エリア、指定グループ静止画撮影可能)
+Aチケット ¥2,000(撮影不可)
+当日 各+¥1,000
+※各ドリンク代別
+
+■チケットリンク:
+
+■出演者(27組予定)
 """
-    + _artist_lines()
-    + """
 
-
-
-■ タイムテーブル設定
-物販スペース→A〜E
-出演尺(分)→15分
-終演後物販→なし
-物販開始までの分→5分
-物販尺(分):→60分
-転換_N組ごと→５組ごと
-転換_分→5分
-
-
-
-
-
-《《　自由記述　》》
-
-
-
-↓自由記述1 件名↓
-■チケット・入場に関して
-
-
-
-↓自由記述1 内容↓
+_GIRLS_TAIL = """■チケット・入場に関して
 入場はSチケット→Aチケット→当日券
 の順に、整理番号順に行います。
 また、お手荷物を置いての場所取り等は一切禁止とさせて頂きます。
@@ -147,14 +147,7 @@ START→00:00
 ※公演中止を除き、いかなる理由でもチケットの払い戻しは致しません
 ※出演者及び公演スケジュールは予告なく変更となる場合がございます。尚、この場合においてもチケット払い戻しは致しません。
 
-
-
-↓自由記述2 件名↓
-【注意事項とご協力のお願い】
-
-
-
-↓自由記述2 内容↓
+■注意事項とご協力のお願い
 ※スタッフの注意や警告をお聞き頂けない場合、ご退場をお願いすることがございます。その際のチケット代の返金等は出来兼ねますので、ご理解ご了承の程、宜しくお願い致します。
 ※出演者・出演＆特典会時間はメンバーの体調不良やスケジュールの都合等の理由により、変更になる可能性がありますので予めご了承下さい。その際の返金などは一切応じられませんので予めご了承ください。
 ※イベントなど開始時間、終了時間が変更になる可能性もございますので、予めご了承ください。
@@ -163,9 +156,82 @@ START→00:00
 ※当日はご購入頂きましたチケットの番号順にお呼び致します。
 ※お荷物、貴重品の管理はお客様ご自身で管理お願い致します。盗難の際は弊社は一切の責任を負いませんのでご了承下さい。
 ※会場内でのトラブルや、お客様同士での怪我、破損時は弊社は一切の責任を負いませんのでご了承下さい。
-※会場内は、入場規制をかける場合がございます。予めご了承の程、宜しくお願い申し上げます。
+※会場内は、入場規制をかける場合がございます。予めご了承の程、宜しくお願い申し上げます。"""
+
+_MENS_HEAD = """【公演概要】
+2026年〇〇月〇〇日(○)
+「rock field ULTRA LIVE - サブタイトル」
+
+■会場:上野恩賜公園野外ステージ
+https://maps.app.goo.gl/syPxnM6vQzyKcde98?g_st=ipc
+
+■時間:
+OPEN▶00:00
+START▶00:00
+※開場/開演時間は変更になる場合がございます
+
+■料金
+Sチケット ¥6,000 (前方エリア)
+Aチケット ¥3,000
+当日 各+¥1,000
+※各ドリンク代別
+
+■チケットリンク:
+
+■出演者(20組予定)
 """
-)
+
+_MENS_TAIL = """■チケット・入場に関して
+入場はSチケット→Aチケット→当日券
+の順に、整理番号順に行います。
+また、お手荷物を置いての場所取り等は一切禁止とさせて頂きます。
+※未就学児入場不可
+※営利目的の転売禁止
+※当イベントではBOT(ボット)などのツールを使用しての不正チケット購入を禁止しています。なお、不正購入が１枚でも発覚した場合は、お持ちのチケットは全て無効となり、今後の関連イベントの入場をお断りします。その際の払い戻しは一切致しません。
+※公演中止を除き、いかなる理由でもチケットの払い戻しは致しません
+※出演者及び公演スケジュールは予告なく変更となる場合がございます。尚、この場合においてもチケット払い戻しは致しません。
+
+■注意事項
+· ジャンプの禁止。MIX・モッシュ等お客様どうしが密着する行為の禁止。(振りコピや拍手は問題なし。)
+· 場内での指定グループ以外の撮影、録音・録画は禁止とさせて頂きます。
+· 客席内での食事は禁止です。
+· 泥酔されている方は入場をお断りさせて頂きます。
+
+■物販・特典会ご参加時の注意点
+・ 出演者毎の決まりに従っていただきますようお願いいたします。"""
+
+TEMPLATE_GIRLS = _build_template(EVENT_TYPE_GIRLS, _GIRLS_HEAD, 27, _GIRLS_TAIL)
+TEMPLATE_MENS = _build_template(EVENT_TYPE_MENS, _MENS_HEAD, 20, _MENS_TAIL)
+
+INTAKE_TEMPLATES = {
+    EVENT_TYPE_GIRLS: TEMPLATE_GIRLS,
+    EVENT_TYPE_MENS: TEMPLATE_MENS,
+}
+
+
+def get_intake_template(event_type: str):
+    """種別に対応する記入テンプレ本文。未知の種別は None。"""
+    return INTAKE_TEMPLATES.get(event_type)
+
+
+def detect_event_type(text: str):
+    """本文先頭の「【イベント種別】…」行から種別を決定論的に読む。
+
+    LLM に頼らず確実に取れるので、抽出結果より優先する(LLM 側は保険)。
+    マーカーが無ければ None。
+    """
+    if not text:
+        return None
+    idx = text.find(EVENT_TYPE_MARKER)
+    if idx < 0:
+        return None
+    # マーカー直後から行末までにラベルが含まれるか
+    line_end = text.find("\n", idx)
+    tail = text[idx + len(EVENT_TYPE_MARKER):line_end if line_end >= 0 else None]
+    for value, label in _EVENT_TYPE_LABELS.items():
+        if label in tail:
+            return value
+    return None
 
 
 def looks_like_filled_template(text: str) -> bool:
@@ -184,27 +250,38 @@ def looks_like_filled_template(text: str) -> bool:
 # LLM 解析
 # ---------------------------------------------------------------------------
 _SYSTEM_PROMPT = (
-    "あなたはライブイベントの記入テンプレを読み取る抽出器です。"
+    "あなたはライブイベントの告知文を読み取る抽出器です。"
     "記入ゆれを寛容に解釈し、スキーマどおりの構造化データだけを返してください。\n"
     "\n"
-    "テンプレの形:\n"
-    "- 「■ 見出し」でセクションが区切られ、自由記述だけ「《《 自由記述 》》」で始まる。\n"
-    "- 各項目は「項目名→値」の形。矢印の右が値。値が空なら未記入。\n"
-    "- 項目名に「:」が混ざることがある(例「物販尺(分):→60分」)。無視してよい。\n"
-    "- 自由記述は「↓自由記述1 件名↓」「↓自由記述1 内容↓」の次の行以降が値。"
-    "内容は複数行になる。次の「↓…↓」または末尾までが 1 件の内容。\n"
+    "告知文の形:\n"
+    "- 先頭に「【イベント種別】ガールズ」または「【イベント種別】メンズ」の行がある"
+    "(無いこともある)。\n"
+    "- 「【公演概要】」の直下に日付行、その次に「「イベント名 - サブタイトル」」の行。\n"
+    "- 「■会場:」の行に会場名、その次の行に会場 URL。\n"
+    "- 「■時間:」の下に「OPEN▶00:00」「START▶00:00」。"
+    "その下の「※…」行は開場開演の備考。\n"
+    "- 「■料金」の下に料金行が並ぶ(例「Sチケット ¥6,000(前方エリア)」)。"
+    "行頭が名前、¥ の数字が金額、括弧の中が備考。"
+    "「※各ドリンク代別」のような ※ 行はチケット共通備考。\n"
+    "- 「■出演者(N組予定)」の下に「1.」「2.」… の番号行。番号の右が出演者名。\n"
+    "- 「■チケット・入場に関して」「■注意事項」「■物販・特典会ご参加時の注意点」"
+    "などの ■ ブロックは自由記述。■ の行が件名、その次の行から次の ■ 行の手前までが内容。\n"
     "\n"
     "読み取りの規則:\n"
-    "- 全角/半角、空白、改行のゆれは吸収する(「５組ごと」→ 5、「15分」→ 15)。\n"
-    "- 開催日は YYYY-MM-DD に正規化する(「2026/11/03」「11月3日」など)。"
+    "- event_type: 先頭の【イベント種別】が「ガールズ」なら girls、「メンズ」なら mens。"
+    "行が無ければ null。\n"
+    "- 全角/半角、空白、改行のゆれは吸収する。\n"
+    "- 開催日は YYYY-MM-DD に正規化する(「2026年11月3日(月)」など)。"
     "年が書かれていなければ最も近い将来の年を補う。\n"
+    "- イベント名とサブタイトルは「 - 」で分ける。区切りが無ければ全部をイベント名にする。\n"
     "- 時刻は HH:MM(24時間)に正規化する。\n"
     "- 金額は数値だけを取り出す(「¥6,000」→ 6000、「各+¥1,000」→ 1000)。"
     "読み取れなければ null。\n"
-    "- 「なし」「未定」「yyyy/mm/dd」「00:00」のようなプレースホルダのままの値、"
-    "および空欄は未記入として null(配列なら要素を作らない)。\n"
-    "- 出演者は書かれた順のまま。空欄の番号は詰めて、実在する名前だけを配列にする。\n"
-    "- 終演後物販は「あり/なし」を真偽に直す。\n"
+    "- 「〇〇」「○」「00:00」「サブタイトル」のようなプレースホルダのままの値、"
+    "空欄、「なし」「未定」は未記入として null(配列なら要素を作らない)。\n"
+    "- 出演者は書かれた順のまま。名前が空の番号は詰めて、実在する名前だけを配列にする。\n"
+    "- タイムテーブル設定(物販スペース・出演尺・転換など)は告知文に無いことが多い。"
+    "書かれていなければ null にする。\n"
     "- 書かれていない情報を推測して埋めない。分からないものは null にする。"
 )
 
@@ -218,6 +295,13 @@ _SYSTEM_PROMPT = (
 _INTAKE_SCHEMA = {
     "type": "object",
     "properties": {
+        # ★enum の文字列(union にしない)。union を増やすと罠43 の 16 制限に
+        #   近づくため、「無い」は null ではなく "unknown" で表す。
+        "event_type": {
+            "type": "string",
+            "enum": ["girls", "mens", "unknown"],
+            "description": "【イベント種別】行から。無ければ unknown",
+        },
         "event_date": {"type": ["string", "null"], "description": "開催日 YYYY-MM-DD"},
         "event_name": {"type": ["string", "null"]},
         "subtitle": {"type": ["string", "null"]},
@@ -277,6 +361,7 @@ _INTAKE_SCHEMA = {
         },
     },
     "required": [
+        "event_type",
         "event_date",
         "event_name",
         "subtitle",
@@ -390,7 +475,15 @@ def parse_event_template(text: str) -> dict:
         )
         return _fail(REASON_BAD_OUTPUT)
 
-    return {"ok": True, "reason": None, "data": _normalize(data)}
+    normalized = _normalize(data)
+
+    # ★本文の【イベント種別】行を最優先する(LLM の読み違いを上書きする)。
+    #   行が無いときだけ LLM の抽出値を使う。
+    marked = detect_event_type(text)
+    if marked is not None:
+        normalized["event_type"] = marked
+
+    return {"ok": True, "reason": None, "data": normalized}
 
 
 def _clean_str(v) -> Optional[str]:
@@ -407,6 +500,10 @@ def _normalize(data: dict) -> dict:
     出演者の空欄除去(仕様)もここで行う。
     """
     out = dict(data)
+
+    # 種別: enum 外("unknown" 等)は未設定として None にそろえる
+    et = out.get("event_type")
+    out["event_type"] = et if et in EVENT_TYPES else None
 
     for key in (
         "event_date", "event_name", "subtitle", "venue", "venue_url",
@@ -505,6 +602,7 @@ def format_intake_echo(parsed: dict) -> str:
     lines: List[str] = ["読み取った内容を確認してください。", ""]
 
     lines.append("【公演概要】")
+    lines.append("イベント種別: %s" % event_type_label(data.get("event_type")))
     lines.append("イベント名: %s" % _or_dash(data.get("event_name")))
     if data.get("subtitle"):
         lines.append("サブタイトル: %s" % data["subtitle"])

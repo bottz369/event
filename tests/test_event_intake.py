@@ -28,6 +28,7 @@ from services import event_intake as ei
 
 # --- LLM が返す想定の JSON(schema どおり)------------------------------------
 FULL_PAYLOAD = {
+    "event_type": "girls",
     "event_date": "2026-11-03",
     "event_name": "rock field ULTRA LIVE",
     "subtitle": "AUTUMN 2026",
@@ -336,9 +337,10 @@ def test_echo_handles_empty_payload():
 # ---------------------------------------------------------------------------
 # ステートレス判定
 # ---------------------------------------------------------------------------
-def test_template_itself_is_detected_as_filled_shape():
-    """配ったテンプレの見出しがそのまま判定に使える。"""
-    assert ei.looks_like_filled_template(ei.MSG_INTAKE_TEMPLATE) is True
+@pytest.mark.parametrize("event_type", ["girls", "mens"])
+def test_template_itself_is_detected_as_filled_shape(event_type):
+    """配ったテンプレの見出しがそのまま受信判定に使える(両種別とも)。"""
+    assert ei.looks_like_filled_template(ei.get_intake_template(event_type)) is True
 
 
 @pytest.mark.parametrize(
@@ -346,9 +348,11 @@ def test_template_itself_is_detected_as_filled_shape():
     [
         ("", False),
         ("新規作成", False),
-        ("■ 公演概要の設定\n開催日: 2026-11-03", False),          # 見出し1つでは不足
-        ("公演概要の設定\n料金設定", True),                        # 2つで成立
-        ("公演概要の設定\nアー写グリッド設定\nタイムテーブル設定", True),
+        ("ガールズイベント", False),        # 種別ボタンの文言では成立しない
+        ("メンズイベント", False),
+        ("【公演概要】\n2026年11月3日", False),   # 見出し1つでは不足
+        ("【公演概要】\n■料金", True),             # 2つで成立
+        ("■会場:上野\n■出演者(20組予定)", True),
         ("フライヤーください", False),
     ],
 )
@@ -356,28 +360,128 @@ def test_looks_like_filled_template(text, expected):
     assert ei.looks_like_filled_template(text) is expected
 
 
-def test_template_contains_all_sections_and_slots():
-    """確定版テンプレ(「→」区切り・■ / 《《 》》 見出し)の構造を固定する。"""
-    t = ei.MSG_INTAKE_TEMPLATE
-    for heading in ei.SECTION_HEADINGS:
-        assert heading in t, f"テンプレに見出し {heading} が無い"
-    # 出演者は 1〜30 の枠が全部ある
-    for i in (1, 15, 30):
-        assert "出演者%d→" % i in t, f"出演者{i} の枠が無い"
-    assert "出演者31→" not in t
-    # チケット 3 種 × 名前/金額/備考
-    for i in (1, 2, 3):
-        for field in ("名前", "金額", "備考"):
-            assert "チケット%d %s→" % (i, field) in t, f"チケット{i} {field} の枠が無い"
-    # 自由記述 2 件 × 件名/内容(↓…↓ 形式)
-    for i in (1, 2):
-        assert "↓自由記述%d 件名↓" % i in t
-        assert "↓自由記述%d 内容↓" % i in t
-    # TT 設定
-    for slot in ("物販スペース→", "出演尺(分)→", "終演後物販→",
-                 "物販開始までの分→", "転換_N組ごと→", "転換_分→"):
-        assert slot in t, f"TT設定の枠 {slot} が無い"
-    # 返信時のメンション案内(これが無いと解析フローに入らない)
+@pytest.mark.parametrize(
+    "event_type,artist_count,label",
+    [("girls", 27, "ガールズ"), ("mens", 20, "メンズ")],
+)
+def test_templates_have_expected_shape(event_type, artist_count, label):
+    """告知文フォーマットのテンプレ2種の構造を固定する。"""
+    t = ei.get_intake_template(event_type)
+
+    # 先頭が種別行(ステートレスに種別を復元する要)
+    assert t.splitlines()[0] == ei.EVENT_TYPE_MARKER + label
+    assert ei.detect_event_type(t) == event_type
+
+    # メンション案内(これが無いと埋めた本文が解析フローに入らない)
     assert "メンションを付けて" in t
-    # 自由記述セクションは 《《 》》 見出し
-    assert "《《" in t and "》》" in t
+
+    # 告知文の骨格
+    for heading in ("【公演概要】", "■会場:", "■時間:", "OPEN▶", "START▶",
+                    "■料金", "■チケットリンク:", "■出演者",
+                    "■チケット・入場に関して"):
+        assert heading in t, f"{event_type}: {heading} が無い"
+
+    # 出演者の番号欄が 1..N ちょうど
+    lines = t.splitlines()
+    assert "1." in lines and "%d." % artist_count in lines
+    assert "%d." % (artist_count + 1) not in lines
+    assert "(%d組予定)" % artist_count in t
+
+    # 受信判定の見出しが全部含まれる
+    for h in ei.SECTION_HEADINGS:
+        assert h in t, f"{event_type}: 見出し {h} が無い"
+
+
+def test_girls_and_mens_differ_only_in_price_and_free_text():
+    """種別差は料金と自由記述だけ(項目の骨格は共通)。"""
+    g, m = ei.TEMPLATE_GIRLS, ei.TEMPLATE_MENS
+    assert g != m
+    # ガールズにしかない自由記述ブロック
+    assert "■注意事項とご協力のお願い" in g and "■注意事項とご協力のお願い" not in m
+    # メンズにしかない自由記述ブロック
+    assert "■物販・特典会ご参加時の注意点" in m
+    assert "■物販・特典会ご参加時の注意点" not in g
+    # 料金の差
+    assert "Aチケット ¥2,000(撮影不可)" in g
+    assert "Aチケット ¥3,000" in m
+
+
+# ---------------------------------------------------------------------------
+# イベント種別
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("【イベント種別】ガールズ\n以下を…", "girls"),
+        ("【イベント種別】メンズ\n以下を…", "mens"),
+        ("【イベント種別】ふつう\n…", None),      # 未知のラベル
+        ("【公演概要】\n2026年11月3日", None),      # マーカー無し
+        ("", None),
+    ],
+)
+def test_detect_event_type(text, expected):
+    assert ei.detect_event_type(text) == expected
+
+
+def test_marker_line_overrides_llm_event_type(monkeypatch):
+    """本文の種別行が LLM の抽出値より優先される。"""
+    payload = dict(FULL_PAYLOAD, event_type="mens")   # LLM は mens と答えた
+    _install_fake_anthropic(monkeypatch, payload=payload)
+    data = ei.parse_event_template("【イベント種別】ガールズ\n■料金\n【公演概要】")["data"]
+    assert data["event_type"] == "girls", "本文の種別行が優先されていない"
+
+
+def test_llm_event_type_used_when_marker_missing(monkeypatch):
+    """種別行が無いときは LLM の抽出値を使う。"""
+    _install_fake_anthropic(monkeypatch, payload=dict(FULL_PAYLOAD, event_type="mens"))
+    data = ei.parse_event_template("【公演概要】\n■料金")["data"]
+    assert data["event_type"] == "mens"
+
+
+@pytest.mark.parametrize("bad", ["unknown", "", None, "other"])
+def test_unknown_event_type_becomes_none(monkeypatch, bad):
+    """enum 外の種別は未設定(None)にそろえる。"""
+    _install_fake_anthropic(monkeypatch, payload=dict(FULL_PAYLOAD, event_type=bad))
+    data = ei.parse_event_template("【公演概要】\n■料金")["data"]
+    assert data["event_type"] is None
+
+
+def test_event_type_is_not_a_union_in_schema():
+    """event_type は enum 文字列で持つ(罠43 の union 数を増やさない)。"""
+    prop = ei._INTAKE_SCHEMA["properties"]["event_type"]
+    assert prop["type"] == "string", "union にすると 16 制限に近づく"
+    assert set(prop["enum"]) == {"girls", "mens", "unknown"}
+    assert "event_type" in ei._INTAKE_SCHEMA["required"]
+
+
+def test_echo_shows_event_type(monkeypatch):
+    _install_fake_anthropic(monkeypatch, payload=FULL_PAYLOAD)
+    echo = ei.format_intake_echo(ei.parse_event_template("【イベント種別】ガールズ\n■料金\n■会場"))
+    assert "イベント種別: ガールズ" in echo
+
+
+def test_echo_shows_unset_event_type():
+    echo = ei.format_intake_echo({"ok": True, "reason": None, "data": {}})
+    assert "イベント種別: 未設定" in echo
+
+
+# ---------------------------------------------------------------------------
+# 自由記述の件数
+# ---------------------------------------------------------------------------
+def test_free_texts_allow_three_blocks(monkeypatch):
+    """メンズの 3 ブロック(チケット入場 / 注意事項 / 物販特典会)を結合せず保持する。
+
+    アプリ側は自由記述の件数に制限が無い(UI は無制限に追加でき、
+    free_text_json は生 list、概要テキスト生成も全件ループ)ので、
+    3 件をそのまま持てることを固定する。
+    """
+    payload = dict(FULL_PAYLOAD, free_texts=[
+        {"title": "■チケット・入場に関して", "body": "入場は…"},
+        {"title": "■注意事項", "body": "ジャンプの禁止…"},
+        {"title": "■物販・特典会ご参加時の注意点", "body": "出演者毎の決まりに…"},
+    ])
+    _install_fake_anthropic(monkeypatch, payload=payload)
+    data = ei.parse_event_template("x")["data"]
+    assert len(data["free_texts"]) == 3
+    assert data["free_texts"][2]["title"] == "■物販・特典会ご参加時の注意点"
+    assert ei.MAX_FREE_TEXTS >= 3
