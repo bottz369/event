@@ -96,25 +96,45 @@ def _install_fake_anthropic(monkeypatch, payload=None, raise_exc=None, capture=N
 # streamlit-free
 # ---------------------------------------------------------------------------
 def test_event_intake_is_streamlit_free(monkeypatch):
-    """streamlit が import 不能な Bot 環境でも import でき、streamlit を引かない。"""
+    """streamlit が import 不能な Bot 環境でも import でき、streamlit を引かない。
+
+    ★後片付けが要る: fresh import すると services.event_intake が別オブジェクトに
+      差し替わる。他のテスト(や bot 側)は先に束縛済みのモジュールを monkeypatch
+      するため、差し替えたままだとパッチが効かなくなる。
+      戻す先は 2 か所:
+        (1) sys.modules["services.event_intake"]
+        (2) 親パッケージの属性 services.event_intake
+      bot/main.py は `from services import event_intake` で (2) を引くので、
+      (1) だけ戻しても取り違えたままになる(実際にテストが落ちて判明した)。
+    """
+    import services as _services_pkg
+
     real_import = builtins.__import__
+    original = sys.modules.get("services.event_intake")
+    original_attr = getattr(_services_pkg, "event_intake", None)
 
     def _blocked(name, *a, **kw):
         if name == "streamlit" or name.startswith("streamlit."):
             raise ImportError("streamlit is unavailable (simulated Bot env)")
         return real_import(name, *a, **kw)
 
-    for m in list(sys.modules):
-        if m == "services.event_intake" or m == "streamlit" or m.startswith("streamlit."):
-            sys.modules.pop(m, None)
+    try:
+        for m in list(sys.modules):
+            if m == "services.event_intake" or m == "streamlit" or m.startswith("streamlit."):
+                sys.modules.pop(m, None)
 
-    monkeypatch.setattr(builtins, "__import__", _blocked)
-    mod = importlib.import_module("services.event_intake")
+        monkeypatch.setattr(builtins, "__import__", _blocked)
+        mod = importlib.import_module("services.event_intake")
 
-    assert callable(mod.parse_event_template)
-    assert callable(mod.validate_intake)
-    assert callable(mod.format_intake_echo)
-    assert "streamlit" not in sys.modules
+        assert callable(mod.parse_event_template)
+        assert callable(mod.validate_intake)
+        assert callable(mod.format_intake_echo)
+        assert "streamlit" not in sys.modules
+    finally:
+        if original is not None:
+            sys.modules["services.event_intake"] = original
+        if original_attr is not None:
+            setattr(_services_pkg, "event_intake", original_attr)
 
 
 # ---------------------------------------------------------------------------
@@ -280,10 +300,27 @@ def test_looks_like_filled_template(text, expected):
 
 
 def test_template_contains_all_sections_and_slots():
+    """確定版テンプレ(「→」区切り・■ / 《《 》》 見出し)の構造を固定する。"""
     t = ei.MSG_INTAKE_TEMPLATE
     for heading in ei.SECTION_HEADINGS:
         assert heading in t, f"テンプレに見出し {heading} が無い"
-    assert "出演者1:" in t and "出演者30:" in t
-    assert "チケット3 備考:" in t
-    assert "自由記述2 内容:" in t
-    assert "転換_N組ごと:" in t
+    # 出演者は 1〜30 の枠が全部ある
+    for i in (1, 15, 30):
+        assert "出演者%d→" % i in t, f"出演者{i} の枠が無い"
+    assert "出演者31→" not in t
+    # チケット 3 種 × 名前/金額/備考
+    for i in (1, 2, 3):
+        for field in ("名前", "金額", "備考"):
+            assert "チケット%d %s→" % (i, field) in t, f"チケット{i} {field} の枠が無い"
+    # 自由記述 2 件 × 件名/内容(↓…↓ 形式)
+    for i in (1, 2):
+        assert "↓自由記述%d 件名↓" % i in t
+        assert "↓自由記述%d 内容↓" % i in t
+    # TT 設定
+    for slot in ("物販スペース→", "出演尺(分)→", "終演後物販→",
+                 "物販開始までの分→", "転換_N組ごと→", "転換_分→"):
+        assert slot in t, f"TT設定の枠 {slot} が無い"
+    # 返信時のメンション案内(これが無いと解析フローに入らない)
+    assert "メンションを付けて" in t
+    # 自由記述セクションは 《《 》》 見出し
+    assert "《《" in t and "》》" in t
