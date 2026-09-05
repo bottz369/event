@@ -154,7 +154,8 @@ def _render_grid_image_for_project(
       - settings_json: grid_font(無ければ keifont.ttf)
       - alignment ラベル → left/center/right、layout_mode == "レンガ (サイズ統一)" → is_brick
       - row_counts_str を "," 区切りで int 化(空は None → generate 側で既定 [5]*10)
-      - artists は get_artists_by_names(order)。generate_grid_image を直呼び。
+      - artists は resolve_artists_in_order(order)。未登録名もスタンドインで枠を残す(#4)。
+        generate_grid_image を直呼び。
     生成物は RGBA 透過なので PNG で bytes 化する(JPEG 不可)。
 
     OOM 対策: モジュールレベルの _render_lock で全体を囲み、同時に1件だけ生成する。
@@ -189,7 +190,9 @@ def _render_grid_image_for_project(
         grid_font = settings.get("grid_font") or "keifont.ttf"
         font_path = os.path.join(FONT_DIR, grid_font)
 
-        artists = artist_service.get_artists_by_names(order)
+        # #4: artists に無い名前も枠として残す(未登録は C-6a の黒プレースホルダ)。
+        # 落とすと出演者のセルごと消えて「TT にはいるのにグリッドに出ない」になる。
+        artists = artist_service.resolve_artists_in_order(order, failures=failures)
         if not artists:
             return None
 

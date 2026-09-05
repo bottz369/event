@@ -24,7 +24,10 @@ def test_render_materializes_grid_font_and_default(monkeypatch):
     monkeypatch.setattr(gs.font_service, "ensure_font_available", lambda name: calls.append(name))
     monkeypatch.setattr(gs, "SessionLocal", lambda: _FakeDB())
     monkeypatch.setattr(gs.project_repo, "get_project", lambda db, pid: _FakeProject())
-    monkeypatch.setattr(gs.artist_service, "get_artists_by_names", lambda names: ["artistA"])
+    # #4 以降 generation_service は resolve_artists_in_order を通る(未登録名も枠を残す)。
+    # ここはフォント materialize の検証なので、解決結果はダミーのままでよい。
+    monkeypatch.setattr(gs.artist_service, "resolve_artists_in_order",
+                        lambda names, failures=None: ["artistA"])
     # 実生成はスキップ(None を返させる。materialize はその前に済む)
     monkeypatch.setattr(gs, "generate_grid_image", lambda *a, **k: None)
 
@@ -44,7 +47,10 @@ def test_render_materialize_failure_does_not_break(monkeypatch):
     monkeypatch.setattr(gs.font_service, "ensure_font_available", _boom)
     monkeypatch.setattr(gs, "SessionLocal", lambda: _FakeDB())
     monkeypatch.setattr(gs.project_repo, "get_project", lambda db, pid: _FakeProject())
-    monkeypatch.setattr(gs.artist_service, "get_artists_by_names", lambda names: ["artistA"])
+    # #4 以降 generation_service は resolve_artists_in_order を通る(未登録名も枠を残す)。
+    # ここはフォント materialize の検証なので、解決結果はダミーのままでよい。
+    monkeypatch.setattr(gs.artist_service, "resolve_artists_in_order",
+                        lambda names, failures=None: ["artistA"])
 
     sentinel = object()
     captured = {}
@@ -197,7 +203,10 @@ def test_render_warns_loudly_when_font_is_not_resolved(monkeypatch):
     monkeypatch.setattr(gs.font_service, "ensure_font_available", lambda name: "not_found")
     monkeypatch.setattr(gs, "SessionLocal", lambda: _FakeDB())
     monkeypatch.setattr(gs.project_repo, "get_project", lambda db, pid: _FakeProject())
-    monkeypatch.setattr(gs.artist_service, "get_artists_by_names", lambda names: ["artistA"])
+    # #4 以降 generation_service は resolve_artists_in_order を通る(未登録名も枠を残す)。
+    # ここはフォント materialize の検証なので、解決結果はダミーのままでよい。
+    monkeypatch.setattr(gs.artist_service, "resolve_artists_in_order",
+                        lambda names, failures=None: ["artistA"])
     monkeypatch.setattr(gs, "resolve_font_path", lambda p: None)
     monkeypatch.setattr(gs, "generate_grid_image", lambda *a, **k: None)
 

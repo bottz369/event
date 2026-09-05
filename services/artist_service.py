@@ -58,6 +58,71 @@ def get_artists_by_names(names) -> List[ArtistView]:
         db.close()
 
 
+# アー写グリッド用: 未登録の名前を表すスタンドインの識別子は負の連番にする。
+# ★_fetch_grid_images_parallel が a.id で dedupe するため、未登録が複数あっても
+#   1 件に潰れないよう一意である必要がある(全部 None にすると潰れる)。
+FAILURE_KIND_ARTIST_NOT_REGISTERED = "artist_not_registered"
+
+
+def _standin(neg_id: int, name: str) -> ArtistView:
+    """artists に無い名前を「アー写の無いアーティスト」として表す一時オブジェクト。
+
+    ★DB には保存しない。描画のためだけに作る。
+      image_filename=None なので logic_grid は C-6a の黒プレースホルダを描く。
+    ArtistView をそのまま使うのは、下流(_fetch_grid_images_parallel /
+    generate_grid_image)が参照する属性が id / name / image_filename / crop_* だけで、
+    ArtistView がちょうどその形だから(専用型を増やす必要が無い)。
+    """
+    return ArtistView(
+        id=neg_id,
+        name=name,
+        image_filename=None,
+        is_deleted=False,
+        crop_scale=1.0,
+        crop_x=0,
+        crop_y=0,
+    )
+
+
+def resolve_artists_in_order(names, failures=None) -> List[ArtistView]:
+    """名前リストを、1 件も落とさずに ArtistView のリストへ解決する。
+
+    get_artists_by_names は「artists に無い名前を skip する」既存仕様なので、
+    そのまま grid に渡すと未登録の出演者の枠ごと消える(#4)。マージで改名された
+    旧表記(例「Luna moon」→「LunaMoon」)を書いた場合などに起きる。
+    ここでは未登録の名前にもスタンドインを立て、**枠を残して黒プレースホルダで
+    可視化する**(C-6a と合流)。
+
+    failures に list を渡すと、未登録だった名前を §5 の形式で積む:
+        {"kind": "artist_not_registered", "name": "<name>"}
+
+    ★get_artists_by_names 自体の挙動は変えない(アー写更新など「実体が必要」な
+      呼び出し側がそちらを使い続けるため)。差し込みはこの service 層だけで行う。
+    """
+    names = list(names or [])
+    if not names:
+        return []
+
+    resolved = get_artists_by_names(names)
+    by_name = {a.name: a for a in resolved}
+
+    out: List[ArtistView] = []
+    neg = 0
+    for n in names:
+        found = by_name.get(n)
+        if found is not None:
+            out.append(found)
+            continue
+        neg -= 1
+        out.append(_standin(neg, n))
+        if failures is not None:
+            failures.append({"kind": FAILURE_KIND_ARTIST_NOT_REGISTERED, "name": n})
+    if neg:
+        logger.info("resolve_artists_in_order: %d unregistered name(s) kept as placeholders",
+                    -neg)
+    return out
+
+
 # ---------------------------------------------------------
 # 書き込み(commit/rollback は service が握る)
 # ---------------------------------------------------------

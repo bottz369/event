@@ -41,10 +41,18 @@ def regenerate_grid_preview():
         return False
 
     order = list(st.session_state.get("grid_order") or [])
-    target_artists = artist_service.get_artists_by_names(order)
+    # #4: 未登録の名前も枠として残す(黒プレースホルダで可視化)。
+    # repo 直呼びをやめ service を通す(3層規律)。
+    _unresolved = []
+    target_artists = artist_service.resolve_artists_in_order(order, failures=_unresolved)
     if not target_artists:
         st.warning("表示するアーティストデータがありません。")
         return False
+    if _unresolved:
+        st.warning(
+            "アー写が未登録の出演者がいます(黒い枠で表示されます): %s"
+            % "、".join(f["name"] for f in _unresolved)
+        )
 
     font_service.ensure_font_available(st.session_state.grid_font)
 
