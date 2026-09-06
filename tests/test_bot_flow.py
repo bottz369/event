@@ -516,7 +516,8 @@ def test_art_puts_pending_and_asks_for_image(sent, stub_events):
     bm.pending_store._data.clear()
     bm.handle_event(_postback_event("art|pid=39|artist=手羽先センセーション"), _config())
 
-    assert bm.pending_store.pop_valid(USER, _time.time()) == (39, "手羽先センセーション")
+    assert bm.pending_store.pop_valid(USER, _time.time()) == (
+        39, "手羽先センセーション", bm.PENDING_MODE_REPLACE)
     assert "新しい画像を送ってください" in sent[0][1][0]["text"]
 
 
@@ -915,7 +916,8 @@ def test_failure_notice_reports_unregistered_artists():
         [{"kind": "artist_not_registered", "name": "Luna moon"}])
     assert "Luna moon はアー写未登録です" in notice
     assert "黒い枠" in notice, "グリッド上どう見えているかが伝わらない"
-    assert "アー写変更" in notice, "次にやることの導線が無い"
+    # C-6b で導線がボタンになったので、文言もそれに合わせている
+    assert "下のボタンから登録できます" in notice, "次にやることの導線が無い"
     # 取得失敗とは原因も対処も違うので、そちらの文言は混ぜない
     assert "取得できませんでした" not in notice
     assert "反映待ち" not in notice
@@ -953,3 +955,215 @@ def test_failure_notice_shows_both_blocks_separately():
 
 def test_failure_notice_ignores_unknown_kind_only():
     assert bm.build_failure_notice([{"kind": "something_else"}]) is None
+
+
+# ---------------------------------------------------------------------------
+# C-6b: 未登録アーティストをその場で新規登録する
+# ---------------------------------------------------------------------------
+def _unreg(*names):
+    return [{"kind": "artist_not_registered", "name": n} for n in names]
+
+
+def test_register_buttons_are_attached_to_the_notice():
+    msg = bm.build_failure_message(_unreg("テスト太郎", "花いろは"), 41)
+    labels = [i["action"]["label"] for i in msg["quickReply"]["items"]]
+    datas = [i["action"]["data"] for i in msg["quickReply"]["items"]]
+    assert labels == ["テスト太郎 を登録", "花いろは を登録"]
+    assert datas == ["reg_art|pid=41|name=テスト太郎",
+                     "reg_art|pid=41|name=花いろは"]
+    assert "下のボタンから登録できます" in msg["text"]
+
+
+def test_register_button_name_is_exact():
+    """★data の name は grid の表記そのまま(完全一致・§54)。丸めも正規化もしない。"""
+    name = "Highspec Ba【Z∞】Ka"
+    msg = bm.build_failure_message(_unreg(name), 7)
+    parsed = bm.parse_postback_data(msg["quickReply"]["items"][0]["action"]["data"])
+    assert parsed == {"action": bm.ACTION_REGISTER_ARTIST, "pid": 7, "name": name}
+
+
+def test_register_button_label_is_truncated_but_data_is_not():
+    """label は LINE の 20 文字上限に丸めるが、data の name はフルのまま。"""
+    name = "あ" * 40
+    msg = bm.build_failure_message(_unreg(name), 1)
+    action = msg["quickReply"]["items"][0]["action"]
+    assert len(action["label"]) <= bm.QUICKREPLY_LABEL_MAX
+    assert bm.parse_postback_data(action["data"])["name"] == name
+
+
+def test_register_button_skipped_when_postback_would_overflow():
+    """300 bytes を超える名前は壊れたボタンを出さない(通知テキストは出る)。"""
+    long_name = "あ" * 200  # 3 byte/字 = 600 byte
+    msg = bm.build_failure_message(_unreg(long_name), 1)
+    assert "quickReply" not in msg, "postback 上限を超えるボタンを出している"
+    assert long_name in msg["text"]
+
+
+def test_register_buttons_capped_at_quickreply_limit():
+    names = ["名前%02d" % i for i in range(20)]
+    msg = bm.build_failure_message(_unreg(*names), 1)
+    items = msg["quickReply"]["items"]
+    assert len(items) <= bm.QUICKREPLY_MAX_ITEMS
+
+
+def test_register_buttons_dedupe_names():
+    msg = bm.build_failure_message(_unreg("A", "A", "B"), 1)
+    assert len(msg["quickReply"]["items"]) == 2
+
+
+def test_no_buttons_without_project_id():
+    """pid が無いと登録先が決まらないのでボタンは出さない(文面だけ)。"""
+    msg = bm.build_failure_message(_unreg("A"), None)
+    assert "quickReply" not in msg
+    assert "A" in msg["text"]
+
+
+def test_fetch_failures_alone_get_no_register_buttons():
+    """取得失敗(登録済みだが写真が引けない)には登録ボタンを付けない。"""
+    msg = bm.build_failure_message([{"kind": "artist_photo", "name": "A"}], 1)
+    assert "quickReply" not in msg
+
+
+def test_build_failure_message_is_none_without_failures():
+    assert bm.build_failure_message([], 1) is None
+    assert bm.build_failure_message(None, 1) is None
+
+
+# --- postback → pending 登録 ---
+def test_register_postback_puts_register_pending(sent):
+    bm.handle_event(_postback_event("reg_art|pid=41|name=テスト太郎"), _config())
+    assert sent[0][1] == [{"type": "text",
+                           "text": "「テスト太郎」のアー写を送ってください(5分以内)。"}]
+    assert bm.pending_store.pop_valid(USER, _time.time()) == (
+        41, "テスト太郎", bm.PENDING_MODE_REGISTER)
+
+
+@pytest.mark.parametrize(
+    "data", ["reg_art|pid=41", "reg_art|name=A", "reg_art|pid=x|name=A"])
+def test_malformed_register_postback_is_rejected(data):
+    assert bm.parse_postback_data(data) is None
+
+
+def test_register_postback_needs_active_group(sent, activation):
+    activation["active"].clear()
+    bm.handle_event(_postback_event("reg_art|pid=41|name=A"), _config())
+    assert bm.pending_store.pop_valid(USER, _time.time()) is None
+
+
+# --- 画像受信の mode 分岐 ---
+def test_image_with_register_pending_goes_to_registration(monkeypatch, sent):
+    calls = {"register": [], "replace": []}
+    monkeypatch.setattr(bm, "_spawn_artist_registration",
+                        lambda *a: calls["register"].append(a))
+    monkeypatch.setattr(bm, "_spawn_photo_update",
+                        lambda *a: calls["replace"].append(a))
+
+    bm.pending_store.put(USER, 41, "テスト太郎", _time.time(),
+                         mode=bm.PENDING_MODE_REGISTER)
+    bm.handle_event(_image_event(), _config())
+
+    assert len(calls["register"]) == 1
+    assert calls["register"][0][:2] == (41, "テスト太郎")
+    assert calls["replace"] == [], "差し替え側に流れている"
+
+
+def test_image_with_replace_pending_still_goes_to_photo_update(monkeypatch, sent):
+    """★既存の差し替え経路は不変(回帰防止)。"""
+    calls = {"register": [], "replace": []}
+    monkeypatch.setattr(bm, "_spawn_artist_registration",
+                        lambda *a: calls["register"].append(a))
+    monkeypatch.setattr(bm, "_spawn_photo_update",
+                        lambda *a: calls["replace"].append(a))
+
+    bm.pending_store.put(USER, 39, "手羽先", _time.time())  # mode 省略 = replace
+    bm.handle_event(_image_event(), _config())
+
+    assert len(calls["replace"]) == 1
+    assert calls["replace"][0][:2] == (39, "手羽先")
+    assert calls["register"] == [], "登録側に流れている"
+
+
+# --- 登録ワーカー ---
+@pytest.fixture
+def artist_create_spy(monkeypatch):
+    import services.artist_service as asvc
+
+    state = {"calls": [], "result": (None, "created")}
+
+    class _View:
+        def __init__(self, name):
+            self.name = name
+
+    def _create(name, image_file=None):
+        state["calls"].append({"name": name, "file": image_file})
+        view, status = state["result"]
+        return (_View(name) if view is None and status != "error" else view, status)
+
+    monkeypatch.setattr(asvc, "create_artist", _create)
+    monkeypatch.setattr(bm, "download_image", lambda mid, token: (b"IMG", "image/jpeg"))
+    return state
+
+
+def test_registration_creates_artist_and_regenerates(monkeypatch, sent,
+                                                     artist_create_spy):
+    monkeypatch.setattr(bm, "render_draft_set_for_project",
+                        lambda pid: ([{"type": "image", "originalContentUrl": "o",
+                                       "previewImageUrl": "p"}], []))
+    bm._register_artist_and_reply(41, "テスト太郎", "mid", "RT", _config())
+
+    assert artist_create_spy["calls"][0]["name"] == "テスト太郎", "名前が加工されている"
+    msgs = sent[0][1]
+    assert "テスト太郎 を登録しました" in msgs[0]["text"]
+    assert msgs[1]["type"] == "image", "グリッドを作り直していない"
+
+
+def test_registration_reports_remaining_unregistered(monkeypatch, sent,
+                                                     artist_create_spy):
+    """まだ残っている未登録には続けてボタンを出す。"""
+    monkeypatch.setattr(
+        bm, "render_draft_set_for_project",
+        lambda pid: ([{"type": "image", "originalContentUrl": "o",
+                       "previewImageUrl": "p"}], _unreg("別の未登録")))
+    bm._register_artist_and_reply(41, "テスト太郎", "mid", "RT", _config())
+
+    last = sent[0][1][-1]
+    assert "別の未登録" in last["text"]
+    assert last["quickReply"]["items"][0]["action"]["data"] == \
+        "reg_art|pid=41|name=別の未登録"
+
+
+def test_registration_reports_already_registered(monkeypatch, sent,
+                                                 artist_create_spy):
+    class _V:
+        name = "テスト太郎"
+
+    artist_create_spy["result"] = (_V(), "exists")
+    monkeypatch.setattr(bm, "render_draft_set_for_project",
+                        lambda pid: pytest.fail("登録できていないのに再生成した"))
+    bm._register_artist_and_reply(41, "テスト太郎", "mid", "RT", _config())
+    assert "既に登録済み" in sent[0][1][0]["text"]
+
+
+def test_registration_reports_error(monkeypatch, sent, artist_create_spy):
+    artist_create_spy["result"] = (None, "error")
+    bm._register_artist_and_reply(41, "テスト太郎", "mid", "RT", _config())
+    assert "登録に失敗しました" in sent[0][1][0]["text"]
+
+
+def test_registration_handles_download_failure(monkeypatch, sent):
+    def _boom(mid, token):
+        raise RuntimeError("no image")
+
+    monkeypatch.setattr(bm, "download_image", _boom)
+    bm._register_artist_and_reply(41, "A", "mid", "RT", _config())
+    assert "画像の取得に失敗しました" in sent[0][1][0]["text"]
+
+
+def test_registration_runs_in_daemon_thread(monkeypatch):
+    done = []
+    monkeypatch.setattr(bm, "_register_artist_and_reply",
+                        lambda *a: done.append(a))
+    t = bm._spawn_artist_registration(41, "A", "mid", "RT", _config())
+    assert t.daemon is True
+    t.join(timeout=5)
+    assert len(done) == 1

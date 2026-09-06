@@ -10,6 +10,8 @@ import base64
 import hashlib
 import hmac
 
+import pytest
+
 from bot import main
 
 
@@ -72,7 +74,7 @@ def test_strip_self_mentions_ignores_non_self():
 def test_pending_put_and_pop_within_ttl():
     store = main.PendingStore(ttl_seconds=300)
     store.put("U1", 39, "バンドA", now=1000.0)
-    assert store.pop_valid("U1", now=1200.0) == (39, "バンドA")  # 200 秒後 = TTL 内
+    assert store.pop_valid("U1", now=1200.0) == (39, "バンドA", "replace")  # 200 秒後 = TTL 内
     # 消費済みなので 2 回目は None
     assert store.pop_valid("U1", now=1201.0) is None
 
@@ -87,7 +89,7 @@ def test_pending_isolated_per_user():
     store = main.PendingStore(ttl_seconds=300)
     store.put("U1", 39, "バンドA", now=1000.0)
     assert store.pop_valid("U2", now=1000.0) is None
-    assert store.pop_valid("U1", now=1000.0) == (39, "バンドA")
+    assert store.pop_valid("U1", now=1000.0) == (39, "バンドA", "replace")
 
 
 def test_pending_purge_expired():
@@ -141,3 +143,31 @@ def test_ext_from_content_type():
     assert main._ext_from_content_type("image/webp") == ".webp"
     assert main._ext_from_content_type("image/jpeg") == ".jpg"
     assert main._ext_from_content_type("") == ".jpg"
+
+
+def test_pending_default_mode_is_replace():
+    """mode 省略時は従来どおり差し替え(既存の呼び出しを壊さない)。"""
+    store = main.PendingStore(ttl_seconds=300)
+    store.put("U1", 39, "A", now=1000.0)
+    assert store.pop_valid("U1", now=1000.0) == (39, "A", main.PENDING_MODE_REPLACE)
+
+
+def test_pending_can_hold_register_mode():
+    store = main.PendingStore(ttl_seconds=300)
+    store.put("U1", 41, "テスト太郎", now=1000.0, mode=main.PENDING_MODE_REGISTER)
+    assert store.pop_valid("U1", now=1000.0) == (41, "テスト太郎",
+                                                 main.PENDING_MODE_REGISTER)
+
+
+def test_pending_rejects_unknown_mode():
+    """想定外の mode は受け付けない(画像受信時の分岐が壊れないように)。"""
+    store = main.PendingStore(ttl_seconds=300)
+    with pytest.raises(ValueError):
+        store.put("U1", 1, "A", now=1000.0, mode="something")
+
+
+def test_pending_mode_does_not_change_ttl_behaviour():
+    """mode を足しても TTL の扱いは不変。"""
+    store = main.PendingStore(ttl_seconds=300)
+    store.put("U1", 1, "A", now=1000.0, mode=main.PENDING_MODE_REGISTER)
+    assert store.pop_valid("U1", now=1301.0) is None

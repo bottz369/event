@@ -216,27 +216,42 @@ def strip_self_mentions(text: str, mentionees: Optional[List[dict]]) -> str:
 # ---------------------------------------------------------------------------
 # pending ストア(テキスト → 画像の順待ち・userId 単位・TTL 付き)
 # ---------------------------------------------------------------------------
+# 画像待ちの用途(§52 C-6b)。同じ「写真を待つ」でもやることが違うので区別する。
+PENDING_MODE_REPLACE = "replace"    # 既存アーティストのアー写を差し替える(B4)
+PENDING_MODE_REGISTER = "register"  # 未登録の名前を新規登録する(C-6b)
+_PENDING_MODES = (PENDING_MODE_REPLACE, PENDING_MODE_REGISTER)
+
+
 class PendingStore:
-    """userId ごとに「画像待ちの (project_id, アーティスト名) + 記録時刻」を TTL 付きで保持する。
+    """userId ごとに「画像待ちの (project_id, アーティスト名, mode) + 記録時刻」を TTL 付きで保持する。
 
     ★B-3.1: payload を名前だけから (pid, artist) に拡張した。
       どのイベント向けの差し替えかはボタンで確定済みなので、画像を受けたら
       そのまま「更新 → その pid の 2 枚生成」まで進める。
+    ★C-6b: さらに mode を足した。写真を受け取ったあとに「差し替える」のか
+      「新規登録する」のかは、押されたボタンでしか区別できないため。
+      既定は replace なので、既存の呼び出し(B4 の差し替え)は挙動不変。
     ★ここに入るのは「画像待ち」だけ。会話の選択状態は postback data に埋める。
     時刻(now)は呼び出し側から注入する(テスト決定性のため)。スレッド安全。
     """
 
     def __init__(self, ttl_seconds: int = PENDING_TTL_SECONDS):
         self._ttl = ttl_seconds
-        self._data: Dict[str, Tuple[Tuple[int, str], float]] = {}
+        self._data: Dict[str, Tuple[Tuple[int, str, str], float]] = {}
         self._lock = threading.Lock()
 
-    def put(self, user_id: str, project_id: int, name: str, now: float) -> None:
+    def put(self, user_id: str, project_id: int, name: str, now: float,
+            mode: str = PENDING_MODE_REPLACE) -> None:
+        if mode not in _PENDING_MODES:
+            raise ValueError("unknown pending mode: %r" % (mode,))
         with self._lock:
-            self._data[user_id] = ((int(project_id), name), now)
+            self._data[user_id] = ((int(project_id), name, mode), now)
 
-    def pop_valid(self, user_id: str, now: float) -> Optional[Tuple[int, str]]:
-        """TTL 内の pending があれば (pid, artist) を返して消費する。無効/期限切れは None。"""
+    def pop_valid(self, user_id: str, now: float) -> Optional[Tuple[int, str, str]]:
+        """TTL 内の pending があれば (pid, artist, mode) を返して消費する。
+
+        無効/期限切れは None。
+        """
         with self._lock:
             item = self._data.get(user_id)
             if item is None:
@@ -337,6 +352,8 @@ ACTION_OVERWRITE = "newproj_overwrite"  # 同日の既存を上書き
 ACTION_FORCE_NEW = "newproj_forcenew"   # 同日でも別で新規作成
 ACTION_CANCEL = "newproj_cancel"        # やり直し / 中止(下書きを消すだけ)
 _CREATE_ACTIONS = (ACTION_CREATE, ACTION_OVERWRITE, ACTION_FORCE_NEW, ACTION_CANCEL)
+# 段階C C-6b: 未登録アーティストをその場で新規登録する(§52)
+ACTION_REGISTER_ARTIST = "reg_art"
 
 FLOW_REPLACE = "replace"  # アー写を差し替えてから 2 枚生成
 FLOW_GET = "get"          # 写真は変えず 2 枚だけ取得
@@ -399,7 +416,8 @@ def parse_postback_data(data: str) -> Optional[dict]:
     parts = data.split("|")
     action = parts[0]
     if action not in (ACTION_EVENT, ACTION_MORE_EVENT, ACTION_ARTIST,
-                      ACTION_MORE_ARTIST, ACTION_NEW_PROJECT) + _CREATE_ACTIONS:
+                      ACTION_MORE_ARTIST, ACTION_NEW_PROJECT,
+                      ACTION_REGISTER_ARTIST) + _CREATE_ACTIONS:
         return None
     out = {"action": action}
     for p in parts[1:]:
@@ -431,6 +449,11 @@ def parse_postback_data(data: str) -> Optional[dict]:
         # type は services 側の EVENT_TYPES に限る。未知の値は不正扱いにする
         # (テンプレを引けないボタンを通さない)。
         if out.get("type") not in _event_type_values():
+            return None
+    elif action == ACTION_REGISTER_ARTIST:
+        # pid と name は必須。name は grid の表記そのままでなければ意味が無い
+        # (アプリ層は完全一致・§54)ので、丸めも正規化もしない。
+        if "pid" not in out or not out.get("name"):
             return None
     elif action in _CREATE_ACTIONS:
         # 下書き id は必須。type が付く場合は既知の種別だけ通す。
@@ -679,6 +702,67 @@ def render_draft_set_for_project(project_id: int) -> Tuple[List[dict], List[dict
 UNREGISTERED_ARTIST_KIND = "artist_not_registered"
 
 
+QUICKREPLY_LABEL_SUFFIX = " を登録"
+
+
+def build_register_quickreply_items(failures: List[dict],
+                                    project_id: Optional[int]) -> List[dict]:
+    """未登録アーティストごとに「◯◯ を登録」ボタンを組む(C-6b)。
+
+    ★data の name は grid の表記そのまま(完全一致・§54)。build_postback_data は
+      末尾フィールドを丸めるが、丸め対象は "artist" だけなので name は切られない。
+      それでも 300 bytes を超えるとボタン自体が無効になるため、超える名前は
+      ボタンを出さない(通知テキストは出るので、そちらから手動で辿れる)。
+    LINE の quick reply は 13 件までなので、多いときは先頭 12 件に絞る。
+    """
+    if project_id is None:
+        return []
+    names = []
+    for f in failures or []:
+        if f.get("kind") != UNREGISTERED_ARTIST_KIND:
+            continue
+        name = f.get("name")
+        if name and name not in names:
+            names.append(name)
+    if not names:
+        return []
+
+    items = []
+    for name in names[:QUICKREPLY_MAX_ITEMS - 1]:
+        data = build_postback_data(ACTION_REGISTER_ARTIST, pid=project_id, name=name)
+        if len(data.encode("utf-8")) > POSTBACK_DATA_MAX_BYTES:
+            # 名前が長すぎてボタンにできない。黙って壊れたボタンを出すより出さない。
+            logger.warning("register button skipped (postback too long): name=%r", name)
+            continue
+        items.append({
+            "type": "action",
+            "action": {
+                "type": "postback",
+                "label": _truncate_label(name + QUICKREPLY_LABEL_SUFFIX),
+                "data": data,
+                "displayText": name + QUICKREPLY_LABEL_SUFFIX,
+            },
+        })
+    return items
+
+
+def build_failure_message(failures: List[dict],
+                          project_id: Optional[int] = None) -> Optional[dict]:
+    """素材の警告文に、未登録アーティストの登録ボタンを添えたメッセージを組む。
+
+    警告が無ければ None。project_id が無い / 名前が長すぎる場合はボタン無しの
+    ただのテキストになる(文面だけでも次にやることは分かる)。
+    """
+    notice = build_failure_notice(failures)
+    if not notice:
+        return None
+    message = {"type": "text", "text": notice}
+    items = build_register_quickreply_items(failures, project_id)
+    if items:
+        message["quickReply"] = {"items": items}
+    return message
+
+
 def build_failure_notice(failures: List[dict]) -> Optional[str]:
     """素材取得に失敗した一覧を人間向けの 1 通にまとめる。無ければ None。
 
@@ -724,7 +808,7 @@ def build_failure_notice(failures: List[dict]) -> Optional[str]:
         blocks.append(
             "※ " + " / ".join(unregistered) + " はアー写未登録です"
             "(グリッドでは黒い枠で表示されています)。\n"
-            "「アー写変更」とメンションして新規登録を進めてください。"
+            "下のボタンから登録できます。"
         )
 
     if not blocks:
@@ -1083,9 +1167,10 @@ def _create_and_reply(draft_id: str, reply_token: str, config: BotConfig,
             overwritten=overwrite_project_id is not None,
         )
         messages = messages + [{"type": "text", "text": notice}]
-        warn = build_failure_notice(failures)
+        # 未登録アーティストにはその場で登録できるボタンを付ける(C-6b)
+        warn = build_failure_message(failures, pid)
         if warn:
-            messages.append({"type": "text", "text": warn})
+            messages.append(warn)
         reply_messages(reply_token, messages, config.channel_access_token)
     except Exception as e:
         logger.error("intake creation crashed: draft=%s: %s", draft_id, e, exc_info=True)
@@ -1234,11 +1319,25 @@ def _handle_postback(parsed: dict, reply_token: str, user_id: Optional[str],
         _reply_artist_page(reply_token, parsed["pid"], page=parsed["page"], config=config)
         return
 
+    if action == ACTION_REGISTER_ARTIST:
+        if not user_id:
+            return  # pending は userId 単位。取れないなら写真待ちに入れない
+        name = parsed["name"]
+        pending_store.put(user_id, parsed["pid"], name, time.time(),
+                          mode=PENDING_MODE_REGISTER)
+        reply_text(
+            reply_token,
+            "「%s」のアー写を送ってください(5分以内)。" % name,
+            config.channel_access_token,
+        )
+        return
+
     if action == ACTION_ARTIST:
         if not user_id:
             return  # pending は userId 単位。取れないなら写真待ちに入れない
         artist = parsed["artist"]
-        pending_store.put(user_id, parsed["pid"], artist, time.time())
+        pending_store.put(user_id, parsed["pid"], artist, time.time(),
+                          mode=PENDING_MODE_REPLACE)
         reply_text(
             reply_token,
             "「%s」の新しい画像を送ってください(5分以内)。" % artist,
@@ -1290,6 +1389,91 @@ def _update_photo_and_reply(project_id: int, artist: str, message_id: str,
             "text": "画像の再生成に失敗しました(アー写の更新は完了しています)。",
         })
     reply_messages(reply_token, messages, config.channel_access_token)
+
+
+def register_artist_with_photo(name: str, image_bytes: bytes,
+                               content_type: str) -> Tuple[bool, str]:
+    """名前と画像で新規アーティストを作る。既存 service に委譲(C-6b)。
+
+    ★DB 書き込みはこの create_artist だけ。名前は grid の表記そのまま渡す
+      (アプリ層は完全一致・§54。正規化すると grid と結びつかなくなる)。
+    戻り値: (成功か, 返信メッセージ)。
+    """
+    from services import artist_service  # 遅延 import(bot.main を env 非依存に保つ)
+
+    ext = _ext_from_content_type(content_type)
+    file_obj = _NamedBytesIO(image_bytes, f"line_upload{ext}")
+    view, status = artist_service.create_artist(name, image_file=file_obj)
+
+    if view is None or status == "error":
+        return (False, f"「{name}」の登録に失敗しました")
+    if status == "exists":
+        # 既に生存中のレコードがある = 名前は登録済み。画像は差し替えられていない。
+        return (False,
+                f"「{name}」は既に登録済みです。"
+                "アー写を変えるなら「アー写変更」とメンションしてください。")
+    label = "登録しました" if status == "created" else "登録しました(復元)"
+    return (True, f"{view.name} を{label}")
+
+
+def _register_artist_and_reply(project_id: int, artist: str, message_id: str,
+                               reply_token: str, config: BotConfig) -> None:
+    """画像 DL → 新規登録 → 元プロジェクトのたたき台を作り直して返す(C-6b)。
+
+    ★別スレッドから呼ばれる想定。DB 書き込みは create_artist だけ。
+    例外は握って必ず何かを返す(無反応が一番困るため)。
+    """
+    try:
+        image_bytes, content_type = download_image(message_id, config.channel_access_token)
+    except Exception as e:
+        logger.warning("image download failed: %s", e)
+        reply_text(reply_token, "画像の取得に失敗しました。", config.channel_access_token)
+        return
+
+    try:
+        ok, reply = register_artist_with_photo(artist, image_bytes, content_type)
+    except Exception as e:
+        logger.error("register_artist failed: name=%r: %s", artist, e, exc_info=True)
+        ok, reply = False, "「%s」の登録に失敗しました" % artist
+
+    if not ok:
+        reply_text(reply_token, reply, config.channel_access_token)
+        return
+
+    # 登録できたら、そのイベントのたたき台を作り直す(黒枠が実写真に変わる)。
+    try:
+        images, failures = render_draft_set_for_project(project_id)
+    except Exception as e:
+        logger.error("regenerate after register failed: pid=%s: %s",
+                     project_id, e, exc_info=True)
+        images, failures = [], []
+
+    messages: List[dict] = [{"type": "text", "text": reply}]
+    if images:
+        messages.extend(images)
+        # まだ未登録が残っていれば、その分のボタンを続けて出す
+        warn = build_failure_message(failures, project_id)
+        if warn:
+            messages.append(warn)
+    else:
+        messages.append({
+            "type": "text",
+            "text": "画像の再生成に失敗しました(アー写の登録は完了しています)。",
+        })
+    reply_messages(reply_token, messages, config.channel_access_token)
+
+
+def _spawn_artist_registration(project_id: int, artist: str, message_id: str,
+                               reply_token: str, config: BotConfig) -> threading.Thread:
+    """新規登録 + 再生成を daemon thread に逃がして即座に戻る。"""
+    t = threading.Thread(
+        target=_register_artist_and_reply,
+        args=(project_id, artist, message_id, reply_token, config),
+        daemon=True,
+        name="artist-register-%s" % project_id,
+    )
+    t.start()
+    return t
 
 
 def _spawn_photo_update(project_id: int, artist: str, message_id: str,
@@ -1456,12 +1640,17 @@ def handle_event(event: dict, config: BotConfig) -> None:
         pending = pending_store.pop_valid(user_id, now)
         if not pending:
             return  # 直近の pending が無い画像は無視
-        project_id, artist = pending
-        # ★download → 更新 → 2 枚生成 まで数十秒かかるのでバックグラウンドへ。
+        project_id, artist, mode = pending
+        # ★download → 更新/登録 → 画像生成 まで数十秒かかるのでバックグラウンドへ。
         #   callback は 200 を即返す(reply token は約 1 分有効)。
-        _spawn_photo_update(
-            project_id, artist, message.get("id"), reply_token, config
-        )
+        if mode == PENDING_MODE_REGISTER:
+            _spawn_artist_registration(
+                project_id, artist, message.get("id"), reply_token, config
+            )
+        else:
+            _spawn_photo_update(
+                project_id, artist, message.get("id"), reply_token, config
+            )
         return
 
     # その他のメッセージ種別は無視
