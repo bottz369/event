@@ -17,19 +17,21 @@ def get_circled_number(n):
     else:
         return f"({n})"
 
-def _strip_leading_note_marks(note):
-    """共通備考の先頭にある ※ と空白を取り除く(Issue1)。
+def _strip_leading_marks(value, mark):
+    """先頭にある mark と空白を取り除く(Issue1 / 二重見出しの解消)。
 
-    告知文から取り込んだ値は「※各ドリンク代別」のように ※ 込みで保存されている
-    ことがあり、そのまま出力すると「※※各ドリンク代別」と二重になる。
-    保存値に ※ があってもなくても、出力の ※ はちょうど 1 個にそろえる。
+    告知文から取り込んだ値は「※各ドリンク代別」「■注意事項」のように印込みで
+    保存されていることがあり、出力側でも印を付けると「※※…」「■■…」と二重になる。
+    保存値に印があってもなくても、出力の印はちょうど 1 個にそろえる。
 
-    例: "※各ドリンク代別" → "各ドリンク代別"
-        "各ドリンク代別"   → "各ドリンク代別"
-        "※※ x"           → "x"
+    ★剥がすのは先頭だけ。文中の印はそのまま残す("■A■B" → "A■B")。
+
+    例(mark="※"): "※各ドリンク代別" → "各ドリンク代別"
+                    "各ドリンク代別"   → "各ドリンク代別"
+                    "※※ x"           → "x"
     """
-    text = str(note).strip()
-    while text and (text[0] == "※" or text[0].isspace() or text[0] == "\u3000"):
+    text = str(value).strip()
+    while text and (text[0] == mark or text[0].isspace() or text[0] == "\u3000"):
         text = text[1:]
     return text.strip()
 
@@ -106,7 +108,7 @@ def build_event_summary_text(
     if ticket_notes:
         for note in ticket_notes:
             if note and str(note).strip():
-                cleaned = _strip_leading_note_marks(note)
+                cleaned = _strip_leading_marks(note, "※")
                 if cleaned:
                     text += f"\n※{cleaned}"
 
@@ -132,12 +134,20 @@ def build_event_summary_text(
             text += f"\n{c_num}{artist_name}"
 
     # 自由記述
+    # 件名の ■ も共通備考の ※ と同じ扱い。保存値に ■ が付いていても二重にしない。
     if free_texts:
         for f in free_texts:
             if isinstance(f, dict):
                 ft = f.get("title", "")
                 fc = f.get("content", "")
-                if ft or fc:
-                    text += f"\n\n■{ft}\n{fc}"
+                if not (ft or fc):
+                    continue
+                heading = _strip_leading_marks(ft, "■") if ft else ""
+                if heading:
+                    text += f"\n\n■{heading}\n{fc}"
+                elif str(fc).strip():
+                    # 件名が(■ を外すと)空。孤立した「■」だけの見出し行は出さず、
+                    # 本文だけを出す(※ 側で「※」だけの行を落とすのと同じ考え方)。
+                    text += f"\n\n{fc}"
     
     return text

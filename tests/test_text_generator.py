@@ -96,7 +96,8 @@ def test_output_is_byte_identical_without_planned_count():
         "②Luna moon\n"
         "③リルリボン\n"
         "\n"
-        "■■注意事項\n"
+        # Issue1 同型: 保存値が "■注意事項" でも ■ は 1 個
+        "■注意事項\n"
         "ジャンプの禁止"
     )
 
@@ -186,3 +187,91 @@ def test_note_normalization_does_not_touch_inner_marks():
                                     **dict(BASE, ticket_notes=["※A※B"]))
     notes = [l for l in text.splitlines() if l.startswith("※")]
     assert notes == ["※A※B"]
+
+
+# ---------------------------------------------------------------------------
+# 自由記述の件名の ■ も常に 1 個(共通備考の ※ と同型)
+# ---------------------------------------------------------------------------
+def _free_text_lines(text):
+    """告知テキストの末尾(自由記述ブロック)の行を返す。"""
+    # 出演者リストの最後の行より後ろが自由記述
+    lines = text.splitlines()
+    last_artist = max(i for i, l in enumerate(lines) if l.startswith("①") or l.startswith("②")
+                      or l.startswith("③"))
+    return [l for l in lines[last_artist + 1:] if l.strip()]
+
+
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        ("■注意事項", "■注意事項"),      # 告知文から ■ 込みで取り込んだ値
+        ("注意事項", "■注意事項"),        # 手入力で ■ 無し
+        ("■■x", "■x"),                   # 二重に保存されてしまった値
+        ("  ■  y  ", "■y"),              # 前後・間の空白
+        ("■\u3000■ z", "■z"),            # 全角スペース混じり
+    ],
+)
+def test_free_text_title_always_gets_exactly_one_mark(stored, expected):
+    text = build_event_summary_text(
+        title="T", subtitle="",
+        **dict(BASE, free_texts=[{"title": stored, "content": "本文"}]))
+    assert _free_text_lines(text) == [expected, "本文"]
+    assert "■■" not in text
+
+
+def test_free_text_title_keeps_inner_marks():
+    """先頭の ■ だけを外す。文中の ■ はそのまま残す。"""
+    text = build_event_summary_text(
+        title="T", subtitle="",
+        **dict(BASE, free_texts=[{"title": "■A■B", "content": "本文"}]))
+    assert _free_text_lines(text) == ["■A■B", "本文"]
+
+
+@pytest.mark.parametrize("stored", ["", "■", "■■", "   ", "■ 　"])
+def test_empty_title_does_not_emit_an_orphan_mark(stored):
+    """件名が(■ を外すと)空なら、孤立した「■」行を出さず本文だけ出す。"""
+    text = build_event_summary_text(
+        title="T", subtitle="",
+        **dict(BASE, free_texts=[{"title": stored, "content": "本文のみ"}]))
+    assert _free_text_lines(text) == ["本文のみ"]
+    assert not any(l.strip() == "■" for l in text.splitlines())
+
+
+@pytest.mark.parametrize("stored", ["", "■", "   "])
+def test_empty_title_and_empty_body_emits_nothing(stored):
+    """件名も本文も空なら自由記述ブロックごと出さない。"""
+    text = build_event_summary_text(
+        title="T", subtitle="",
+        **dict(BASE, free_texts=[{"title": stored, "content": ""}]))
+    assert _free_text_lines(text) == []
+    assert not text.rstrip().endswith("■")
+
+
+def test_title_without_body_still_shows_the_heading():
+    """本文が無くても件名は出す(従来どおり)。"""
+    text = build_event_summary_text(
+        title="T", subtitle="",
+        **dict(BASE, free_texts=[{"title": "見出しのみ", "content": ""}]))
+    assert _free_text_lines(text) == ["■見出しのみ"]
+
+
+def test_multiple_free_texts_are_each_normalized():
+    text = build_event_summary_text(
+        title="T", subtitle="",
+        **dict(BASE, free_texts=[
+            {"title": "■チケット・入場に関して", "content": "入場は…"},
+            {"title": "注意事項", "content": "ジャンプの禁止"},
+        ]))
+    assert _free_text_lines(text) == [
+        "■チケット・入場に関して", "入場は…", "■注意事項", "ジャンプの禁止",
+    ]
+
+
+def test_note_and_free_text_share_one_normalizer():
+    """※ と ■ で同じヘルパを使う(片方だけ直る状態にしない)。"""
+    from utils.text_generator import _strip_leading_marks
+
+    assert _strip_leading_marks("※※ a", "※") == "a"
+    assert _strip_leading_marks("■■ a", "■") == "a"
+    # 別の印は剥がさない
+    assert _strip_leading_marks("■a", "※") == "■a"
