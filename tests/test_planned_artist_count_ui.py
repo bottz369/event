@@ -51,12 +51,22 @@ def _planned(at):
 # ---------------------------------------------------------------------------
 # 入力欄
 # ---------------------------------------------------------------------------
-def test_planned_count_input_exists_and_starts_empty(opened_overview):
-    """入力欄があり、未設定のプロジェクトでは空欄(= 実組数へフォールバック)。"""
+def test_planned_count_input_exists_and_reflects_saved_value(opened_overview):
+    """入力欄があり、保存済みの値がそのまま表示される。
+
+    ★どのプロジェクトが先頭に来るかは実データ次第なので、値の中身は決め打ちしない。
+      「未設定なら空欄 / 設定済みなら正の整数」だけを固定する
+      (実データに予定組数が保存されると落ちる作りにしない)。
+    """
     at = opened_overview
-    widget = at.number_input(key=PLANNED_KEY)
-    assert widget, "予定組数の入力欄が無い"
-    assert _planned(at) is None, "未設定なのに値が入っている"
+    assert at.number_input(key=PLANNED_KEY), "予定組数の入力欄が無い"
+
+    value = _planned(at)
+    assert value is None or (isinstance(value, int) and value >= 1), (
+        f"予定組数が None でも正の整数でもない: {value!r}"
+    )
+    # ウィジェットの表示値と session の値が一致していること(罠18: key が SSOT)
+    assert at.number_input(key=PLANNED_KEY).value == value
 
 
 def test_entering_a_value_updates_the_session_key(opened_overview):
@@ -67,8 +77,10 @@ def test_entering_a_value_updates_the_session_key(opened_overview):
 
 
 def test_clearing_the_value_falls_back_to_none(opened_overview):
+    """設定済みでも未設定でも、空欄に戻せること。"""
     at = opened_overview
     at.number_input(key=PLANNED_KEY).set_value(27).run()
+    assert _planned(at) == 27
     at.number_input(key=PLANNED_KEY).set_value(None).run()
     assert _planned(at) is None, "空欄に戻せていない"
 
@@ -93,12 +105,16 @@ def test_minimum_is_one():
 def test_changing_planned_count_marks_unsaved(opened_overview):
     """予定組数を変えたら「変更を保存すると…」が出る。"""
     at = opened_overview
-    warnings_before = [w.value for w in at.warning]
-    assert not any("変更を保存すると" in str(w) for w in warnings_before), (
+    warnings_before = [str(w.value) for w in at.warning]
+    assert not any("変更を保存すると" in w for w in warnings_before), (
         "開いただけで未保存扱いになっている"
     )
 
-    at.number_input(key=PLANNED_KEY).set_value(27).run()
+    # ★現在値と必ず違う値にする(実データに予定組数が入っていても成立するように)
+    current = _planned(at)
+    new_value = 99 if current != 99 else 98
+    at.number_input(key=PLANNED_KEY).set_value(new_value).run()
+
     warnings_after = [str(w.value) for w in at.warning]
     assert any("変更を保存すると" in w for w in warnings_after), (
         "予定組数を変えても未保存警告が出ない"
