@@ -89,6 +89,8 @@ def _overview_params():
         "date": str(st.session_state.get("proj_date", "")),
         "open": st.session_state.get("tt_open_time", ""),
         "start": st.session_state.get("tt_start_time", ""),
+        # 予定組数も告知テキストに出るので、変えたら「未保存」を出す
+        "planned": st.session_state.get("flyer_planned_artist_count"),
     }
 
 
@@ -231,6 +233,27 @@ def render_overview_page():
             st.session_state.proj_ticket_notes.append("")
             st.rerun()
 
+        # --- 予定組数(告知テキストの「■出演者（N組予定）」の N)---
+        # ★widget key = flyer_planned_artist_count が SSOT(罠18)。
+        #   保存は統合保存ボタン経由:sync_session_to_draft が flyer_* を
+        #   まとめて draft.flyer_settings へ写し、apply_draft が flyer_json に
+        #   マージする(専用の保存配線は要らない)。
+        #   空欄 = None を保存 → 読込時 legacy_adapter が None をスキップするので
+        #   キーが立たず、告知テキストは実組数へフォールバックする。
+        st.markdown("---")
+        st.markdown("**予定組数**")
+        st.number_input(
+            "予定組数",
+            min_value=1,
+            step=1,
+            value=None,
+            key="flyer_planned_artist_count",
+            label_visibility="collapsed",
+            placeholder="空欄なら実際の出演者数",
+            help="告知テキストの「■出演者（N組予定）」に使います。"
+                 "空欄にすると実際に登録されている組数になります。",
+        )
+
     # --- 自由記述 ---
     with c_free:
         st.subheader("自由記述")
@@ -268,18 +291,10 @@ def render_overview_page():
 
     # --- (削除: 強制同期ロジック) ---
 
-    current_params = {
-        "tickets": json.dumps(st.session_state.get("proj_tickets", []), sort_keys=True, ensure_ascii=False),
-        "notes": json.dumps(st.session_state.get("proj_ticket_notes", []), sort_keys=True, ensure_ascii=False),
-        "free": json.dumps(st.session_state.get("proj_free_text", []), sort_keys=True, ensure_ascii=False),
-        "title": st.session_state.get("proj_title", ""),
-        "subtitle": st.session_state.get("proj_subtitle", ""),
-        "venue": st.session_state.get("proj_venue", ""),
-        "url": st.session_state.get("proj_url", ""),
-        "date": str(st.session_state.get("proj_date", "")),
-        "open": st.session_state.get("tt_open_time", ""),
-        "start": st.session_state.get("tt_start_time", "")
-    }
+    # ★保存済みの印(mark_overview_saved)と同じ作り方でなければ比較が成立しないので、
+    #   _overview_params() に一本化する(以前は同じ辞書が 2 か所にあり、片方だけ
+    #   キーを足すと永久に「未保存」表示になる作りだった)。
+    current_params = _overview_params()
 
     if "overview_last_saved_params" not in st.session_state:
         st.session_state.overview_last_saved_params = current_params
