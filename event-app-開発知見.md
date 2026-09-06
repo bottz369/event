@@ -2113,7 +2113,66 @@ commit `be783a3`(services 新設)/ `46244de`(bot 配線 + anthropic 追加)/ `4f
 
 ---
 
-## フェーズ計画 現在地(2026-09-05 時点)
+## 54. 段階C C-1.1〜C-2 完了 + 修正パス(#3b/#4/#3a/#3c) + 設計判断確立(2026-09-05〜06)
+
+§53(C-1)以降、段階C を C-1.1〜C-2 まで進め、C-2 実機テストで出た4つの修正ポイントを潰した。
+本節は「完了スコープ」「#1〜#4 の対応」「#4 の真因と設計判断」「新しい罠44/45」を正本として記録する。
+
+### 完了スコープ(本番稼働 or push準備完了)
+- C-1.1: イベント種別分岐(ガールズ/メンズ)+ 2種の告知フォーマット記入テンプレ。`【イベント種別】` 行で LLM を上書き。
+- C-1.2: エコーに TT 既定表示 + イベント名規則(「rock field ULTRA LIVE」は常に名前)+ ワンショット(新規作成+概要 同時送信で解析)。
+- C-3: TT engine 純関数 `services/timetable_engine.build_timetable`(逆順・全員一律15分・物販=終演5分後から60分・場所A〜E循環(出演者行のみ)・転換=直前行の adjustment、最後の出演者には付けない)。calculate_timetable_flow を通すゴールデンテスト。
+- C-6a: グリッドのアー写未登録枠 = 黒背景プレースホルダ(`logic_grid.create_unregistered_photo_placeholder`)。写真あり経路は SHA256 一致で不変。
+- C-2: たたき台プロジェクト作成。`intake_draft_store`(Storage JSON, 32hex, TTL24h)/ `intake_creation.build_draft_from_intake` / 日付重複3択(上書き/別で新規作成/中止)/ 種別確認 / TT画像+グリッド画像を返却。overwrite は flyer_json をマージ(見た目=フライヤーデザインは残す)。
+- 主要コミット: C-2 本体 `b118368` / `465a68d`、#3b `66e7ea3`、#4 `369a430`(案1) `62f6f03`(案2)、#3a `1cc29ae`、#3c `dfbe4c7`。
+
+### C-2 実機テストで出た修正ポイント(#1〜#4)と対応
+- #2: 生成画像は問題なし(谷内さん確認)。
+- #3b: チケット金額を告知文の表記のまま保持(`¥6,000` / `¥2,000` / 当日 `各+¥1,000`)、備考は括弧内だけ(`66e7ea3`)。price を int 化しない、当日の「各+」を備考に移さない。スキーマの price を string 化(union 数は21のまま=罠43 非該当)。エコーの `"%s円"` は撤去(二重化回避)。
+- #4: グリッドから登録済み出演者(Luna moon)が欠ける → 真因と設計判断は下記。
+- #3a: タイトルとサブタイトルを1行結合『title - subtitle』(`1cc29ae`)。サブタイトル無しは不変。告知テキスト(build_event_summary_text)のみ、フライヤー画像描画は触らない。
+- #3c: 出演者の予定組数(例27)を保持(`dfbe4c7`)。正規表現抽出(`_PLANNED_ARTIST_COUNT_RE`, LLM スキーマ非変更=罠43 非該当)→ flyer_json["planned_artist_count"] 保存 → build_event_summary_text に後方互換の Optional 引数。無いときは len にフォールバック(バイト単位不変をゴールデン固定)。
+- #1: アーティストにガールズ/メンズ属性を持たせて種別を決定論判定 → C-6b へ延期(スキーマ vs JSON の設計判断が必要)。
+
+### #4 の真因と★設計判断(不変条件)
+- 症状: 「Luna moon」がタイムテーブルには写真つきで出るのに、アー写グリッドには黒枠すら出ず完全欠落(6枠しか組まれない)。
+- 真因: 「Luna moon」(スペース有り)は artists テーブルに存在しない。登録名は「LunaMoon」(スペース無し, id=266)。過去マージで旧レコードは `Luna moon_merged_<ts>`(id=264)にリネーム。`get_artists_by_names` は完全一致のみで、DB に無い名前を黙って落とす → グリッドに6件しか渡らずセル自体が生成されない。
+- TT に出た理由: `logic_timetable` の名前解決が「完全一致 → ダメなら空白除去して ILIKE 部分一致」の2段フォールバックを持つ(L174-179 / L285-289)。grid は完全一致のみ。→ TT と grid の名前解決が不整合だった。
+- 対応(案1, `369a430`): 未解決名も枠として残す。`services/artist_service.resolve_artists_in_order` が、入力順の全名前に対し、未解決名へ `ArtistView`(負の一意 id, image_filename=None)をスタンドインとして差し込む → C-6a の黒プレースホルダに合流。両経路(views/grid.py, generation_service)を service 経由に統一。logic_grid は DB クエリを一切持たず負 id の再クエリ落ちが無いことを grep で機械確認。既存描画の不変は SHA256 一致テストで固定。
+- 対応(案2, `62f6f03`): 未解決名を §5 failures に `{"kind":"artist_not_registered","name":...}` で積み、`build_failure_notice` で LINE に「◯◯ はアー写未登録です(グリッドでは黒い枠…)」と通知。web にも同趣旨の警告を表示。
+- ★設計判断(不変条件): **アプリ層(グリッド/TT の描画)は決定論的な完全一致で名前解決する。名前のゆらぎ解決は前段の LLM(intake)層がユーザー確認付きで行う**(intake なら「Luna moon は LunaMoon のこと?」と人に聞けるため)。谷内さんの判断。→ grid はこの判断どおり完全一致のままにした(曖昧マッチで別グループの写真を誤表示する事故を仕組みで防ぐ)。
+- 既知の残課題: TT にはまだ空白除去 ILIKE フォールバックが残存(アプリ層が勝手に曖昧マッチしており上記判断に反する)。**LLM 名寄せ実装後に TT フォールバックを撤去して完全一致へ統一**する。撤去を名寄せより先にやると表記ゆれの写真が一時的に消えるため、順序は「LLM 名寄せ → TT 撤去」。実イベントで実写真を出したいときは概要の表記を登録名(例 `LunaMoon`)に合わせる。
+
+### ★罠44: C-6a の黒プレースホルダは「Artist レコードはあるが写真が無い」枠にしか効かない
+Artist レコード自体が引けない(名前不一致など)と、枠そのものが生成されずプレースホルダの出番が無い(=見えない欠落)。名前解決の完全一致漏れは、プレースホルダとは別に「未解決名もセルとして残す(スタンドイン差し込み)」で塞ぐ必要がある。
+
+### ★罠45: get_artists_by_names は DB に無い名前を黙って落とす(既存仕様)
+`repositories/artist_repo.py`: `return [by_name[n] for n in names if n in by_name]`。docstring にも「見つからない name は skip」と明記。呼び出し側で「入力順の全名前を保つ」処理をしないと、未登録名が可視化されず欠落する(grid がこれを踏んでいた=#4)。
+
+### #3c 実装メモ(保存先の判断)
+- 保存先は flyer_json["planned_artist_count"]。理由: apply_draft が flyer_json だけをマージするため、web から保存しても値が残る。settings_json は全置換なので不可。
+- build_event_summary_text は末尾に Optional[int] 引数を追加。None なら現状どおり len(既存不変)。呼び出し元3箇所を配線済み: views/flyer.py:588 / views/overview.py:358 / generation_service.py:141。
+
+### 検証 / 本番反映
+- #3b / #4: verify.sh + bot 系フルスイート green。実機(web=7枠+黒枠+警告 / LINE=未登録通知)確認済み・push 済み・本番稼働。
+- #3a / #3c: verify.sh 169 / bot 系 478 green。予定数なしの告知テキストはバイト単位不変(ゴールデン固定)。実機テストと push は保留中(この §54 記録と同時に push 予定 = `1cc29ae` / `dfbe4c7` + 本記録)。
+
+### 申し送り(次スライス)
+- C-4(TT 自動編集, build_timetable 再利用)/ C-5(調整入口)/ C-6b(新規アー写登録 + 名前タイポチェック + #1 種別属性 + **LLM 名寄せ確認**)/ styled フライヤー標準テンプレ(ガールズ/メンズ)。
+- LLM 名寄せが入ったら TT の空白除去フォールバックを撤去し、アプリ層を完全一致に統一。
+
+### 告知テキストの追加修正(Issue1 二重※ / ■■ 二重 / Issue2 予定組数 web入力)= 完了・push準備完了
+C-2 実機テストの続きで見つかった、告知テキスト(build_event_summary_text)の整形2件と予定組数の web 入力。
+- Issue1 二重※(`1d0f249`): 共通備考が「※※各ドリンク代別」と二重化(保存値が既に ※ 込みなのに表示側でも ※ を付ける)。表示側で先頭 ※(全角/半角スペース含む)を全部剥がしてから ※ を1個だけ付ける。※/空白だけの備考は行ごと落とす。文中の ※ は残す。
+- ■■ 二重(`b5b856b`): 自由記述の件名も同型で「■■注意事項」と二重化。ヘルパを `_strip_leading_note_marks` → `_strip_leading_marks(value, mark)` に一般化し ※/■ で共有(片方だけ直る事故を防ぐ)。件名が空になれば孤立■を出さない、件名も本文も空ならブロックごと落とす。
+- Issue2 予定組数 web入力(`a62edfd`): 概要タブに「予定組数」入力欄。widget key=flyer_planned_artist_count とし、既存の保存(session→`flyer_*` 総取りの blocklist→apply_draft が flyer_json をマージ)とロード(legacy_adapter が None をスキップ=フォールバック)にそのまま乗せた。専用配線は不要。min_value=1(0と未設定を区別できないため)。空欄=None=実組数フォールバック。`_overview_params()` と render 側で重複していた比較辞書を一本化(永久「未保存」バグの同時修正)。
+- UIテストの実データ非依存化(`d40df1e`): AppTest が本番DBの状態を読む作りで、谷内さんのローカル実機テストで本番 id=41 に planned=27 が保存された(=Issue2 の本番動作の証跡)ことで落ちた。テストを保存値に依存しない形へ。
+- このパスの未push: 1cc29ae(#3a) / dfbe4c7(#3c) / 1d0f249(Issue1) / a62edfd(Issue2) / d40df1e(UIテスト) / b5b856b(■) + 本 §54 記録。実機テスト(web=※1個・■1個・予定組数27→保存→反映)確認済み。
+
+### ★罠46: ローカル Streamlit も接続先は本番 Supabase / AppTest が生 DB 状態に依存すると落ちる
+ローカルで `streamlit run` しても secrets.toml の DB_URL は本番 Supabase を指す。ゆえに「入力→保存」テストは本番DBに書き込まれる(テストは必ず【テスト】名プロジェクトで行う)。また AppTest がアクティブプロジェクト等の生DB状態を読む設計だと、本番データの変化でテストが落ちる。UIテストは保存値に依存しない形に作る(将来はテスト時のDBアクセスを隔離する)。
+
+## フェーズ計画 現在地(2026-09-06 時点)
 
 - **Phase 5(残りビュー移行)= ✅ 完全クローズ(2026-07-14)**: artists / grid(§24〜§28)/
   flyer 全スライス完了。flyer = F-rows(§29)/ F-C(§30)/ F-asset(§31)/ F-proj(§33)/ F-tmpl(§34)/
