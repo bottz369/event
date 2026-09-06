@@ -17,6 +17,23 @@ def get_circled_number(n):
     else:
         return f"({n})"
 
+def _strip_leading_note_marks(note):
+    """共通備考の先頭にある ※ と空白を取り除く(Issue1)。
+
+    告知文から取り込んだ値は「※各ドリンク代別」のように ※ 込みで保存されている
+    ことがあり、そのまま出力すると「※※各ドリンク代別」と二重になる。
+    保存値に ※ があってもなくても、出力の ※ はちょうど 1 個にそろえる。
+
+    例: "※各ドリンク代別" → "各ドリンク代別"
+        "各ドリンク代別"   → "各ドリンク代別"
+        "※※ x"           → "x"
+    """
+    text = str(note).strip()
+    while text and (text[0] == "※" or text[0].isspace() or text[0] == "\u3000"):
+        text = text[1:]
+    return text.strip()
+
+
 def build_event_summary_text(
     title, subtitle, date_val, venue, url,
     open_time, start_time,
@@ -85,10 +102,13 @@ def build_event_summary_text(
         text += "\n(情報なし)"
 
     # 共通備考
+    # Issue1: 保存値に ※ が含まれていても二重にしない。※ は常にここで 1 つだけ付ける。
     if ticket_notes:
         for note in ticket_notes:
             if note and str(note).strip():
-                text += f"\n※{str(note).strip()}"
+                cleaned = _strip_leading_note_marks(note)
+                if cleaned:
+                    text += f"\n※{cleaned}"
 
     # 出演者
     # 安全策: Noneや空文字を除去してから重複排除

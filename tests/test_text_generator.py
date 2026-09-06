@@ -88,7 +88,8 @@ def test_output_is_byte_identical_without_planned_count():
         "\n"
         "■チケット\n"
         "- Sチケット: ¥6,000 (前方エリア)\n"
-        "※※各ドリンク代別\n"
+        # Issue1: 保存値が "※各ドリンク代別" でも ※ は 1 個
+        "※各ドリンク代別\n"
         "\n"
         "■出演者（3組予定）\n"
         "①アルテミスの翼\n"
@@ -140,3 +141,48 @@ def test_planned_count_is_the_last_optional_argument():
     assert params[-1] == "planned_artist_count"
     assert inspect.signature(build_event_summary_text).parameters[
         "planned_artist_count"].default is None
+
+
+# ---------------------------------------------------------------------------
+# Issue1: 共通備考の ※ は常に 1 個
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        ("※各ドリンク代別", "※各ドリンク代別"),   # 告知文から ※ 込みで取り込んだ値
+        ("各ドリンク代別", "※各ドリンク代別"),      # 手入力で ※ 無し
+        ("※※x", "※x"),                            # 二重に保存されてしまった値
+        ("  ※  y  ", "※y"),                        # 前後・間の空白
+        ("※\u3000※ z", "※z"),                     # 全角スペース混じり
+    ],
+)
+def test_ticket_note_always_gets_exactly_one_mark(stored, expected):
+    text = build_event_summary_text(title="T", subtitle="",
+                                    **dict(BASE, ticket_notes=[stored]))
+    notes = [l for l in text.splitlines() if l.startswith("※")]
+    assert notes == [expected]
+    assert "※※" not in text
+
+
+@pytest.mark.parametrize("stored", ["※", "※※", "   ", "※ 　"])
+def test_note_that_is_only_marks_is_dropped(stored):
+    """中身が ※ と空白だけなら行ごと出さない(「※」だけの行を作らない)。"""
+    text = build_event_summary_text(title="T", subtitle="",
+                                    **dict(BASE, ticket_notes=[stored]))
+    assert not [l for l in text.splitlines() if l.startswith("※")]
+
+
+def test_multiple_notes_are_each_normalized():
+    text = build_event_summary_text(
+        title="T", subtitle="",
+        **dict(BASE, ticket_notes=["※各ドリンク代別", "未就学児入場不可"]))
+    notes = [l for l in text.splitlines() if l.startswith("※")]
+    assert notes == ["※各ドリンク代別", "※未就学児入場不可"]
+
+
+def test_note_normalization_does_not_touch_inner_marks():
+    """先頭の ※ だけを外す。文中の ※ はそのまま残す。"""
+    text = build_event_summary_text(title="T", subtitle="",
+                                    **dict(BASE, ticket_notes=["※A※B"]))
+    notes = [l for l in text.splitlines() if l.startswith("※")]
+    assert notes == ["※A※B"]
