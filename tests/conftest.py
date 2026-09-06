@@ -120,7 +120,9 @@ def two_projects_different_row_counts(readonly_creds):
     """row_counts_str が異なる既存プロジェクトを 2 件返す。
 
     返り値: ((id, label, row_counts_str), (id, label, row_counts_str))
-    label は workspace の selectbox 表示と同形式 f"{event_date or '----'} {title}"。
+    label は services.project_service.build_selector_label で組む
+    (本番と同じ関数を使う。自前で組むとラベル形式を変えたときテストが
+     「見つからない」で静かに skip してしまい、失敗に気づけない)。
     2 件見つからなければ skip(read-only ではテストデータを作れないため)。
     """
     from sqlalchemy import text
@@ -131,15 +133,17 @@ def two_projects_different_row_counts(readonly_creds):
         with engine.connect() as conn:
             res = conn.execute(
                 text(
-                    "SELECT id, event_date, title, grid_order_json "
+                    "SELECT id, event_date, title, subtitle, grid_order_json "
                     "FROM projects_v4 WHERE grid_order_json IS NOT NULL"
                 )
             )
+            from services.project_service import build_selector_label
+
             for row in res:
                 rc = _extract_row_counts_str(row.grid_order_json)
                 if rc is None:
                     continue
-                label = f"{row.event_date or '----'} {row.title}"
+                label = build_selector_label(row.event_date, row.title, row.subtitle)
                 by_rc.setdefault(rc, (row.id, label, rc))  # rc ごとに1件
     finally:
         engine.dispose()

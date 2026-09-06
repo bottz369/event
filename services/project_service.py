@@ -107,6 +107,8 @@ def save_active_project() -> bool:
     before_draft = session_manager.get_draft_project()
     old_title = before_draft.title if before_draft else None
     old_date = before_draft.event_date if before_draft else None
+    # サブタイトルもセレクタのラベルに出るので、変わったら invalidate が要る
+    old_subtitle = before_draft.subtitle if before_draft else None
 
     # widget で編集された session_state の値を draft に同期(★Phase 2B-1a で追加)
     session_manager.sync_session_to_draft()
@@ -132,7 +134,9 @@ def save_active_project() -> bool:
         session_manager.mark_saved()
         # Phase 3 cache-selector: 保存成功時、title or event_date が変化したときだけ
         # セレクタキャッシュを invalidate。
-        if draft.title != old_title or draft.event_date != old_date:
+        if (draft.title != old_title
+                or draft.event_date != old_date
+                or draft.subtitle != old_subtitle):
             list_projects_for_selector.clear()
         logger.info(f"save_active_project: saved id={draft.id}, rows={len(rows)}")
         return True
@@ -200,6 +204,23 @@ def delete_project_by_id(project_id: int) -> bool:
         db.close()
 
 
+def build_selector_label(event_date, title, subtitle=None) -> str:
+    """プロジェクト選択 UI に出すラベルを組む(純関数)。
+
+    形: "開催日 イベント名 - サブタイトル"
+    サブタイトルが無ければ "開催日 イベント名"(従来どおり)。
+    区切りは告知テキストのタイトル行(#3a)と揃えて半角ハイフン前後スペース。
+
+    ★テスト(tests/conftest.py)もこの関数でラベルを組む。同じ文字列を 2 か所で
+      組み立てると、片方だけ変えたときにテストが「ラベルが見つからない」で
+      静かに skip してしまい、失敗として気づけないため。
+    """
+    label = "%s %s" % (event_date or "----", title)
+    if subtitle:
+        label += " - %s" % subtitle
+    return label
+
+
 # ---------------------------------------------------------
 # 一覧取得(view から軽く呼ぶ用)
 # ---------------------------------------------------------
@@ -215,13 +236,17 @@ def list_projects_for_selector() -> List[Tuple[int, str]]:
       - create_new_project (成功時)
       - duplicate_active_project (成功時)
       - delete_project_by_id (成功時)
-      - save_active_project (title/event_date 変化時のみ成功時)
+      - save_active_project (title/event_date/subtitle 変化時のみ成功時)
       - views/projects.py:71 直接 db.delete 直後 (孤立経路、将来 services 統一予定)
     """
     db = SessionLocal()
     try:
         projects = project_repo.list_projects(db)
-        result = [(p.id, f"{p.event_date or '----'} {p.title}") for p in projects]
+        result = [
+            (p.id, build_selector_label(p.event_date, p.title,
+                                        getattr(p, "subtitle", None)))
+            for p in projects
+        ]
         return result
     finally:
         db.close()
