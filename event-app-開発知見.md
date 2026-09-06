@@ -2172,6 +2172,16 @@ C-2 実機テストの続きで見つかった、告知テキスト(build_event_
 ### ★罠46: ローカル Streamlit も接続先は本番 Supabase / AppTest が生 DB 状態に依存すると落ちる
 ローカルで `streamlit run` しても secrets.toml の DB_URL は本番 Supabase を指す。ゆえに「入力→保存」テストは本番DBに書き込まれる(テストは必ず【テスト】名プロジェクトで行う)。また AppTest がアクティブプロジェクト等の生DB状態を読む設計だと、本番データの変化でテストが落ちる。UIテストは保存値に依存しない形に作る(将来はテスト時のDBアクセスを隔離する)。
 
+## 55. ワークスペース選択ラベルにサブタイトル追加 + 罠47(2026-09-06)
+
+- 選択ラベルを「開催日 名前」→「開催日 名前 - サブタイトル」に(`e9b8fa8`)。`build_selector_label(event_date, title, subtitle=None)` 純関数に集約。区切りは #3a と同じ半角ハイフン前後スペース。subtitle が None/空 のときは付けない。
+- キャッシュ無効化に subtitle を追加(save_active_project。従来は title/event_date 変化時のみ clear)。これが無いとサブタイトルだけ変更してもセレクタのラベルが更新されない。
+- silent skip の回避: conftest.py が同じラベル形式を自作しており、ラベル変更で既存テスト(two_projects_different_row_counts)が「ラベルが見つからず」黙って skip する寸前だった。conftest も build_selector_label を使うよう統一し、テストで固定。
+- 既知の無害警告(未対応・cosmetic): 概要タブのチケット/自由記述ウィジェットは `value=X, key=K` 併用パターン(overview.py L188/192/196/273/282)で、再描画時に Streamlit の「created with a default value but also had its value set via the Session State API」警告が出ることがある。実害なし(value= は無視されセッション値が使われる=表示値は正しい)。消すには value= を外し session_state を事前初期化する定石へ直す(保存/読込の同期に触るため、テスト付きの別スライスで行う)。
+
+### ★罠47: Edit で `@デコレータ` と `def` の間にコードを挿入するとデコレータが別関数へ移る
+`@st.cache_data` の直後に helper 関数を差し込むと、デコレータがその helper に付いてしまい、本来の関数(`list_projects_for_selector`)から `.clear` 属性が消える。すると `save_active_project()` のキャッシュ無効化が `AttributeError` で落ち、UI 上「保存に失敗しました」になる(本番実害)。回避: デコレータ付き関数の直前に別コードを挿入しない(セクション見出しより前に置く)。再発防止テスト `test_cache_decorator_stays_on_the_list_function` あり。
+
 ## フェーズ計画 現在地(2026-09-06 時点)
 
 - **Phase 5(残りビュー移行)= ✅ 完全クローズ(2026-07-14)**: artists / grid(§24〜§28)/
