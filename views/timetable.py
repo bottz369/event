@@ -729,7 +729,7 @@ def render_timetable_page():
             current_key = f"tt_editor_{st.session_state.get('tt_editor_key', 0)}"
 
             edited_df = st.data_editor(
-                editor_df, key=current_key, num_rows="fixed", width='stretch',
+                editor_df, key=current_key, num_rows="fixed", width='stretch', height="content",
                 column_config={
                     "DELETE": st.column_config.CheckboxColumn("削除", width="small"),
                     "IS_HIDDEN": st.column_config.CheckboxColumn(
