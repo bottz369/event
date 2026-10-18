@@ -254,6 +254,9 @@ def render_flyer_editor(project_id):
     for entry in FLYER_KEY_REGISTRY:
         init_s(f"flyer_{entry.short_key}", entry.default)
 
+    from views import production_templates
+    production_templates.render()
+
     from views.event_format import config as event_config
     multipart = bool(event_config().get("enabled"))
     free_viewing = bool(event_config().get("free_viewing"))
@@ -409,7 +412,12 @@ def render_flyer_editor(project_id):
                                 # 同期して has_unsaved_changes() を発火させる。DB 反映はユーザが
                                 # フライヤー保存ボタン等を押した瞬間 (save_active_project 経由)。
                                 loaded_data = json.loads(target_t.data_json)
+                                if '_production' in loaded_data:
+                                    from views.production_templates import _apply_data
+                                    _apply_data(loaded_data)
+                                allowed={e.short_key for e in FLYER_KEY_REGISTRY if e.persist}
                                 for k, v in loaded_data.items():
+                                    if k not in allowed:continue
                                     # 汚染テンプレ防御 (②a P2 と同じ): null は session_state に
                                     # 入れない。後段 init_s の P1 フォールバックに任せる。
                                     if v is None:
@@ -423,6 +431,11 @@ def render_flyer_editor(project_id):
                 with c_t2:
                     if st.button("変更を保存 (上書き)", width='stretch'):
                         save_data = gather_flyer_settings_from_session()
+                        previous=json.loads(next(t.data_json for t in templates if t.name==sel_template))
+                        if '_production' in previous:
+                            from views.production_templates import _capture
+                            save_data=_capture()
+                            save_data['_production']['default']=previous['_production'].get('default',False)
                         if template_service.update_template_data(sel_template, json.dumps(save_data)):
                             st.toast(f"テンプレート「{sel_template}」を更新しました！", icon="💾")
                         else:

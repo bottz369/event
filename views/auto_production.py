@@ -8,7 +8,7 @@ import zipfile
 import pandas as pd
 import streamlit as st
 
-from services import asset_service,artist_service,project_service,session_manager
+from services import asset_service,artist_service,project_service,session_manager,template_service
 from services import production_intake as intake,production_service as production,image_studio
 from views.image_studio import _settings
 
@@ -68,11 +68,13 @@ def _asset_select(label,kind,key):
     return st.selectbox(label,[0]+list(labels),format_func=lambda i:labels.get(i,'指定なし'),key=key)
 
 
-def _image_source(kind,prefix):
+def _image_source(kind,prefix,template=None):
     label='背景' if kind=='background' else 'ロゴ'
     choices=['AIで新しく作る','アセットから選ぶ','画像をアップロード','指定なし'] if kind=='background' else ['標準ロゴを使う','アセットから選ぶ','画像をアップロード','イベント名をロゴにする']
+    template_id=(template or {}).get('bg_id' if kind=='background' else 'logo_id',0)
+    if template_id:choices=['テンプレートの素材を使う']+choices
     mode=st.selectbox(label+'の用意方法',choices,key=prefix+'_mode')
-    asset_id=0;data=None
+    asset_id=template_id if mode=='テンプレートの素材を使う' else 0;data=None
     if mode=='アセットから選ぶ':asset_id=_asset_select(label+'素材',kind,prefix+'_asset')
     elif mode=='画像をアップロード':
         upload=st.file_uploader(label+'画像',type=['png','jpg','jpeg','webp'],key=prefix+'_upload')
@@ -156,14 +158,27 @@ def render():
         show_transitions=st.checkbox('転換を画像に表示する',value=False,key=prefix+'_transitions')
         confirmed=st.checkbox('日付・料金・出演順・時刻・名前の確認事項を確認しました',key=prefix+'_confirmed')
         st.subheader('② フライヤーのイメージ')
+        from services.production_templates import decode,META
+        templates=template_service.list_templates()
+        valid_templates={}
+        for item in templates:
+            try:valid_templates[item.id]=(item,decode(item.data_json))
+            except ValueError:continue
+        default_id=next((i for i,(_,data) in valid_templates.items() if data[META].get('default')),0)
+        options=[0]+list(valid_templates)
+        chosen=st.selectbox('制作テンプレート',options,index=options.index(default_id),
+            format_func=lambda i:valid_templates[i][0].name if i else 'アプリの初期設定',key=prefix+'_template')
+        template=valid_templates[chosen][1] if chosen else None
+        st.caption('テンプレートの書体・配色・配置方式を使い、文字と画像の収まりを自動検査します。手動編集画面で標準テンプレートを作成できます。')
+
         design=st.text_area('希望するデザイン',key='autoprod_design',max_chars=2000,placeholder='赤いお祭り風。ロゴは金色。提灯と花火を周囲に。')
         palette=st.selectbox('背景の色合い',['指示に合わせる','赤・朱色・金','青・紺・金','黒・金','ピンク・紫'],key='autoprod_palette')
-        bg=_image_source('background',prefix+'_bg')
+        bg=_image_source('background',prefix+'_bg',template)
         reference=st.file_uploader('背景の参考画像（AI生成時・任意）',type=['png','jpg','jpeg','webp'],key=prefix+'_reference') if bg['mode']=='AIで新しく作る' else None
-        logo=_image_source('logo',prefix+'_logo')
+        logo=_image_source('logo',prefix+'_logo',template)
         st.caption('標準ロゴは登録済みのBASICを使用します。背景の希望とロゴの選択・色は別々に指定できます。')
         logo_tint=st.selectbox('ロゴの色',['元の色','背景に合わせる',*image_studio.PALETTES],key=prefix+'_logo_tint')
-        current=digest(dict(event=event,parts=parts,aliases=aliases,transitions=show_transitions,design=design,palette=palette,
+        current=digest(dict(template=template,event=event,parts=parts,aliases=aliases,transitions=show_transitions,design=design,palette=palette,
             bg={**bg,'data':bytes_hash(bg['data'])},logo={**logo,'data':bytes_hash(logo['data'])},tint=logo_tint,
             reference=bytes_hash(reference.getvalue()) if reference else ''))
         can_preview=bool(parts and confirmed and (design.strip() or bg['mode']!='AIで新しく作る'))
@@ -172,7 +187,7 @@ def render():
                 draft,rows=production.compile_plan(event,parts,aliases,show_transitions)
                 with st.spinner('素材を用意して、フライヤーセットを作っています…'):
                     bg_data=bg['data']
-                    if bg['mode']=='アセットから選ぶ':
+                    if bg['mode'] in ('アセットから選ぶ','テンプレートの素材を使う'):
                         if not bg['asset_id']:raise ValueError('背景素材を選択してください。')
                         bg_data=asset_service.read_image_asset(bg['asset_id'])
                     elif bg['mode']=='画像をアップロード' and not bg_data:raise ValueError('背景画像を選択してください。')
@@ -185,7 +200,7 @@ def render():
                     logo_data=logo['data']
                     if logo['mode']=='標準ロゴを使う':
                         logo_data=production.read_default_logo()
-                    elif logo['mode']=='アセットから選ぶ':
+                    elif logo['mode'] in ('アセットから選ぶ','テンプレートの素材を使う'):
                         if not logo['asset_id']:raise ValueError('ロゴ素材を選択してください。')
                         logo_data=asset_service.read_image_asset(logo['asset_id'])
                     elif logo['mode']=='画像をアップロード' and not logo_data:raise ValueError('ロゴ画像を選択してください。')
@@ -196,13 +211,14 @@ def render():
                         color=image_studio.PALETTES.get(logo_tint)
                         if logo_tint=='背景に合わせる':color=image_studio.PALETTES['ゴールド'] if '赤' in palette or '金' in palette else image_studio.PALETTES['シルバー']
                         logo_data=image_studio.recolor(logo_data,color)
-                    package=production.render_package(draft,rows,bg_data,logo_data)
+                    package=production.render_package(draft,rows,bg_data,logo_data,**({'template':template} if template is not None else {}))
                 state.update(package=package,preview_hash=current);st.session_state[STATE]=state
             except ValueError as exc:st.error(str(exc))
         st.caption('AI背景を選んだ場合は画像生成の利用料が発生します。同じ背景条件のプレビュー作り直しは、作成済みの背景を再利用します。')
         package=state.get('package')
         if not package:return
         st.subheader('③ 完成プレビュー')
+        if package.get('layout_reports'):st.success('書体・配色を維持し、配置の自動調整と重なり・はみ出し検査を通過しました。')
         stale=state.get('preview_hash')!=current
         if stale:st.warning('内容が変わっています。プレビューを作り直してから保存してください。')
         for failure in package.get('failures',[]):

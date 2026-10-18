@@ -144,7 +144,25 @@ def title_logo(title,font_path):
     return image
 
 
-def render_package(draft,rows,background=None,logo=None):
+def open_background(data):
+    """Downsample large existing backgrounds for composition, keeping the asset intact."""
+    import warnings
+    from PIL import UnidentifiedImageError
+    if not data or len(data)>20*1024*1024:raise ValueError('背景は20MB以下で選択してください。')
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error',Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format not in ('PNG','JPEG','WEBP') or image.width*image.height>40000000:
+                    raise ValueError('背景はPNG・JPEG・WebPの4000万画素以下で選択してください。')
+                image.draft('RGB',(2160,2700))
+                image.thumbnail((2160,2700),Image.Resampling.LANCZOS)
+                return image.convert('RGBA')
+    except (UnidentifiedImageError,OSError,Image.DecompressionBombWarning,Image.DecompressionBombError) as exc:
+        raise ValueError('背景画像を開けませんでした。') from exc
+
+
+def render_package(draft,rows,background=None,logo=None,template=None):
     """Render both finished variants through existing renderers, without any persistence."""
     from services import font_service,artist_service,event_format_service
     from logic_grid import generate_grid_image
@@ -156,9 +174,12 @@ def render_package(draft,rows,background=None,logo=None):
     from services.image_studio import open_image,png
     from utils.text_generator import build_event_summary_text
     project=deepcopy(draft)
+    if template is not None:
+        from services.production_templates import apply
+        project=apply(project,rows,template)
     font=font_service.ensure_font_path('keifont.ttf')
     if not font: raise ValueError('日本語フォントを準備できませんでした。')
-    bg=open_image(background) if background else None
+    bg=open_background(background) if background else None
     logo_image=open_image(logo) if logo else title_logo(project.title,font)
     sources={};failures=[]
     cfg=project.settings[KEY]
@@ -167,14 +188,21 @@ def render_package(draft,rows,background=None,logo=None):
     else:
         artists=artist_service.resolve_artists_in_order(build_grid_order_from_rows(rows),failures=failures)
         counts=[int(n) for n in project.grid_settings['row_counts_str'].split(',')]
-        sources['grid']=generate_grid_image(artists,'',font_path=font,row_counts=counts,failures=failures)
+        grid_font=font_service.ensure_font_path(project.settings.get('grid_font') or 'keifont.ttf')
+        tt_font=font_service.ensure_font_path(project.settings.get('tt_font') or 'keifont.ttf')
+        if not grid_font or not tt_font:raise ValueError('テンプレートのフォントを準備できませんでした。')
+        sources['grid']=generate_grid_image(artists,'',font_path=grid_font,row_counts=counts,
+            is_brick_mode=project.grid_settings.get('layout_mode')=='レンガ (サイズ統一)',
+            alignment={'左揃え':'left','右揃え':'right'}.get(project.grid_settings.get('alignment'),'center'),failures=failures)
         tt_rows=build_tt_gen_list_from_rows(rows,project.open_time,project.start_time)
-        sources['tt']=generate_timetable_image(tt_rows,font_path=font,columns=2,failures=failures)
+        sources['tt']=generate_timetable_image(tt_rows,font_path=tt_font,columns=project.settings.get('tt_columns',2),
+            style=project.settings.get('tt_style'),failures=failures)
     styles={e.short_key:e.default for e in FLYER_KEY_REGISTRY if e.persist}
     styles.update(logo_scale=min(1.65, 235/(432*logo_image.height/logo_image.width)),logo_pos_y=0.0,footer_pos_y=600,subtitle_size=38,date_size=56,
                   venue_size=32,time_size=36,ticket_name_size=30,ticket_note_size=17,
                   ticket_gap=-30,note_gap=0,area_gap=22,free_viewing_size=50,free_note_size=24,free_notice_size=17)
-    results={};metadata={}
+    if template is not None:styles.update(project.flyer_settings)
+    results={};metadata={};layout_reports={};final_args={}
     for variant,source in sources.items():
         if source is None: raise ValueError('出演者の画像を生成できませんでした。')
         # Fit the image into the content area without stretching faces or type.
@@ -187,12 +215,41 @@ def render_package(draft,rows,background=None,logo=None):
         render_styles={**styles,'event_multipart':cfg['enabled'],'event_free_viewing':cfg.get('free_viewing',False),
             'event_free_text':cfg.get('free_text',''),'event_free_notices':cfg.get('free_notices',''),
             'content_scale_w':width_pct,'content_scale_h':height_pct,'content_pos_y':position}
+        if template is not None:
+            render_styles.update({k:v for k,v in styles.items() if k in project.flyer_settings})
         for key in list(render_styles):
             if key.endswith('_font'):render_styles[key]=font_service.ensure_font_path(render_styles[key]) or font
         args=dict(bg_source=bg,logo_source=logo_image,main_source=source,styles=render_styles,
-            date_text=format_event_date(project.event_date,'EN'),venue_text=project.venue_name,subtitle_text=project.subtitle,
+            date_text=format_event_date(project.event_date,styles.get('date_format','EN')),venue_text=project.venue_name,subtitle_text=project.subtitle,
             open_time=project.open_time,start_time=project.start_time,ticket_info_list=[t.to_dict() for t in project.tickets],
             common_notes_list=project.ticket_notes,system_fallback_filename=font,failures=failures)
+        if template is not None:
+            from services.production_layout import fit
+            from services.production_templates import decode,META
+            # Font families stay fixed. A missing template font must not silently change.
+            for key,value in styles.items():
+                if key.endswith('_font'):
+                    resolved=font_service.ensure_font_path(value)
+                    if not resolved:raise ValueError('テンプレートのフォントが見つかりません：'+str(value))
+                    render_styles[key]=resolved
+            cfg_meta=decode(template)[META]
+            if cfg['enabled']:
+                from models.event_format import active_parts,grid_layout,grid_row_counts
+                parts=active_parts(cfg)
+                columns=project.settings.get('tt_columns',2)
+                count=sum(math.ceil(len(event_format_service.timetable_rows(p))/columns)+2 for p in parts)*columns
+                grid_row_total=sum(len(grid_row_counts(grid_layout(p))) for p in parts)
+            else:
+                count=len(tt_rows);grid_row_total=project.grid_settings.get('rows',5)
+            image,meta,fitted,report=fit(args,cfg_meta.get('zones',{}).get(variant),
+                row_count=count if variant=='tt' else 0,columns=project.settings.get('tt_columns',2),
+                grid_rows=grid_row_total if variant=='grid' else 0)
+            for entry in FLYER_KEY_REGISTRY:
+                key=entry.short_key
+                if entry.persist and not key.endswith('_font') and key in fitted:styles[key]=fitted[key]
+            for suffix in ('scale_w','scale_h','pos_y'):styles[f'{variant}_{suffix}']=fitted['content_'+suffix]
+            results[variant]=png(image);metadata[variant]=meta;layout_reports[variant]=report;final_args[variant]=args
+            continue
         _,meta=create_flyer_image_shadow(**args)
         for field,y in (('subtitle',300),('date',380),('venue',455),('time',380)):
             if field in meta:
@@ -209,6 +266,19 @@ def render_package(draft,rows,background=None,logo=None):
         image,meta=create_flyer_image_shadow(**args)
         results[variant]=png(image)
         metadata[variant]=meta
+    if template is not None:
+        from services.production_layout import issues
+        # Both variants share header/footer settings. Re-render after the stricter
+        # variant has refined them so the saved manual editor reproduces both files.
+        for variant,args in final_args.items():
+            final={**args['styles'],**styles}
+            for key in final:
+                if key.endswith('_font'):final[key]=font_service.ensure_font_path(final[key]) or font
+            final.update(content_scale_w=styles[variant+'_scale_w'],content_scale_h=styles[variant+'_scale_h'],content_pos_y=styles[variant+'_pos_y'])
+            image,meta=create_flyer_image_shadow(**{**args,'styles':final})
+            errors=issues(meta)
+            if errors:raise ValueError('保存する配置の検査を通過しませんでした：'+'、'.join(errors[:3]))
+            results[variant]=png(image);metadata[variant]=meta
     project.flyer_settings=styles
     # Store generated title as a logo too, so the saved normal editor reproduces it.
     logo_data=png(logo_image)
@@ -221,7 +291,7 @@ def render_package(draft,rows,background=None,logo=None):
     if cfg.get('free_viewing'):
         text+='\n\n■観覧無料\n'+cfg.get('free_text','')+'\n'+cfg.get('free_notices','')
     return dict(draft=project,rows=deepcopy(rows),images=results,background=background,logo=logo_data,
-                text=text,failures=failures,metadata=metadata,asset_ids={})
+                text=text,failures=failures,metadata=metadata,layout_reports=layout_reports,asset_ids={})
 
 
 def persist_new_project(draft,rows):
