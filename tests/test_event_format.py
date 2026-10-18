@@ -207,7 +207,7 @@ def test_multipart_flyer_uses_regular_compositor_and_all_saved_styles(monkeypatc
     assert styles["content_scale_h"] == 67
     assert styles["event_multipart"] is True
     assert styles["free_viewing_pos_y"] == 91
-    assert styles["free_placement"] == "overlay"
+    assert "free_placement" not in styles
 
 
 def test_multipart_editor_exposes_regular_controls_without_global_time(app_test):
@@ -227,7 +227,7 @@ def test_multipart_editor_exposes_regular_controls_without_global_time(app_test)
     assert "flyer_grid_scale_w" in keys
     assert "flyer_free_viewing_size" in keys
     assert "flyer_time_size" not in keys
-    assert at.selectbox(key="flyer_free_placement")
+    assert "flyer_free_placement" not in {w.key for w in at.selectbox}
 
 
 def test_click_move_consumed_once_before_widgets(app_test, monkeypatch):
@@ -257,13 +257,15 @@ def test_click_move_consumed_once_before_widgets(app_test, monkeypatch):
     assert at.session_state["flyer_date_pos_x"] == 15
 
 
-@pytest.mark.parametrize("placement,height", [("band",1530), ("overlay",1350)])
-def test_free_viewing_placement_offsets_and_hidden_multipart_times(monkeypatch, placement, height):
+@pytest.mark.parametrize("placement", ["band", "overlay", None])
+@pytest.mark.parametrize("multipart", [False, True])
+def test_free_viewing_is_inline_below_tickets_even_for_legacy_band(monkeypatch, placement, multipart):
     from utils import flyer_generator as generator
     from models.flyer_keys import FLYER_KEY_REGISTRY
     styles = {e.short_key: e.default for e in FLYER_KEY_REGISTRY if e.persist}
-    styles.update(event_multipart=True, event_free_viewing=True, event_free_text="ステージ前",
-                  free_placement=placement, free_viewing_pos_x=35, free_viewing_pos_y=20)
+    styles.update(event_multipart=multipart, event_free_viewing=True, event_free_text="ステージ前",
+                  free_placement=placement, free_viewing_pos_x=35, free_viewing_pos_y=20,
+                  ticket_name_pos_y=200, ticket_gap=-10)
     times, texts = [], []
     def time_row(canvas, *args, **kwargs):
         times.append(canvas)
@@ -274,9 +276,44 @@ def test_free_viewing_placement_offsets_and_hidden_multipart_times(monkeypatch, 
     monkeypatch.setattr(generator, "draw_time_row_aligned", time_row)
     monkeypatch.setattr(generator, "draw_text_with_shadow", text)
     image, meta = generator.create_flyer_image_shadow(None,None,None,styles,"date","venue","sub",
-                                                      "10:00","10:30",[],[])
-    assert image.size == (1080,height)
-    assert times == [None,None]
-    assert "time" not in meta
+        "10:00","10:30",[dict(name="VIP",price="5000"),dict(name="一般",price="2000")],["備考"])
+    assert image.size == (1080,1350)
+    assert (times == [None,None]) if multipart else all(t is not None for t in times)
+    assert ("time" not in meta) == multipart
+    tickets = [t for t in texts if t[0] in ("VIP 5000", "一般 2000")]
+    assert meta["free_viewing"]["base_y"] == max(t[2]+30 for t in tickets)+10
     assert ("観覧無料",575,meta["free_viewing"]["base_y"]-20) in texts
     assert ("ステージ前",540,meta["free_note"]["base_y"]) in texts
+    assert [t[0] for t in texts].count("sub") == 1
+    assert [t[0] for t in texts].index("date") < [t[0] for t in texts].index("venue")
+
+
+def test_multipart_header_passes_venue_and_single_subtitle(monkeypatch):
+    from services import event_format_service as renderer, font_service
+    from utils import flyer_generator
+    from models.project import ProjectDraft
+    from PIL import Image
+    project = ProjectDraft(subtitle="2026 KABUKICHO vol.3", venue_name="KABUKICHO TOWER STAGE",
+                           settings={KEY: dict(enabled=True)})
+    monkeypatch.setattr(font_service, "ensure_font_path", lambda value: value)
+    captured = {}
+    def compose(**kwargs):
+        captured.update(kwargs)
+        return kwargs["main_source"], {}
+    monkeypatch.setattr(flyer_generator, "create_flyer_image_shadow", compose)
+    renderer.compose_flyer(project, Image.new("RGBA", (10,10)), "grid")
+    assert captured["venue_text"] == "KABUKICHO TOWER STAGE"
+    assert captured["subtitle_text"] == "2026 KABUKICHO vol.3"
+
+
+def test_visible_text_bounds_match_pixels_without_changing_render():
+    from PIL import Image
+    from utils.flyer_generator import draw_text_with_shadow
+    first = Image.new("RGBA", (600,300))
+    second = first.copy()
+    bounds = {}
+    args = ("VIP 5000",300,100,None,40,560,"white")
+    draw_text_with_shadow(first,*args)
+    draw_text_with_shadow(second,*args,layout_bounds=bounds)
+    assert first.tobytes() == second.tobytes()
+    assert bounds["bottom"] == second.getbbox()[3]

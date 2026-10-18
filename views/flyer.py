@@ -475,9 +475,6 @@ def render_flyer_editor(project_id):
         else:
             st.caption("OPEN / START は各部の見出しに表示します。時間はタイムテーブルで編集できます。")
         if free_viewing:
-            st.selectbox("観覧無料の配置", ["band", "overlay"],
-                         format_func=lambda v: {"band": "下部に専用帯を追加", "overlay": "画像内に自由配置"}[v],
-                         key="flyer_free_placement")
             render_style_editor("観覧無料", "free_viewing")
             render_style_editor("観覧無料の補足", "free_note")
         render_style_editor("チケット情報 (List)", "ticket_name")

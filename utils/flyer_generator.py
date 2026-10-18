@@ -101,7 +101,7 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
                           shadow_on=False, shadow_color="#000000", 
                           shadow_blur=0, shadow_off_x=5, shadow_off_y=5,
                           shadow_opacity=255, shadow_spread=0,
-                          fallback_font_path=None, measure_only=False):
+                          fallback_font_path=None, measure_only=False, layout_bounds=None):
     if not text: return 0
     text_str = str(text)
     
@@ -201,7 +201,10 @@ def draw_text_with_shadow(base_img, text, x, y, font_path, font_size_px, max_wid
 
     if base_img:
         base_img.paste(final_layer, (int(paste_x), int(paste_y)), final_layer)
-        
+    if layout_bounds is not None:
+        visible = final_layer.getbbox()
+        if visible:
+            layout_bounds.update(top=int(paste_y) + visible[1], bottom=int(paste_y) + visible[3])
     return content_h - margin
 
 def draw_time_row_aligned(base_img, label, time_str, x, y, font, font_size_px, max_width, fill_color,
@@ -554,10 +557,12 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
     
     s_ticket = get_s("ticket_name")
     t_gap = styles.get("ticket_gap", 20)
+    ticket_bottom = None
     for t in ticket_info_list:
         if not t.get("name") and not t.get("price"): continue
         line_text = f"{t.get('name')} {t.get('price')}"
         if t.get("note"): line_text += f" ({t.get('note')})"
+        ticket_bounds = {}
         h = draw_text_with_shadow(
             canvas, line_text, 
             CANVAS_W // 2 + s_ticket["pos_x"], current_y - s_ticket["pos_y"],
@@ -566,9 +571,33 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
             shadow_on=s_ticket["shadow_on"], shadow_color=s_ticket["shadow_color"],
             shadow_blur=s_ticket["shadow_blur"], shadow_off_x=s_ticket["shadow_off_x"], shadow_off_y=s_ticket["shadow_off_y"],
             shadow_opacity=s_ticket["shadow_opacity"], shadow_spread=s_ticket["shadow_spread"],
-            fallback_font_path=fallback_path
+            fallback_font_path=fallback_path, layout_bounds=ticket_bounds
         )
+        bottom = ticket_bounds.get("bottom", current_y - s_ticket["pos_y"] + h)
+        ticket_bottom = max(ticket_bottom, bottom) if ticket_bottom is not None else bottom
         current_y += h + t_gap
+
+    if styles.get("event_free_viewing"):
+        # Old free_placement values are intentionally ignored: all flyers stay inline.
+        base_y = (ticket_bottom if ticket_bottom is not None else current_y) + 10
+        free_bottom = base_y
+        for prefix, text in (("free_viewing", "観覧無料"),
+                             ("free_note", styles.get("event_free_text", ""))):
+            if not text:
+                continue
+            s = get_s(prefix)
+            layout_meta[prefix] = {"base_x": CANVAS_W // 2, "base_y": base_y}
+            y = base_y - s.pop("pos_y")
+            bounds = {}
+            h = draw_text_with_shadow(canvas, text,
+                CANVAS_W // 2 + s.pop("pos_x"), y,
+                max_width=CANVAS_W - 60, anchor="ma", fallback_font_path=fallback_path,
+                layout_bounds=bounds, **s)
+            bottom = bounds.get("bottom", y + h)
+            free_bottom = max(free_bottom, bottom)
+            base_y = bottom + 5
+        # Leave room before common notes, preserving their saved position offsets.
+        current_y += free_bottom - (ticket_bottom if ticket_bottom is not None else current_y)
 
     s_note = get_s("ticket_note")
     n_gap = styles.get("note_gap", 15)
@@ -610,18 +639,4 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
             except Exception as e:
                 print(f"BUZZチケロゴの合成エラー: {e}")
 
-    if styles.get("event_free_viewing"):
-        band = styles.get("free_placement", "band") == "band"
-        base_y = CANVAS_H + 8 if band else CANVAS_H - 180
-        if band:
-            extended = Image.new("RGBA", (CANVAS_W, CANVAS_H + 180), "#151922")
-            extended.paste(canvas, (0, 0))
-            canvas = extended
-        for prefix, text, y in (("free_viewing", "観覧無料", base_y),
-                                ("free_note", styles.get("event_free_text", ""), base_y + 95)):
-            s = get_s(prefix)
-            layout_meta[prefix] = {"base_x": CANVAS_W // 2, "base_y": y}
-            draw_text_with_shadow(canvas, text,
-                CANVAS_W // 2 + s.pop("pos_x"), y - s.pop("pos_y"),
-                max_width=CANVAS_W - 60, anchor="ma", fallback_font_path=fallback_path, **s)
     return canvas, layout_meta

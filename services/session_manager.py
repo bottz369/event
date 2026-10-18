@@ -164,6 +164,7 @@ _FLYER_TRANSIENT_KEYS = {
     "flyer_layout_meta_tt",
     # UI のクリック追跡用、永続化しない
     "flyer_click_target",
+    "flyer_free_placement",  # retired placement selector; ignore saved legacy values
 }
 
 # Phase 2B-2b-2: UI 専用フラグ (flyer_grid_link / flyer_tt_link / flyer_preview_width)
