@@ -13,3 +13,6 @@ supabase==2.31.0
 opencv-python-headless==4.13.0.92
 requests==2.34.2
 streamlit-image-coordinates==0.4.0
+
+# Local text-layer timetable PDF import (no external OCR service).
+pypdf==6.21.1

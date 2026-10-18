@@ -188,6 +188,9 @@ def render_workspace_page():
     active_tab = current_tab()
 
     from views import event_format
+    if active_tab == TAB_TT:
+        from views import pdf_import
+        pdf_import.render()
     event_format.render_options()
     if event_format.config().get("enabled") and active_tab != TAB_OVERVIEW:
         if active_tab == TAB_TT:
