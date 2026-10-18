@@ -425,7 +425,7 @@ _FLYER_VARIANTS = ("grid", "tt")
 # (views/flyer.py の targets と同一)。
 _FLYER_FONT_STYLE_KEYS = (
     "subtitle_font", "date_font", "venue_font",
-    "time_font", "ticket_name_font", "ticket_note_font", "free_viewing_font", "free_note_font",
+    "time_font", "ticket_name_font", "ticket_note_font", "free_viewing_font", "free_note_font", "free_notice_font",
 )
 
 
@@ -478,6 +478,7 @@ def build_flyer_kwargs_for_project(project_id: int, variant: str = "grid") -> Op
     event_config = event_options(event_project.settings) if event_project else {}
     styles["event_free_viewing"] = event_config.get("free_viewing", False)
     styles["event_free_text"] = event_config.get("free_text", "")
+    styles["event_free_notices"] = event_config.get("free_notices", "")
 
     # --- ★view の「🔗 縦横比を固定」の再現(views/flyer.py:366 / 374) ---
     # grid_link / tt_link は FLYER_KEY_REGISTRY で persist=False = DB に保存されない

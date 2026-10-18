@@ -226,7 +226,7 @@ def render_flyer_editor(project_id):
     if multipart:
         move_targets.pop("time", None)
     if free_viewing:
-        move_targets.update(free_viewing="観覧無料", free_note="観覧無料の補足")
+        move_targets.update(free_viewing="観覧無料", free_note="観覧無料の補足", free_notice="注意書き")
     if st.session_state.get("flyer_click_target") not in move_targets:
         st.session_state["flyer_click_target"] = "subtitle"
 
@@ -402,7 +402,10 @@ def render_flyer_editor(project_id):
             st.markdown("---")
             
             # ★追加: BUZZチケロゴ表示チェックボックス
-            st.checkbox("🎫 右下に「BUZZチケ」のロゴを表示する", key="flyer_show_buzz_logo")
+            st.checkbox("🎫 「BUZZチケ」のロゴを表示する", key="flyer_show_buzz_logo")
+            st.checkbox("BUZZチケを右上に横長で表示する", key="flyer_buzz_logo_top_right",
+                        disabled=not st.session_state.flyer_show_buzz_logo,
+                        help="OFFの場合は従来の右下・正方形の表示です。")
             st.markdown("---")
             
             render_visual_selector("ロゴ画像", logos, "flyer_logo_id", st.session_state.flyer_logo_id, allow_none=True)
@@ -477,6 +480,8 @@ def render_flyer_editor(project_id):
         if free_viewing:
             render_style_editor("観覧無料", "free_viewing")
             render_style_editor("観覧無料の補足", "free_note")
+            render_style_editor("注意書き（観覧無料の下）", "free_notice")
+            st.caption("注意書きは上の「公演形式・観覧無料の設定」で入力します。下端に収まるよう観覧無料の文字類を自動縮小します。")
         render_style_editor("チケット情報 (List)", "ticket_name")
         render_style_editor("チケット共通備考 (Notes)", "ticket_note")
 
@@ -635,10 +640,11 @@ def _generate_preview(proj):
     from views.event_format import config as event_format_config
     styles["event_free_viewing"] = event_format_config().get("free_viewing", False)
     styles["event_free_text"] = event_format_config().get("free_text", "")
+    styles["event_free_notices"] = event_format_config().get("free_notices", "")
     styles["event_multipart"] = event_format_config().get("enabled", False)
     
     # フォント読み込み (絶対パス化 & ダウンロード)
-    targets = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note", "free_viewing", "free_note"]
+    targets = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note", "free_viewing", "free_note", "free_notice"]
     for t in targets:
         f_key = f"{t}_font"
         f_name = styles.get(f_key)

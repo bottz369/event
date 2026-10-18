@@ -442,10 +442,12 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
     footer_base_y = CANVAS_H - 450 - styles.get("footer_pos_y", 0)
     current_y = footer_base_y
 
+    free_font_scale = 1.0
+
     def get_s(key_prefix):
         return {
             "font_path": get_font_path(styles.get(f"{key_prefix}_font")),
-            "font_size_px": styles.get(f"{key_prefix}_size", 40),
+            "font_size_px": max(10, round(styles.get(f"{key_prefix}_size", 40) * free_font_scale)) if key_prefix in ("free_viewing", "free_note", "free_notice") else styles.get(f"{key_prefix}_size", 40),
             "fill_color": styles.get(f"{key_prefix}_color", "#FFFFFF"),
             "shadow_on": styles.get(f"{key_prefix}_shadow_on", False),
             "shadow_color": styles.get(f"{key_prefix}_shadow_color", "#000000"),
@@ -580,6 +582,16 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
     if styles.get("event_free_viewing"):
         # Old free_placement values are intentionally ignored: all flyers stay inline.
         base_y = (ticket_bottom if ticket_bottom is not None else current_y) + 10
+        notices = [line.strip() for line in str(styles.get("event_free_notices") or "").splitlines()
+                   if line.strip()]
+        if notices:
+            # Reserve space inside the original canvas even for older large free-text styles.
+            line_sizes = [styles.get("free_viewing_size", 40)]
+            if styles.get("event_free_text"):
+                line_sizes.append(styles.get("free_note_size", 22))
+            line_sizes.extend([styles.get("free_notice_size", 20)] * len(notices))
+            needed = sum(line_sizes) * 1.1 + 5 * len(line_sizes)
+            free_font_scale = min(1.0, max(.15, (CANVAS_H - base_y - 20) / needed))
         free_bottom = base_y
         for prefix, text in (("free_viewing", "観覧無料"),
                              ("free_note", styles.get("event_free_text", ""))):
@@ -596,6 +608,20 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
             bottom = bounds.get("bottom", y + h)
             free_bottom = max(free_bottom, bottom)
             base_y = bottom + 5
+        if notices:
+            layout_meta["free_notice"] = {"base_x": CANVAS_W // 2, "base_y": base_y}
+            style = get_s("free_notice")
+            notice_x = CANVAS_W // 2 + style.pop("pos_x")
+            notice_y = base_y - style.pop("pos_y")
+            for line in notices:
+                text = line if line.startswith("※") else "※" + line
+                bounds = {}
+                h = draw_text_with_shadow(canvas, text, notice_x, notice_y,
+                    max_width=CANVAS_W - 60, anchor="ma", fallback_font_path=fallback_path,
+                    layout_bounds=bounds, **style)
+                bottom = bounds.get("bottom", notice_y + h)
+                free_bottom = max(free_bottom, bottom)
+                notice_y = bottom + 4
         # Leave room before common notes, preserving their saved position offsets.
         current_y += free_bottom - (ticket_bottom if ticket_bottom is not None else current_y)
 
@@ -626,14 +652,25 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
                 # ロゴの読み込みとリサイズ (120x120)
                 buzz_img = Image.open(buzz_logo_path).convert("RGBA")
                 b_size = 120
-                buzz_resized = buzz_img.resize((b_size, b_size), Image.LANCZOS)
+                if styles.get("buzz_logo_top_right", False):
+                    # Crop only the wordmark from the existing official square asset,
+                    # preserving its proportions and omitting the small footer tagline.
+                    w, h = buzz_img.size
+                    wordmark = buzz_img.crop((0, round(h * .33), w, round(h * .67)))
+                    logo_w = 240
+                    logo_h = round(wordmark.height * logo_w / wordmark.width)
+                    buzz_resized = wordmark.resize((logo_w, logo_h), Image.LANCZOS)
+                else:
+                    buzz_resized = buzz_img.resize((b_size, b_size), Image.LANCZOS)
                 
                 # 配置位置 (右下、余白30px)
                 margin_x = 30
                 margin_y = 30
                 paste_x = CANVAS_W - b_size - margin_x
                 paste_y = CANVAS_H - b_size - margin_y
-                
+                if styles.get("buzz_logo_top_right", False):
+                    paste_x, paste_y = CANVAS_W - buzz_resized.width, 0
+
                 # キャンバスに貼り付け
                 canvas.paste(buzz_resized, (paste_x, paste_y), buzz_resized)
             except Exception as e:

@@ -88,6 +88,7 @@ BASE_ENTRIES: List[FlyerKey] = [
     FlyerKey("time_alignment", "center"),
     FlyerKey("preview_width", 500, persist=False, widget_min=300, widget_max=1000),
     FlyerKey("show_buzz_logo", False),
+    FlyerKey("buzz_logo_top_right", False),
 ]
 
 
@@ -127,10 +128,10 @@ STYLE_ENTRIES: List[FlyerKey] = [
 # ----------------------------------------------------------------------
 FREE_ENTRIES = [
     FlyerKey(f"{prefix}_{suffix}",
-             (40 if prefix == "free_viewing" else 22) if suffix == "size" else
+             (40 if prefix == "free_viewing" else 20 if prefix == "free_notice" else 22) if suffix == "size" else
              ("#FFE328" if prefix == "free_viewing" else "#FFFFFF") if suffix == "color" else default,
              widget_min=wmin, widget_max=wmax)
-    for prefix in ("free_viewing", "free_note")
+    for prefix in ("free_viewing", "free_note", "free_notice")
     for suffix, default, wmin, wmax in _STYLE_PARAM_SPECS
 ]
 FLYER_KEY_REGISTRY: List[FlyerKey] = BASE_ENTRIES + STYLE_ENTRIES + FREE_ENTRIES

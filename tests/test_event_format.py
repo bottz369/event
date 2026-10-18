@@ -317,3 +317,115 @@ def test_visible_text_bounds_match_pixels_without_changing_render():
     draw_text_with_shadow(second,*args,layout_bounds=bounds)
     assert first.tobytes() == second.tobytes()
     assert bounds["bottom"] == second.getbbox()[3]
+
+
+def test_empty_part_does_not_call_opaque_timetable_fallback(monkeypatch):
+    from services import event_format_service as renderer, font_service
+    from models.project import ProjectDraft
+    import logic_timetable
+    from PIL import ImageFont
+    project = ProjectDraft(settings={KEY: dict(enabled=True,count=2,
+                            parts=[new_part(0),new_part(1)])})
+    monkeypatch.setattr(font_service,"ensure_font_path",lambda value: value)
+    monkeypatch.setattr(renderer,"_font",lambda path,size: ImageFont.load_default(size=size))
+    def should_not_call(*args,**kwargs):
+        raise AssertionError("empty parts must not render the black fallback")
+    monkeypatch.setattr(logic_timetable,"generate_timetable_image",should_not_call)
+    image = renderer.render(project,"tt")
+    # Both empty bodies (under OPEN/START) stay transparent across ticket area.
+    assert image.getpixel((image.width//2,220))[3] == 0
+    assert image.getpixel((image.width//2,image.height-40))[3] == 0
+
+
+@pytest.mark.parametrize("top_right",[False,True])
+def test_buzz_logo_switches_position_and_preserves_rectangle_ratio(top_right):
+    from PIL import Image
+    from utils.flyer_generator import create_flyer_image_shadow
+    bg=Image.new("RGBA",(1080,1350),"#123456")
+    from models.flyer_keys import FLYER_KEY_REGISTRY
+    styles={e.short_key:e.default for e in FLYER_KEY_REGISTRY if e.persist}
+    styles.update(show_buzz_logo=True,buzz_logo_top_right=top_right,event_multipart=True)
+    result,_=create_flyer_image_shadow(bg,None,None,styles,"","","","","",[],[])
+    if top_right:
+        assert result.getpixel((1079,1)) != bg.getpixel((1079,1))
+        assert result.getpixel((1000,1250)) == bg.getpixel((1000,1250))
+        assert result.getpixel((840,81)) != bg.getpixel((840,81))
+        assert result.getpixel((840,83)) == bg.getpixel((840,83))
+    else:
+        assert result.getpixel((1000,1250)) != bg.getpixel((1000,1250))
+        assert result.getpixel((1079,1)) == bg.getpixel((1079,1))
+
+
+def test_free_notices_flow_below_free_text_and_preserve_two_lines(monkeypatch):
+    from utils import flyer_generator as generator
+    from models.flyer_keys import FLYER_KEY_REGISTRY
+    styles={e.short_key:e.default for e in FLYER_KEY_REGISTRY if e.persist}
+    styles.update(event_free_viewing=True,event_free_text="ステージ前",
+                  event_free_notices="※時間は変更の場合があります\n\n場所取り禁止",
+                  free_notice_pos_x=10,free_notice_pos_y=5)
+    texts=[]
+    def text(canvas,content,x,y,*args,**kwargs):
+        texts.append((content,x,y))
+        return 20
+    monkeypatch.setattr(generator,"draw_text_with_shadow",text)
+    _,meta=generator.create_flyer_image_shadow(None,None,None,styles,"","","","10:00","10:30",[],[])
+    assert [t[0] for t in texts] == ["観覧無料","ステージ前","※時間は変更の場合があります","※場所取り禁止"]
+    assert texts[2][1] == 550
+    assert texts[2][2] == meta["free_notice"]["base_y"]-5
+    assert texts[2][2] > texts[1][2]
+    assert texts[3][2] == texts[2][2]+24
+
+
+def test_new_flyer_controls_and_notice_text_persist_in_draft(app_test):
+    from tests.conftest import select_tab
+    from views.workspace import TAB_FLYER
+    at=app_test.run()
+    label=next(x for x in at.selectbox(key="ws_project_selector_label").options
+               if x not in ("(選択してください)","➕ 新規プロジェクト作成"))
+    at.selectbox(key="ws_project_selector_label").select(label).run()
+    draft=at.session_state["draft_project"]
+    draft.settings[KEY]=dict(enabled=False,free_viewing=True,free_notices="",parts=[])
+    at.session_state["draft_project"]=draft
+    select_tab(at,TAB_FLYER)
+    at.checkbox(key="flyer_show_buzz_logo").check().run()
+    at.checkbox(key="flyer_buzz_logo_top_right").check().run()
+    assert not at.exception
+    key=f"eventfmt_{draft.id}_None_free_notices"
+    at.text_area(key=key).set_value("※時間変更あり\n※場所取り禁止").run()
+    assert not at.exception
+    assert at.session_state["draft_project"].settings[KEY]["free_notices"] == "※時間変更あり\n※場所取り禁止"
+    assert "flyer_free_notice_size" in {w.key for w in at.slider}
+    from views.flyer import gather_flyer_settings_from_session
+    from services import session_manager
+    from unittest.mock import patch
+    with patch.object(session_manager.st,"session_state",at.session_state.filtered_state):
+        assert gather_flyer_settings_from_session()["buzz_logo_top_right"] is True
+
+
+def test_large_saved_free_styles_with_two_notices_fit_original_canvas(monkeypatch):
+    from services import font_service
+    from utils import flyer_generator as generator
+    from models.flyer_keys import FLYER_KEY_REGISTRY
+    path=font_service.ensure_font_path("keifont.ttf")
+    assert path
+    styles={e.short_key:e.default for e in FLYER_KEY_REGISTRY if e.persist}
+    for key in styles:
+        if key.endswith("_font"):
+            styles[key]=path
+    styles.update(event_free_viewing=True,free_viewing_size=65,free_note_size=30,
+                  free_notice_size=20,event_free_text="東急歌舞伎町タワーステージ前",
+                  event_free_notices="※開場/開演時間は変更になる場合がございます。\n※各部の開場時間前からの場所取りは禁止とさせていただきます。",
+                  ticket_name_pos_y=-150,ticket_name_size=25)
+    original=generator.draw_text_with_shadow
+    notice_bounds=[]
+    def capture(canvas,text,*args,**kwargs):
+        h=original(canvas,text,*args,**kwargs)
+        if str(text).startswith("※"):
+            notice_bounds.append(dict(kwargs["layout_bounds"]))
+        return h
+    monkeypatch.setattr(generator,"draw_text_with_shadow",capture)
+    image,_=generator.create_flyer_image_shadow(None,None,None,styles,"","","",
+        "10:00","10:30",[dict(name="VIP",price="5000")],[],system_fallback_filename=path)
+    assert image.size == (1080,1350)
+    assert len(notice_bounds)==2
+    assert all(0 <= b["top"] < b["bottom"] < 1350 for b in notice_bounds)

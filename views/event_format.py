@@ -51,9 +51,9 @@ def _field(label, field, index=None, kind="text", **kwargs):
     value = (cfg if index is None else cfg["parts"][index]).get(field)
     key = f"eventfmt_{session_manager.get_active_project_id()}_{index}_{field}"
     if key not in st.session_state:
-        st.session_state[key] = value
+        st.session_state[key] = "" if kind == "area" and value is None else value
     fn = {"text": st.text_input, "number": st.number_input,
-          "check": st.checkbox, "color": st.color_picker}[kind]
+          "check": st.checkbox, "area": st.text_area, "color": st.color_picker}[kind]
     return fn(label, key=key, on_change=_change, args=(key, field, index), **kwargs)
 
 
@@ -63,6 +63,8 @@ def render_options():
         _field("観覧無料を大きく表示する", "free_viewing", kind="check")
         if config().get("free_viewing"):
             _field("観覧無料の補足（場所・条件など）", "free_text")
+            _field("観覧無料の下に表示する注意書き（1行に1項目）", "free_notices", kind="area",
+                   placeholder="※開場/開演時間は変更になる場合がございます。\n※各部の開場時間前からの場所取りは禁止とさせていただきます。")
             st.caption("VIPなどの有料チケットはイベント概要の料金欄で設定できます。")
         if config().get("enabled"):
             _field("部数", "count", kind="number", min_value=2, max_value=6, step=1)

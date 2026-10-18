@@ -102,6 +102,7 @@ def compose_flyer(project, source, variant, failures=None):
             styles[key] = font_service.ensure_font_path(styles[key]) or styles[key]
     styles.update(event_multipart=True, event_free_viewing=cfg.get("free_viewing", False),
                   event_free_text=cfg.get("free_text", ""),
+                  event_free_notices=cfg.get("free_notices", ""),
                   content_scale_w=styles[f"{variant}_scale_w"],
                   content_scale_h=styles[f"{variant}_scale_h"],
                   content_pos_y=styles[f"{variant}_pos_y"])
@@ -143,8 +144,13 @@ def render(project, variant="tt", finished=False, failures=None):
         cols = 2 if len(data) >= 24 else columns
         rows_per_col = max(1, (len(data) + cols - 1) // cols)
         source_width = 2800 if cols == 1 else 3600
-        image = generate_timetable_image(data, font_path=path, columns=cols, failures=failures,
-                                          canvas_height=rows_per_col * 148)
+        if data:
+            image = generate_timetable_image(data, font_path=path, columns=cols, failures=failures,
+                                              canvas_height=rows_per_col * 148)
+        else:
+            # The regular empty-table fallback is opaque black. Do not composite it
+            # into an empty part: it can overlap independently positioned tickets.
+            image = Image.new("RGBA", (source_width, 148))
         body_height = max(1, round(image.height * (width - gap * 2) / source_width))
         panel = Image.new("RGBA", (width - gap * 2, 160 + body_height + (80 if part.get("note") else 0)))
         ImageDraw.Draw(panel).rectangle((0, 0, panel.width, 70), fill=part["color"])
