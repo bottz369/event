@@ -42,6 +42,8 @@ def match_names(names,registered):
 
 
 def compile_plan(event,raw_parts,aliases=None,show_transitions=False):
+    from services.production_normalization import normalize_event,grid_order
+    event=normalize_event(event)
     aliases=aliases or {}
     if not str(event.get('event_name','')).strip() or not str(event.get('venue','')).strip():
         raise ValueError('イベント名と会場名を確認してください。')
@@ -49,7 +51,8 @@ def compile_plan(event,raw_parts,aliases=None,show_transitions=False):
     except (TypeError,ValueError) as exc: raise ValueError('開催日をYYYY-MM-DDで確認してください。年を推測せず入力してください。') from exc
     if not 1<=len(raw_parts)<=6: raise ValueError('制作する部を1〜6部選択してください。')
     if sum(len(p.get('rows',[])) for p in raw_parts)>MAX_ROWS: raise ValueError('AIおまかせ制作は合計100出演行以内で選択してください。')
-    overview_order=[aliases.get(n,n) for n in event.get('artists',[]) if str(n).strip()]
+    overview_order,order_info=grid_order(event.get('artists',[]),
+        [str(r.get('artist') or '').strip() for p in raw_parts for r in p.get('rows',[])],aliases)
     parts=[]
     for i,raw in enumerate(raw_parts):
         rows=raw.get('rows',[])
@@ -115,9 +118,9 @@ def compile_plan(event,raw_parts,aliases=None,show_transitions=False):
         venue_name=event['venue'].strip(),venue_url=str(event.get('venue_url') or ''),
         open_time=first['open_time'],start_time=first['start_time'],goods_start_offset=0,
         tickets=[TicketDraft.from_dict(t) for t in event.get('tickets',[])],
-        ticket_notes=[event['ticket_common_note']] if event.get('ticket_common_note') else [],
+        ticket_notes=event['ticket_common_note'].splitlines() if event.get('ticket_common_note') else [],
         free_texts=[FreeTextDraft(title=str(t.get('title') or ''),content=str(t.get('body') or '')) for t in event.get('free_texts',[])],
-        settings={'tt_font':'keifont.ttf','grid_font':'keifont.ttf','tt_columns':2,KEY:cfg},
+        settings={'tt_font':'keifont.ttf','grid_font':'keifont.ttf','tt_columns':2,'production_order':order_info,KEY:cfg},
         grid_settings={'order':build_grid_order_from_rows(rows),'rows':grid_rows,'row_counts_str':','.join(map(str,row_counts)),
                        'layout_mode':'レンガ (サイズ統一)','alignment':'中央揃え'})
     return draft,rows

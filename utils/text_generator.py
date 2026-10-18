@@ -98,7 +98,9 @@ def build_event_summary_text(
             if name or price:
                 line = f"- {name}"
                 if price: line += f": {price}"
-                if note: line += f" ({note})"
+                if note:
+                    from services.production_normalization import ticket_note_text
+                    line += " " + ticket_note_text(note)
                 text += "\n" + line
     else:
         text += "\n(情報なし)"

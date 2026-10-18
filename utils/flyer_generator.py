@@ -603,7 +603,9 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
     for t in ticket_info_list:
         if not t.get("name") and not t.get("price"): continue
         line_text = f"{t.get('name')} {t.get('price')}"
-        if t.get("note"): line_text += f" ({t.get('note')})"
+        if t.get("note"):
+            from services.production_normalization import ticket_note_text
+            line_text += " " + ticket_note_text(t.get("note"))
         ticket_bounds = {}
         h = paint_text(
             canvas, line_text, 

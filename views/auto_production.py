@@ -116,7 +116,8 @@ def render():
         st.subheader('① 読み取り内容を確認・修正')
         for item in result.get('questions',[]):st.warning('要確認：'+str(item))
         for item in result.get('warnings',[]):st.info(str(item))
-        event=deepcopy(result['event'])
+        from services.production_normalization import normalize_event,roster_aliases,grid_order
+        event=normalize_event(result['event'],overview)
         for label,field in [('イベント名','event_name'),('サブタイトル','subtitle'),('開催日（YYYY-MM-DD）','event_date'),('会場名','venue'),('会場URL','venue_url')]:
             event[field]=st.text_input(label,value=str(event.get(field) or ''),key=prefix+'_'+field)
         event['tickets']=st.data_editor(pd.DataFrame(event.get('tickets',[]),columns=['name','price','note']),
@@ -151,10 +152,22 @@ def render():
         names=list(dict.fromkeys(performance_names+[str(n) for n in event.get('artists',[]) if n]))
         registered=[a.name for a in artist_service.list_artists()]
         aliases=production.match_names(names,registered)
+        automatic,ambiguous=roster_aliases(event.get('artists',[]),performance_names,aliases)
+        aliases.update(automatic)
         for name in names:
-            if name not in aliases:
+            if name not in aliases or name in ambiguous:
                 choice=st.selectbox('登録名を確認：'+name,['原文のまま（アー写未登録の枠）']+registered,key=f'{prefix}_alias_'+digest(name)[:12])
                 if choice!='原文のまま（アー写未登録の枠）':aliases[name]=choice
+        order_error=False
+        try:
+            order,order_info=grid_order(event.get('artists',[]),performance_names,aliases)
+            with st.expander('アー写グリッドの掲載順（概要順）'):
+                st.caption(order_info['source']+'を基準にしています。タイムテーブルは出演時刻順のままです。')
+                st.text(' → '.join(order))
+                for match in order_info['matched']:st.caption(match['original']+' → '+match['artist'])
+                if order_info['unlisted']:st.warning('概要に対応する名前がないため末尾に追加：'+'、'.join(order_info['unlisted']))
+        except ValueError as exc:
+            order_error=True;st.error(str(exc))
         show_transitions=st.checkbox('転換を画像に表示する',value=False,key=prefix+'_transitions')
         st.subheader('② フライヤーのイメージ')
         from services.production_templates import decode,META
@@ -181,7 +194,7 @@ def render():
             bg={**bg,'data':bytes_hash(bg['data'])},logo={**logo,'data':bytes_hash(logo['data'])},tint=logo_tint,
             reference=bytes_hash(reference.getvalue()) if reference else ''))
         confirmed=st.checkbox('日付・料金・出演順・時刻・名前の確認事項を確認しました（※必須項目）',key=prefix+'_confirmed')
-        can_preview=bool(parts and confirmed and (design.strip() or bg['mode']!='AIで新しく作る'))
+        can_preview=bool(parts and confirmed and not order_error and (design.strip() or bg['mode']!='AIで新しく作る'))
         if st.button('完成フライヤーセットのプレビューを作る',key='btn_autoprod_preview',disabled=not can_preview):
             try:
                 draft,rows=production.compile_plan(event,parts,aliases,show_transitions)
