@@ -181,7 +181,8 @@ def test_complete_package_uses_existing_renderers_and_contains_text(monkeypatch)
 
 def test_wizard_can_preview_without_any_project_or_writes_and_blocks_stale_save(app_test,monkeypatch):
     from views import auto_production as view
-    from services import artist_service,asset_service
+    from services import artist_service,asset_service,template_service
+    monkeypatch.setattr(template_service,'list_templates',lambda:[])
     monkeypatch.setattr(view,'_settings',lambda:('key','code'))
     original_uploader=view.st.file_uploader
     def uploader(*a,**kw):

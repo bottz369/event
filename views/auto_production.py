@@ -156,7 +156,6 @@ def render():
                 choice=st.selectbox('登録名を確認：'+name,['原文のまま（アー写未登録の枠）']+registered,key=f'{prefix}_alias_'+digest(name)[:12])
                 if choice!='原文のまま（アー写未登録の枠）':aliases[name]=choice
         show_transitions=st.checkbox('転換を画像に表示する',value=False,key=prefix+'_transitions')
-        confirmed=st.checkbox('日付・料金・出演順・時刻・名前の確認事項を確認しました',key=prefix+'_confirmed')
         st.subheader('② フライヤーのイメージ')
         from services.production_templates import decode,META
         templates=template_service.list_templates()
@@ -181,6 +180,7 @@ def render():
         current=digest(dict(template=template,event=event,parts=parts,aliases=aliases,transitions=show_transitions,design=design,palette=palette,
             bg={**bg,'data':bytes_hash(bg['data'])},logo={**logo,'data':bytes_hash(logo['data'])},tint=logo_tint,
             reference=bytes_hash(reference.getvalue()) if reference else ''))
+        confirmed=st.checkbox('日付・料金・出演順・時刻・名前の確認事項を確認しました（※必須項目）',key=prefix+'_confirmed')
         can_preview=bool(parts and confirmed and (design.strip() or bg['mode']!='AIで新しく作る'))
         if st.button('完成フライヤーセットのプレビューを作る',key='btn_autoprod_preview',disabled=not can_preview):
             try:
