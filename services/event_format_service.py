@@ -152,14 +152,16 @@ def render(project, variant="tt", finished=False, failures=None):
             # into an empty part: it can overlap independently positioned tickets.
             image = Image.new("RGBA", (source_width, 148))
         body_height = max(1, round(image.height * (width - gap * 2) / source_width))
-        panel = Image.new("RGBA", (width - gap * 2, 160 + body_height + (80 if part.get("note") else 0)))
+        note_height = max(80, len(part["note"].splitlines()) * 42 + 16) if part.get("note") else 0
+        panel = Image.new("RGBA", (width - gap * 2, 160 + body_height + note_height))
         ImageDraw.Draw(panel).rectangle((0, 0, panel.width, 70), fill=part["color"])
+        ImageDraw.Draw(panel).rectangle((0, 72, panel.width - 1, 152), fill=(0, 0, 0, 160))
         _text(panel, part["name"], (20, 0, panel.width - 40, 70), path, 50, "#10131b", True)
         _text(panel, f"OPEN {part['open_time']} / START {part['start_time']}",
               (20, 78, panel.width - 40, 64), path, 42, part["color"], True)
         panel.alpha_composite(image.resize((panel.width, body_height), Image.Resampling.LANCZOS), (0, 160))
         if part.get("note"):
-            _text(panel, part["note"], (20, 160 + body_height, panel.width - 40, 80), path, 34)
+            _text(panel, part["note"], (20, 160 + body_height, panel.width - 40, note_height), path, 34)
         panels.append(panel)
     out = Image.new("RGBA", (width, sum(p.height for p in panels) + gap * (len(panels) + 1)))
     y = gap

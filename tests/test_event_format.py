@@ -429,3 +429,17 @@ def test_large_saved_free_styles_with_two_notices_fit_original_canvas(monkeypatc
     assert image.size == (1080,1350)
     assert len(notice_bounds)==2
     assert all(0 <= b["top"] < b["bottom"] < 1350 for b in notice_bounds)
+
+def test_time_band_has_same_width_as_part_bar_and_translucent_black(monkeypatch):
+    from PIL import ImageFont
+    from services import event_format_service as renderer, font_service
+    from models.project import ProjectDraft
+    from models.event_format import new_part
+    monkeypatch.setattr(font_service,"ensure_font_path",lambda value:value)
+    monkeypatch.setattr(renderer,"_font",lambda path,size:ImageFont.load_default(size=size))
+    project=ProjectDraft(settings={KEY:dict(enabled=True,count=2,parts=[new_part(0),new_part(1)])})
+    image=renderer.render(project,"tt")
+    for x in (28,29,image.width-29):
+        assert image.getpixel((x,28+100)) == (0,0,0,160)
+        assert image.getpixel((x,28+10))[3] == 255
+    assert image.getpixel((27,28+100))[3] == 0
