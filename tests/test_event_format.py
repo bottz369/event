@@ -173,3 +173,110 @@ def test_summary_normal_mode_is_unchanged():
     result = summary_inputs({}, ["A"], ["note"], [], "10:00", "10:30")
     assert result == dict(artists=["A"], ticket_notes=["note"], free_texts=[],
                           open_time="10:00", start_time="10:30")
+
+
+def test_regular_photo_rows_include_changeovers_extra_goods_and_post():
+    from services.event_format_service import timetable_rows
+    part = new_part(0, rows=[row(ADJUSTMENT=5, ADD_GOODS_START="15:00",
+                                ADD_GOODS_DURATION=30, ADD_GOODS_PLACE="B")])
+    part.update(post_duration=60, post_start="16:00", transition_label="VIP入れ替え")
+    rows = timetable_rows(part)
+    assert rows[0] == ("10:30 - 10:50", "A", "11:00 - 12:00 / 15:00 - 15:30", "A / B")
+    assert rows[1] == ("10:50 - 10:55", "VIP入れ替え", "", "")
+    assert rows[2] == ("16:00 - 17:00", "終演後物販", "", "")
+
+
+def test_multipart_flyer_uses_regular_compositor_and_all_saved_styles(monkeypatch):
+    from services import event_format_service as renderer, font_service
+    from utils import flyer_generator
+    from models.project import ProjectDraft
+    from PIL import Image
+    project = ProjectDraft(settings={KEY: dict(enabled=True, free_viewing=True)},
+                           flyer_settings=dict(date_pos_x=123, logo_scale=1.8, tt_scale_h=67,
+                                               free_placement="overlay", free_viewing_pos_y=91))
+    monkeypatch.setattr(font_service, "ensure_font_path", lambda value: value)
+    captured = {}
+    def compose(**kwargs):
+        captured.update(kwargs)
+        return kwargs["main_source"], {}
+    monkeypatch.setattr(flyer_generator, "create_flyer_image_shadow", compose)
+    renderer.compose_flyer(project, Image.new("RGBA", (10, 10)), "tt")
+    styles = captured["styles"]
+    assert styles["date_pos_x"] == 123
+    assert styles["logo_scale"] == 1.8
+    assert styles["content_scale_h"] == 67
+    assert styles["event_multipart"] is True
+    assert styles["free_viewing_pos_y"] == 91
+    assert styles["free_placement"] == "overlay"
+
+
+def test_multipart_editor_exposes_regular_controls_without_global_time(app_test):
+    from tests.conftest import select_tab
+    from views.workspace import TAB_FLYER
+    at = app_test.run()
+    label = next(x for x in at.selectbox(key="ws_project_selector_label").options
+                 if x not in ("(選択してください)", "➕ 新規プロジェクト作成"))
+    at.selectbox(key="ws_project_selector_label").select(label).run()
+    draft = at.session_state["draft_project"]
+    draft.settings[KEY] = dict(enabled=True, free_viewing=True, count=2,
+                               parts=[new_part(0), new_part(1)])
+    at.session_state["draft_project"] = draft
+    select_tab(at, TAB_FLYER)
+    keys = {w.key for w in at.slider}
+    assert "flyer_logo_scale" in keys or not at.session_state["flyer_logo_id"]
+    assert "flyer_grid_scale_w" in keys
+    assert "flyer_free_viewing_size" in keys
+    assert "flyer_time_size" not in keys
+    assert at.selectbox(key="flyer_free_placement")
+
+
+def test_click_move_consumed_once_before_widgets(app_test, monkeypatch):
+    from tests.conftest import select_tab
+    from views.workspace import TAB_FLYER
+    from views import flyer
+    from PIL import Image
+    at = app_test.run()
+    label = next(x for x in at.selectbox(key="ws_project_selector_label").options
+                 if x not in ("(選択してください)", "➕ 新規プロジェクト作成"))
+    at.selectbox(key="ws_project_selector_label").select(label).run()
+    select_tab(at, TAB_FLYER)
+    monkeypatch.setattr(flyer, "_generate_preview", lambda proj: None)
+    # Component returns the same coordinates again after the widgets have rendered.
+    coords = dict(x=300, y=200)
+    monkeypatch.setattr(flyer, "streamlit_image_coordinates", lambda *a, **kw: coords)
+    at.session_state["flyer_result_grid"] = Image.new("RGBA", (1080,1350))
+    at.session_state["flyer_layout_meta"] = {"date": dict(base_x=540, base_y=500)}
+    at.session_state["flyer_click_target"] = "date"
+    at.session_state["coord_grid"] = coords
+    at.run()
+    assert not at.exception
+    ratio = 1080 / at.session_state["flyer_preview_width"]
+    assert at.session_state["flyer_date_pos_x"] == int(300 * ratio - 540)
+    at.number_input(key="flyer_date_pos_x").set_value(15).run()
+    assert not at.exception
+    assert at.session_state["flyer_date_pos_x"] == 15
+
+
+@pytest.mark.parametrize("placement,height", [("band",1530), ("overlay",1350)])
+def test_free_viewing_placement_offsets_and_hidden_multipart_times(monkeypatch, placement, height):
+    from utils import flyer_generator as generator
+    from models.flyer_keys import FLYER_KEY_REGISTRY
+    styles = {e.short_key: e.default for e in FLYER_KEY_REGISTRY if e.persist}
+    styles.update(event_multipart=True, event_free_viewing=True, event_free_text="ステージ前",
+                  free_placement=placement, free_viewing_pos_x=35, free_viewing_pos_y=20)
+    times, texts = [], []
+    def time_row(canvas, *args, **kwargs):
+        times.append(canvas)
+        return 30
+    def text(canvas, content, x, y, *args, **kwargs):
+        texts.append((content,x,y))
+        return 30
+    monkeypatch.setattr(generator, "draw_time_row_aligned", time_row)
+    monkeypatch.setattr(generator, "draw_text_with_shadow", text)
+    image, meta = generator.create_flyer_image_shadow(None,None,None,styles,"date","venue","sub",
+                                                      "10:00","10:30",[],[])
+    assert image.size == (1080,height)
+    assert times == [None,None]
+    assert "time" not in meta
+    assert ("観覧無料",575,meta["free_viewing"]["base_y"]-20) in texts
+    assert ("ステージ前",540,meta["free_note"]["base_y"]) in texts

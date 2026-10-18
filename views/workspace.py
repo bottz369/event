@@ -193,8 +193,8 @@ def render_workspace_page():
         if active_tab == TAB_TT:
             event_format.render_editor()
         elif active_tab == TAB_FLYER:
-            event_format.render_style()
-            st.caption("料金はイベント概要、各部の編集はタイムテーブルで行います。")
+            render_flyer_editor(active_id)
+            return
         event_format.render_preview(active_tab)
         return
 

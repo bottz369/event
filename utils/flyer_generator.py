@@ -509,6 +509,8 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
         )
         current_y += h + 30
 
+    # Preserve existing footer offsets when hiding global times for multipart events.
+    # Measuring the regular time block keeps saved ticket positioning compatible.
     # (3) Time
     s = get_s("time")
     try: time_font = ImageFont.truetype(s["font_path"], int(s["font_size_px"]))
@@ -517,26 +519,27 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
     tri_scale = styles.get("time_tri_scale", 1.0)
     line_gap = styles.get("time_line_gap", 0)
     alignment = styles.get("time_alignment", "center")
-    
+
     center_x = CANVAS_W // 2 + s["pos_x"]
     start_y = current_y - s["pos_y"]
-    layout_meta["time"] = {"base_x": CANVAS_W // 2, "base_y": current_y}
-    
+    if not styles.get("event_multipart"):
+        layout_meta["time"] = {"base_x": CANVAS_W // 2, "base_y": current_y}
+
     dummy = ImageDraw.Draw(Image.new("RGBA",(1,1)))
     w_open, _ = draw_text_mixed(dummy, (0,0), "OPEN", time_font, None, None)
     w_start, _ = draw_text_mixed(dummy, (0,0), "START", time_font, None, None)
     fixed_label_w = max(w_open, w_start)
 
     h1 = draw_time_row_aligned(
-        canvas, "OPEN", open_time, center_x, start_y,
+        None if styles.get("event_multipart") else canvas, "OPEN", open_time, center_x, start_y,
         time_font, s["font_size_px"], CANVAS_W, s["fill_color"],
         s["shadow_on"], s["shadow_color"], s["shadow_blur"], s["shadow_off_x"], s["shadow_off_y"], fallback_path,
         s["shadow_opacity"], s["shadow_spread"],
         tri_visible, tri_scale, s["fill_color"], alignment, fixed_label_w
     )
-    
+
     h2 = draw_time_row_aligned(
-        canvas, "START", start_time, center_x, start_y + h1 + line_gap,
+        None if styles.get("event_multipart") else canvas, "START", start_time, center_x, start_y + h1 + line_gap,
         time_font, s["font_size_px"], CANVAS_W, s["fill_color"],
         s["shadow_on"], s["shadow_color"], s["shadow_blur"], s["shadow_off_x"], s["shadow_off_y"], fallback_path,
         s["shadow_opacity"], s["shadow_spread"],
@@ -608,6 +611,17 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
                 print(f"BUZZチケロゴの合成エラー: {e}")
 
     if styles.get("event_free_viewing"):
-        from services.event_format_service import free_banner
-        canvas = free_banner(canvas, styles.get("event_free_text", ""), fallback_path)
+        band = styles.get("free_placement", "band") == "band"
+        base_y = CANVAS_H + 8 if band else CANVAS_H - 180
+        if band:
+            extended = Image.new("RGBA", (CANVAS_W, CANVAS_H + 180), "#151922")
+            extended.paste(canvas, (0, 0))
+            canvas = extended
+        for prefix, text, y in (("free_viewing", "観覧無料", base_y),
+                                ("free_note", styles.get("event_free_text", ""), base_y + 95)):
+            s = get_s(prefix)
+            layout_meta[prefix] = {"base_x": CANVAS_W // 2, "base_y": y}
+            draw_text_with_shadow(canvas, text,
+                CANVAS_W // 2 + s.pop("pos_x"), y - s.pop("pos_y"),
+                max_width=CANVAS_W - 60, anchor="ma", fallback_font_path=fallback_path, **s)
     return canvas, layout_meta

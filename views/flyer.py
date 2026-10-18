@@ -209,6 +209,10 @@ def render_flyer_editor(project_id):
     for entry in FLYER_KEY_REGISTRY:
         init_s(f"flyer_{entry.short_key}", entry.default)
 
+    from views.event_format import config as event_config
+    multipart = bool(event_config().get("enabled"))
+    free_viewing = bool(event_config().get("free_viewing"))
+
     # 移動対象の定義
     move_targets = {
         "subtitle": "サブタイトル",
@@ -218,6 +222,13 @@ def render_flyer_editor(project_id):
         "ticket_name": "チケット情報",
         "ticket_note": "備考"
     }
+
+    if multipart:
+        move_targets.pop("time", None)
+    if free_viewing:
+        move_targets.update(free_viewing="観覧無料", free_note="観覧無料の補足")
+    if st.session_state.get("flyer_click_target") not in move_targets:
+        st.session_state["flyer_click_target"] = "subtitle"
 
     # ==========================================
     # クリック判定ロジック
@@ -230,7 +241,7 @@ def render_flyer_editor(project_id):
             st.session_state[last_click_key] = coords 
             
             target = st.session_state.get("flyer_click_target")
-            meta = st.session_state.get("flyer_layout_meta", {})
+            meta = st.session_state.get("flyer_layout_meta_tt" if coord_key == "coord_tt" else "flyer_layout_meta", {})
             
             if not target or not meta: return
 
@@ -242,7 +253,6 @@ def render_flyer_editor(project_id):
             click_y = coords['y'] * scale_ratio
             
             lookup_key = target
-            if target == "ticket_name" or target == "ticket_note": lookup_key = "footer_area"
 
             base_info = meta.get(lookup_key)
             if base_info:
@@ -460,7 +470,16 @@ def render_flyer_editor(project_id):
         render_style_editor("サブタイトル (Subtitle)", "subtitle")
         render_style_editor("日付 (DATE)", "date")
         render_style_editor("会場名 (VENUE)", "venue")
-        render_style_editor("時間 (OPEN/START)", "time")
+        if not multipart:
+            render_style_editor("時間 (OPEN/START)", "time")
+        else:
+            st.caption("OPEN / START は各部の見出しに表示します。時間はタイムテーブルで編集できます。")
+        if free_viewing:
+            st.selectbox("観覧無料の配置", ["band", "overlay"],
+                         format_func=lambda v: {"band": "下部に専用帯を追加", "overlay": "画像内に自由配置"}[v],
+                         key="flyer_free_placement")
+            render_style_editor("観覧無料", "free_viewing")
+            render_style_editor("観覧無料の補足", "free_note")
         render_style_editor("チケット情報 (List)", "ticket_name")
         render_style_editor("チケット共通備考 (Notes)", "ticket_note")
 
@@ -484,46 +503,7 @@ def render_flyer_editor(project_id):
 
         t1, t2, t3, t4 = st.tabs(["アー写グリッド版", "タイムテーブル版", "イベント概要テキスト", "一括ダウンロード"])
         
-        # --- クリックイベント処理 ---
-        def handle_click(coords, mode="grid"):
-            if not coords: return
-            target = st.session_state.get("flyer_click_target")
-            if not target: return
-            meta = st.session_state.get("flyer_layout_meta", {})
-            if not meta:
-                st.warning("レイアウト情報がありません。")
-                return
-
-            display_width = st.session_state.flyer_preview_width
-            original_width = 1080
-            scale_ratio = original_width / display_width
-            
-            click_x = coords['x'] * scale_ratio
-            click_y = coords['y'] * scale_ratio
-            
-            lookup_key = target
-            if target == "ticket_name" or target == "ticket_note": lookup_key = "footer_area"
-
-            base_info = meta.get(lookup_key)
-            if base_info:
-                base_x = base_info.get("base_x", 540)
-                base_y = base_info.get("base_y", 675)
-                
-                new_pos_x = int(click_x - base_x)
-                new_pos_y = int(base_y - click_y)
-                
-                st.session_state[f"flyer_{target}_pos_x"] = new_pos_x
-                st.session_state[f"flyer_{target}_pos_y"] = new_pos_y
-                
-                st.toast(f"{move_targets.get(target, target)} を移動しました (X={new_pos_x}, Y={new_pos_y})")
-
-                # Phase 2B-1c-①: 座標クリックによる即時 DB commit を廃止。
-                # 編集は session_state に留め、DB 反映は保存ボタン押下時のみ。
-                _generate_preview(proj)
-
-        if HAS_CLICK_COORD:
-            pass
-
+        # Click coordinates are consumed once, before position widgets are created.
         with t1:
             if st.session_state.get("flyer_result_grid"):
                 if HAS_CLICK_COORD:
@@ -532,7 +512,7 @@ def render_flyer_editor(project_id):
                         key="coord_grid",
                         width=st.session_state.flyer_preview_width
                     )
-                    if coords: handle_click(coords, "grid")
+
                 else:
                     st.image(st.session_state.flyer_result_grid, width=st.session_state.flyer_preview_width)
                 
@@ -553,7 +533,7 @@ def render_flyer_editor(project_id):
                         key="coord_tt",
                         width=st.session_state.flyer_preview_width
                     )
-                    if coords: handle_click(coords, "tt")
+
                 else:
                     st.image(st.session_state.flyer_result_tt, width=st.session_state.flyer_preview_width)
 
@@ -582,11 +562,12 @@ def render_flyer_editor(project_id):
                 filtered_artists.append(name)
         except Exception: filtered_artists = st.session_state.get("grid_order", [])
 
+        from models.event_format import summary_inputs
+        summary = summary_inputs(event_config(), filtered_artists, notes, free_texts,
+                                 format_time_str(proj.open_time), format_time_str(proj.start_time))
         summary_text = build_event_summary_text(
             title=proj.title, subtitle=proj.subtitle, date_val=proj.event_date,
-            venue=proj.venue_name, url=proj.venue_url, open_time=format_time_str(proj.open_time),
-            start_time=format_time_str(proj.start_time), tickets=tickets, ticket_notes=notes,
-            artists=filtered_artists, free_texts=free_texts,
+            venue=proj.venue_name, url=proj.venue_url, tickets=tickets, **summary,
             # #3c: 保持していれば概要に書かれた予定組数を使う(無ければ実組数)
             planned_artist_count=st.session_state.get("flyer_planned_artist_count"),
         )
@@ -629,6 +610,20 @@ def render_flyer_editor(project_id):
 
 # プレビュー生成ロジック
 def _generate_preview(proj):
+    from views.event_format import config as current_format
+    if current_format().get("enabled"):
+        from services.event_format_service import compose_flyer
+        draft = session_manager.get_draft_project()
+        from copy import deepcopy
+        draft = deepcopy(draft)
+        draft.flyer_settings = gather_flyer_settings_from_session()
+        for variant in ("grid", "tt"):
+            source = st.session_state.get(f"last_generated_{variant}_image")
+            if source is not None:
+                image, meta = compose_flyer(draft, source, variant)
+                st.session_state[f"flyer_result_{variant}"] = image
+                st.session_state["flyer_layout_meta_tt" if variant == "tt" else "flyer_layout_meta"] = meta
+        return
     bg_url = None
     if st.session_state.flyer_bg_id:
         asset = asset_service.get_asset_view(st.session_state.flyer_bg_id)
@@ -643,9 +638,10 @@ def _generate_preview(proj):
     from views.event_format import config as event_format_config
     styles["event_free_viewing"] = event_format_config().get("free_viewing", False)
     styles["event_free_text"] = event_format_config().get("free_text", "")
+    styles["event_multipart"] = event_format_config().get("enabled", False)
     
     # フォント読み込み (絶対パス化 & ダウンロード)
-    targets = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]
+    targets = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note", "free_viewing", "free_note"]
     for t in targets:
         f_key = f"{t}_font"
         f_name = styles.get(f_key)
@@ -692,10 +688,11 @@ def _generate_preview(proj):
             s_tt["content_scale_h"] = st.session_state.flyer_tt_scale_h
             s_tt["content_pos_y"] = st.session_state.flyer_tt_pos_y 
             
-            img_tt, _ = create_flyer_image_shadow(
+            img_tt, meta_tt = create_flyer_image_shadow(
                 bg_source=bg_url, logo_source=logo_url, main_source=tt_src,
                 styles=s_tt, date_text=d_text, venue_text=v_text, subtitle_text=subtitle_text,
                 open_time=format_time_str(proj.open_time), start_time=format_time_str(proj.start_time),
                 ticket_info_list=tickets, common_notes_list=notes, system_fallback_filename=fallback_filename 
             )
             st.session_state.flyer_result_tt = img_tt
+            st.session_state.flyer_layout_meta_tt = meta_tt

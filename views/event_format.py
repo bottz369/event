@@ -111,7 +111,18 @@ def _add_registered(index, key):
 
 
 def render_editor():
+    from services import font_service
     cfg = config()
+    with st.expander("タイムテーブルのデザイン設定"):
+        fonts = font_service.list_sorted_fonts()
+        font_names = [f["filename"] for f in fonts] or ["keifont.ttf"]
+        labels_by_font = {f["filename"]: f["name"] for f in fonts}
+        if st.session_state.get("tt_font") not in font_names:
+            font_names.append(st.session_state.get("tt_font") or "keifont.ttf")
+        st.selectbox("プレビュー用フォント", font_names, key="tt_font",
+                     format_func=lambda f: labels_by_font.get(f, f))
+        st.radio("各部のタイムテーブル列数", [1, 2], horizontal=True, key="tt_columns")
+        st.caption("アー写を背景にした通常版と同じ行デザインを使います。24行以上の部は2列になります。")
     labels = [p["name"] or f"{i + 1}部" for i, p in enumerate(active_parts(cfg))]
     index = st.radio("編集する部", range(len(labels)), format_func=lambda i: labels[i],
                      horizontal=True, key=f"eventfmt_selected_{session_manager.get_active_project_id()}")
@@ -176,6 +187,8 @@ def signature():
     return json.dumps(dict(config=config(), title=draft.title, subtitle=draft.subtitle,
                            event_date=str(draft.event_date), venue=draft.venue_name,
                            tickets=[t.to_dict() for t in draft.tickets],
+                           tt_font=st.session_state.get("tt_font"),
+                           tt_columns=st.session_state.get("tt_columns"),
                            ticket_notes=draft.ticket_notes, flyer=draft.flyer_settings),
                       ensure_ascii=False, sort_keys=True)
 
@@ -188,7 +201,13 @@ def regenerate():
     failures = []
     for variant in ("tt", "grid"):
         result[variant] = render(draft, variant, failures=failures)
-        result[f"flyer_{variant}"] = render(draft, variant, finished=True, failures=failures)
+    st.session_state.last_generated_grid_image = result["grid"]
+    st.session_state.last_generated_tt_image = result["tt"]
+    from views.flyer import regenerate_flyer_preview
+    if not regenerate_flyer_preview(draft.id):
+        raise ValueError("フライヤー画像を生成できませんでした。")
+    result["flyer_grid"] = st.session_state.flyer_result_grid
+    result["flyer_tt"] = st.session_state.flyer_result_tt
     st.session_state.event_format_preview = dict(signature=signature(), images=result)
     if failures:
         st.warning("一部の画像素材を取得できませんでした。未登録のアー写は空枠で表示します。")

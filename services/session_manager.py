@@ -59,6 +59,7 @@ SESSION_PROJECT_KEYS = [
     "flyer_result_grid",
     "flyer_result_tt",
     "flyer_layout_meta",
+    "flyer_layout_meta_tt",
     "tt_editor_key",
     # 段階③: 「追加予定リスト」(一括追加 UI の下書き)。DB には保存せず session のみ。
     # プロジェクト切替で残留しないよう必ずここに登録する
@@ -160,6 +161,7 @@ _FLYER_TRANSIENT_KEYS = {
     "flyer_result_grid",
     "flyer_result_tt",
     "flyer_layout_meta",
+    "flyer_layout_meta_tt",
     # UI のクリック追跡用、永続化しない
     "flyer_click_target",
 }

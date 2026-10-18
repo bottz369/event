@@ -425,7 +425,7 @@ _FLYER_VARIANTS = ("grid", "tt")
 # (views/flyer.py の targets と同一)。
 _FLYER_FONT_STYLE_KEYS = (
     "subtitle_font", "date_font", "venue_font",
-    "time_font", "ticket_name_font", "ticket_note_font",
+    "time_font", "ticket_name_font", "ticket_note_font", "free_viewing_font", "free_note_font",
 )
 
 

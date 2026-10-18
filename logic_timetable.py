@@ -344,8 +344,9 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
             goods_info = f"{goods_time} ({goods_place})" if goods_place else goods_time
     draw_centered_text(draw, goods_info, base_x + goods_x, base_y, goods_w, row_height, font_path, font_size_goods, align="left")
 
-def generate_timetable_image(timetable_data, font_path=None, columns=2, failures=None):
-    if not timetable_data: return Image.new('RGBA', (COL1_CANVAS_WIDTH, CANVAS_HEIGHT), (0,0,0,255))
+def generate_timetable_image(timetable_data, font_path=None, columns=2, failures=None, canvas_height=None):
+    render_height = canvas_height if canvas_height is not None else CANVAS_HEIGHT
+    if not timetable_data: return Image.new('RGBA', (COL1_CANVAS_WIDTH, render_height), (0,0,0,255))
     
     if st is not None:
         st.toast("画像生成完了！", icon="✅")
@@ -380,12 +381,12 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2, failures
         margin_between_rows = 12  # 行と行の間の隙間(px)
         
         # キャンバス全体(2400px)を均等に割る
-        slot_height = CANVAS_HEIGHT / rows_in_column
+        slot_height = render_height / rows_in_column
         # 実際に描画する高さは、割り当てられた高さからマージンを引いたもの
         row_height = max(10, int(slot_height - margin_between_rows))
 
         # キャンバス生成
-        canvas = Image.new('RGBA', (canvas_width, CANVAS_HEIGHT), COLOR_BG_ALL)
+        canvas = Image.new('RGBA', (canvas_width, render_height), COLOR_BG_ALL)
         draw = ImageDraw.Draw(canvas)
 
         # 1列あたりの幅を計算
@@ -426,6 +427,6 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2, failures
             # API / Bot 経路では画面が無いのでログに出す(黙って赤画像を返さない)。
             logging.getLogger(__name__).error("generate_timetable_image failed: %s", e, exc_info=True)
         # 戻り値は従来どおり赤いダミー画像(呼び出し側の分岐を変えないため)。
-        return Image.new('RGBA', (COL1_CANVAS_WIDTH, CANVAS_HEIGHT), (255,0,0,255))
+        return Image.new('RGBA', (COL1_CANVAS_WIDTH, render_height), (255,0,0,255))
     finally:
         db.close()

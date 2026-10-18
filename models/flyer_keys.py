@@ -88,6 +88,7 @@ BASE_ENTRIES: List[FlyerKey] = [
     FlyerKey("time_alignment", "center"),
     FlyerKey("preview_width", 500, persist=False, widget_min=300, widget_max=1000),
     FlyerKey("show_buzz_logo", False),
+    FlyerKey("free_placement", "band"),
 ]
 
 
@@ -125,7 +126,15 @@ STYLE_ENTRIES: List[FlyerKey] = [
 # ----------------------------------------------------------------------
 # 公開: 全エントリの順序付きリスト
 # ----------------------------------------------------------------------
-FLYER_KEY_REGISTRY: List[FlyerKey] = BASE_ENTRIES + STYLE_ENTRIES
+FREE_ENTRIES = [
+    FlyerKey(f"{prefix}_{suffix}",
+             (64 if prefix == "free_viewing" else 28) if suffix == "size" else
+             ("#FFE328" if prefix == "free_viewing" else "#FFFFFF") if suffix == "color" else default,
+             widget_min=wmin, widget_max=wmax)
+    for prefix in ("free_viewing", "free_note")
+    for suffix, default, wmin, wmax in _STYLE_PARAM_SPECS
+]
+FLYER_KEY_REGISTRY: List[FlyerKey] = BASE_ENTRIES + STYLE_ENTRIES + FREE_ENTRIES
 
 
 # ----------------------------------------------------------------------
