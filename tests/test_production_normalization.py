@@ -117,3 +117,25 @@ def test_render_and_summary_never_double_wrap_existing_notes(monkeypatch):
     text=build_event_summary_text('event','',None,'','','10:20','10:30',
         [dict(name='A',price='¥2,000',note='（(撮影不可)）')],[],[],[])
     assert '(撮影不可)' in text and '((撮影不可))' not in text and '（(' not in text
+
+
+def test_single_part_times_recovered_without_mutating_source():
+    parts=[dict(open_time='',start_time='',rows=[])]
+    out=clean.normalize_parts(parts,dict(open_time='10:20',start_time='10:30'))
+    assert out[0]['open_time']=='10:20' and out[0]['start_time']=='10:30'
+    assert parts[0]['open_time']==''
+
+
+def test_times_recovered_from_explicit_overview_only():
+    parts=[dict(open_time='',start_time='')]
+    out=clean.normalize_parts(parts,{},'■時間\nOPEN▶１０：２０\nSTART▶10:30')
+    assert out[0]==dict(open_time='10:20',start_time='10:30')
+    assert clean.normalize_parts(parts,{},'出演 10:30〜10:50')==parts
+    assert clean.normalize_parts(parts,{},'OPEN 10:00 / OPEN 11:00')==parts
+
+
+def test_per_part_times_preserved_and_multi_part_never_inherits_global():
+    parts=[dict(open_time='11:00',start_time='11:30')]
+    assert clean.normalize_parts(parts,dict(open_time='10:00',start_time='10:30'))==parts
+    parts=[dict(open_time='',start_time=''),dict(open_time='',start_time='')]
+    assert clean.normalize_parts(parts,dict(open_time='10:00',start_time='10:30'),'OPEN 10:00 START 10:30')==parts

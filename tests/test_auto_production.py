@@ -179,7 +179,8 @@ def test_complete_package_uses_existing_renderers_and_contains_text(monkeypatch)
     assert draft.flyer_settings=={}
 
 
-def test_wizard_can_preview_without_any_project_or_writes_and_blocks_stale_save(app_test,monkeypatch):
+@pytest.mark.parametrize('missing_times',[False,True])
+def test_wizard_can_preview_without_any_project_or_writes_and_blocks_stale_save(app_test,monkeypatch,missing_times):
     from views import auto_production as view
     from services import artist_service,asset_service,template_service
     monkeypatch.setattr(template_service,'list_templates',lambda:[])
@@ -190,7 +191,9 @@ def test_wizard_can_preview_without_any_project_or_writes_and_blocks_stale_save(
         return original_uploader(*a,**kw)
     monkeypatch.setattr(view.st,'file_uploader',uploader)
     monkeypatch.setattr(intake,'extract_document',lambda *a:'10:30 - 10:50 A\n10:55 - 11:15 B')
-    analyze=Mock(return_value=result());monkeypatch.setattr(intake,'analyze',analyze)
+    analyzed=result()
+    if missing_times:analyzed['parts'][0].update(open_time='',start_time='')
+    analyze=Mock(return_value=analyzed);monkeypatch.setattr(intake,'analyze',analyze)
     monkeypatch.setattr(artist_service,'list_artists',lambda:[SimpleNamespace(name='A'),SimpleNamespace(name='B')])
     monkeypatch.setattr(asset_service,'list_assets_by_type',lambda *a:[])
     persist=Mock();monkeypatch.setattr(production,'persist_new_project',persist)
@@ -202,6 +205,8 @@ def test_wizard_can_preview_without_any_project_or_writes_and_blocks_stale_save(
     analyze.assert_not_called();persist.assert_not_called()
     at.button(key='btn_autoprod_analyze').click().run()
     assert not at.exception
+    assert at.text_input(key='autoprod_1_part_0_open_time').value=='10:00'
+    assert at.text_input(key='autoprod_1_part_0_start_time').value=='10:30'
     at.checkbox(key='autoprod_1_confirmed').check().run()
     at.selectbox(key='autoprod_1_bg_mode').select('指定なし').run()
     at.selectbox(key='autoprod_1_logo_mode').select('イベント名をロゴにする').run()

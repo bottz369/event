@@ -167,6 +167,7 @@ def analyze(overview,document_text,api_key,access_code,supplied_code):
             evidence=normalized(row.get('evidence',''))
             if any(not row[k].strip() for k in ('artist','start','end')) or not evidence or evidence not in source or any(normalized(row.get(k,'')) not in evidence for k in ('artist','start','end')):
                 raise ValueError('出演時刻と資料の根拠が一致しない行があります。資料を絞るか、開始・終了を同じ行にそろえて再度お試しください。')
-    from services.production_normalization import normalize_event
+    from services.production_normalization import normalize_event,normalize_parts
     result['event']=normalize_event(result['event'],overview)
+    result['parts']=normalize_parts(result['parts'],result['event'],overview)
     return result

@@ -116,7 +116,7 @@ def render():
         st.subheader('① 読み取り内容を確認・修正')
         for item in result.get('questions',[]):st.warning('要確認：'+str(item))
         for item in result.get('warnings',[]):st.info(str(item))
-        from services.production_normalization import normalize_event,roster_aliases,grid_order
+        from services.production_normalization import normalize_event,roster_aliases,grid_order,normalize_parts
         event=normalize_event(result['event'],overview)
         for label,field in [('イベント名','event_name'),('サブタイトル','subtitle'),('開催日（YYYY-MM-DD）','event_date'),('会場名','venue'),('会場URL','venue_url')]:
             event[field]=st.text_input(label,value=str(event.get(field) or ''),key=prefix+'_'+field)
@@ -130,8 +130,18 @@ def render():
             for i,entry in enumerate(event.get('free_texts',[])):
                 entry['title']=st.text_input('見出し',value=entry.get('title',''),key=f'{prefix}_notice_title_{i}')
                 entry['body']=st.text_area('内容',value=entry.get('body',''),key=f'{prefix}_notice_body_{i}')
+        resolved_parts=normalize_parts(result['parts'],event,overview)
+        # Repair already-open analysis sessions once, before time widgets are created.
+        repair_key=prefix+'_time_defaults_v1'
+        if not st.session_state.get(repair_key):
+            for index,raw in enumerate(resolved_parts):
+                for field in ('open_time','start_time'):
+                    widget_key=f'{prefix}_part_{index}_{field}'
+                    if not st.session_state.get(widget_key) and raw.get(field):
+                        st.session_state[widget_key]=raw[field]
+            st.session_state[repair_key]=True
         parts=[]
-        for index,raw in enumerate(result['parts']):
+        for index,raw in enumerate(resolved_parts):
             if not st.checkbox((raw.get('name') or f'{index+1}部')+'を制作対象にする',value=True,key=f'{prefix}_part_{index}'):
                 continue
             with st.expander(raw.get('name') or f'{index+1}部',expanded=True):

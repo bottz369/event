@@ -149,3 +149,19 @@ def grid_order(overview,roster,aliases=None):
     return ordered+unlisted,dict(source='公演概要の出演者順' if overview else 'タイムテーブル出演順',
         matched=[dict(original=n,artist=mapped[n]) for n in overview if n in mapped and n!=mapped[n]],
         unlisted=unlisted if overview else [],order=ordered+unlisted)
+
+
+def normalize_parts(parts,event,overview=''):
+    """Fill single-session blanks only; never spread global times across sessions."""
+    result=deepcopy(parts)
+    if len(result)!=1:return result
+    text=unicodedata.normalize('NFKC',str(overview or ''))
+    for field,label in (('open_time',r'OPEN|開場'),('start_time',r'START|開演')):
+        if str(result[0].get(field) or '').strip():continue
+        value=str(event.get(field) or '').strip()
+        if not re.fullmatch(r'(?:[01]?\d|2[0-3]):[0-5]\d',value):
+            matches=re.findall(r'(?:'+label+r')[ \t:：▶▷►>→]*([0-2]?\d:[0-5]\d)(?!\d)',text,re.I)
+            valid={f'{int(v.split(":")[0]):02d}:{v.split(":")[1]}' for v in matches if int(v.split(':')[0])<24}
+            value=next(iter(valid)) if len(valid)==1 else ''
+        if value:result[0][field]=f'{int(value.split(":")[0]):02d}:{value.split(":")[1]}'
+    return result
