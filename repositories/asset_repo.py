@@ -1,10 +1,10 @@
 """
-Asset(assets テーブル)の read を担うリポジトリ。
+Asset(assets テーブル)の取得と画像素材追加を担うリポジトリ。
 
 流儀は artist_repo / font_repo に合わせる:
 - モジュールレベル関数。db: Session を第 1 引数で受ける。
 - repository はセッションを作らない/閉じない(呼び出し側 service が所有)。
-- repository は db.commit()/add() を【しない】(純 read)。
+- repository は db.commit() をしない。画像追加のみ add()/flush() を行う。
 - ここで返す ORM は service スコープ内(session open 中)でのみ属性参照される
   想定(view へ escape させない)。asset_service が own_db open 中に
   id/image_filename/name を AssetView に写し替える。
@@ -35,3 +35,11 @@ def list_assets_by_type(db: Session, asset_type: str) -> List[Asset]:
 def get_asset(db: Session, asset_id) -> Optional[Asset]:
     """id 直引き 1 件(旧 flyer L565/L570 の .get(id) と同挙動・is_deleted フィルタ無し)。無ければ None。"""
     return db.query(Asset).get(asset_id)
+
+
+def add_image_asset(db: Session, name: str, asset_type: str, filename: str) -> Asset:
+    """Stage an explicit image upload; the service owns commit/rollback."""
+    asset = Asset(name=name, asset_type=asset_type, image_filename=filename)
+    db.add(asset)
+    db.flush()
+    return asset

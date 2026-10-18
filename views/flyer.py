@@ -61,32 +61,77 @@ def _sync_linked_scale_h(prefix: str):
         ]
 
 
+def _select_asset(key_name, asset_id):
+    st.session_state[key_name] = asset_id
+
+
+def _upload_asset(asset_type, key_name, upload_key, name_key, revision_key):
+    upload = st.session_state.get(upload_key)
+    if upload is None:
+        st.error("アップロードする画像を選択してください。")
+        return
+    try:
+        asset = asset_service.upload_image_asset(upload.getvalue(), upload.name, asset_type,
+                                                 st.session_state.get(name_key, ""))
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+    st.session_state[key_name] = asset.id
+    # Rotate uploader/form keys only after success; reruns never upload automatically.
+    st.session_state[revision_key] = st.session_state.get(revision_key, 0) + 1
+    st.toast(f"「{asset.name}」をアセットに保存して選択しました。", icon="✅")
+
+
+def render_asset_upload(label, asset_type, key_name):
+    pid = session_manager.get_active_project_id()
+    revision_key = f"asset_upload_revision_{pid}_{asset_type}"
+    revision = st.session_state.get(revision_key, 0)
+    prefix = f"asset_upload_{pid}_{asset_type}_{revision}"
+    with st.expander(f"➕ {label}をアップロード"):
+        st.caption("PNG・JPEG・WebP／20MB以下。保存するとアセット管理にも追加され、別のイベントでも使えます。ロゴは透過PNGも使えます。")
+        with st.form(prefix + "_form"):
+            st.file_uploader(label, type=["png", "jpg", "jpeg", "webp"], key=prefix + "_file")
+            st.text_input("素材名（空欄ならファイル名）", key=prefix + "_name")
+            st.form_submit_button(f"{label}をアセットに保存して選択", on_click=_upload_asset,
+                args=(asset_type, key_name, prefix + "_file", prefix + "_name", revision_key))
+        st.caption("アセットはこのボタンで保存します。イベントへの選択と画像更新は、上の「プロジェクトを保存する」で確定します。")
+
+
 def render_visual_selector(label, options, key_name, current_value, allow_none=False):
     st.markdown(f"**{label}**")
-    if allow_none:
-        is_none = (not current_value or current_value == 0)
-        if st.button(f"🚫 {label}なし", key=f"btn_none_{key_name}", type="primary" if is_none else "secondary"):
-            st.session_state[key_name] = 0
-            st.rerun()
-    if not options:
-        st.info("選択肢がありません")
+    selected = next((opt for opt in options if opt.id == current_value), None)
+    st.caption(f"選択中：{selected.name if selected else 'なし'}　｜　横にスクロールして選択")
+    strip_key = f"asset_strip_{key_name}"
+    # Scope styles to this native Streamlit strip; all selection buttons stay keyboard accessible.
+    st.html(f"""<style>
+    .st-key-{strip_key} {{ flex-wrap: nowrap !important; overflow-x: auto; padding: 4px 0 12px; gap: 12px; }}
+    .st-key-{strip_key} > div {{ flex: 0 0 168px !important; min-width: 168px; max-width: 168px; }}
+    .st-key-{strip_key} img {{ height: 116px; width: 100%; object-fit: contain; }}
+    .st-key-{strip_key} [data-testid="stImage"] {{ min-height: 116px; }}
+    .st-key-{strip_key} {{ scrollbar-width: thin; }}
+    </style>""")
+    if not options and not allow_none:
+        st.info("選択肢がありません。下のアップロードから追加できます。")
         return
-    cols = st.columns(4)
-    for i, opt in enumerate(options):
-        with cols[i % 4]:
-            is_selected = (opt.id == current_value)
-            img_url = None
-            if hasattr(opt, "image_filename") and opt.image_filename:
-                img_url = get_image_url(opt.image_filename)
-            if img_url: st.image(img_url, width='stretch')
-            else: st.markdown(f"🔲 {opt.name}")
-            if is_selected:
-                st.button("✅ 選択中", key=f"btn_{key_name}_{opt.id}", disabled=True, width='stretch')
-            else:
-                if st.button("選択", key=f"btn_{key_name}_{opt.id}", width='stretch'):
-                    st.session_state[key_name] = opt.id
-                    st.rerun()
-    st.divider()
+    with st.container(horizontal=True, key=strip_key):
+        if allow_none:
+            with st.container(width=168, border=True):
+                st.markdown("🚫 ロゴなし")
+                st.button(f"{label}なし", key=f"btn_none_{key_name}",
+                          type="primary" if not current_value else "secondary",
+                          on_click=_select_asset, args=(key_name, 0), width="stretch")
+        for opt in options:
+            with st.container(width=168, border=True):
+                image_url = get_image_url(opt.image_filename) if opt.image_filename else None
+                if image_url:
+                    st.image(image_url, width="stretch")
+                else:
+                    st.caption("画像なし")
+                st.caption(opt.name)
+                is_selected = opt.id == current_value
+                st.button("✅ 選択中" if is_selected else "選択", key=f"btn_{key_name}_{opt.id}",
+                          disabled=is_selected, type="primary" if is_selected else "secondary",
+                          on_click=_select_asset, args=(key_name, opt.id), width="stretch")
 
 # =========================================================
 # 保存ハンドラから呼ばれる公開関数(統合保存ボタン用)
@@ -399,7 +444,8 @@ def render_flyer_editor(project_id):
 
         with st.expander("🖼️ 基本設定", expanded=True):
             render_visual_selector("背景画像", bgs, "flyer_bg_id", st.session_state.flyer_bg_id)
-            st.markdown("---")
+            render_asset_upload("背景画像", "background", "flyer_bg_id")
+            st.divider()
             
             # ★追加: BUZZチケロゴ表示チェックボックス
             st.checkbox("🎫 「BUZZチケ」のロゴを表示する", key="flyer_show_buzz_logo")
@@ -409,24 +455,25 @@ def render_flyer_editor(project_id):
             st.markdown("---")
             
             render_visual_selector("ロゴ画像", logos, "flyer_logo_id", st.session_state.flyer_logo_id, allow_none=True)
+            render_asset_upload("ロゴ画像", "logo", "flyer_logo_id")
             if st.session_state.flyer_logo_id:
-                st.markdown("**ロゴ微調整**")
-                c_l1, c_l2, c_l3 = st.columns(3)
-                with c_l1: st.slider("サイズ", 0.1, 2.0, step=0.1, key="flyer_logo_scale")
-                with c_l2: st.number_input("X (右+/左-)", step=1.0, key="flyer_logo_pos_x")
-                with c_l3: st.number_input("Y (上+/下-)", step=1.0, key="flyer_logo_pos_y")
+                with st.expander("ロゴのサイズ・位置・影を調整"):
+                    c_l1, c_l2, c_l3 = st.columns(3)
+                    with c_l1: st.slider("サイズ", 0.1, 2.0, step=0.1, key="flyer_logo_scale")
+                    with c_l2: st.number_input("X (右+/左-)", step=1.0, key="flyer_logo_pos_x")
+                    with c_l3: st.number_input("Y (上+/下-)", step=1.0, key="flyer_logo_pos_y")
                 
-                st.checkbox("ロゴに影をつける", key="flyer_logo_shadow_on")
-                if st.session_state.get("flyer_logo_shadow_on"):
-                    lc1, lc2 = st.columns(2)
-                    with lc1: st.color_picker("影色", key="flyer_logo_shadow_color")
-                    with lc2: st.slider("濃さ", 0, 255, step=5, key="flyer_logo_shadow_opacity")
-                    lc3, lc4 = st.columns(2)
-                    with lc3: st.slider("太さ", 0, 20, step=1, key="flyer_logo_shadow_spread")
-                    with lc4: st.slider("ぼかし", 0, 20, step=1, key="flyer_logo_shadow_blur")
-                    lc5, lc6 = st.columns(2)
-                    with lc5: st.number_input("影X", step=1, key="flyer_logo_shadow_off_x")
-                    with lc6: st.number_input("影Y", step=1, key="flyer_logo_shadow_off_y")
+                    st.checkbox("ロゴに影をつける", key="flyer_logo_shadow_on")
+                    if st.session_state.get("flyer_logo_shadow_on"):
+                        lc1, lc2 = st.columns(2)
+                        with lc1: st.color_picker("影色", key="flyer_logo_shadow_color")
+                        with lc2: st.slider("濃さ", 0, 255, step=5, key="flyer_logo_shadow_opacity")
+                        lc3, lc4 = st.columns(2)
+                        with lc3: st.slider("太さ", 0, 20, step=1, key="flyer_logo_shadow_spread")
+                        with lc4: st.slider("ぼかし", 0, 20, step=1, key="flyer_logo_shadow_blur")
+                        lc5, lc6 = st.columns(2)
+                        with lc5: st.number_input("影X", step=1, key="flyer_logo_shadow_off_x")
+                        with lc6: st.number_input("影Y", step=1, key="flyer_logo_shadow_off_y")
             
             st.markdown("---")
             st.markdown(f"**サブタイトル**: {proj.subtitle if proj.subtitle else '(未設定)'}")
