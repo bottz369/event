@@ -14,7 +14,7 @@ def new_part(index, open_time="10:00", start_time="10:30", rows=None):
     return dict(name=f"{index + 1}部", open_time=open_time, start_time=start_time,
                 color=COLORS[index % len(COLORS)], rows=deepcopy(rows or []),
                 goods_offset=10, post_start="", post_prepare=10,
-                post_duration=0, transition_label="転換", note="")
+                post_duration=0, transition_label="転換", hide_transitions=False, note="")
 
 
 def options(settings):

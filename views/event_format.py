@@ -49,6 +49,8 @@ def _change(key, field, index=None):
 def _field(label, field, index=None, kind="text", **kwargs):
     cfg = config()
     value = (cfg if index is None else cfg["parts"][index]).get(field)
+    if kind == "check" and value is None:
+        value = False
     key = f"eventfmt_{session_manager.get_active_project_id()}_{index}_{field}"
     if key not in st.session_state:
         st.session_state[key] = "" if kind == "area" and value is None else value
@@ -140,6 +142,8 @@ def render_editor():
         _field("部の色", "color", index, kind="color")
     with st.expander("特典会・転換・補足設定"):
         _field("物販開始オフセット（分）", "goods_offset", index, kind="number", min_value=0, step=1)
+        _field("生成画像で転換を非表示にする", "hide_transitions", index, kind="check")
+        st.caption("非表示でも転換時間は計算に含めます。出演開始時刻は変わりません。")
         _field("転換の表示名（例：VIPエリア入れ替え）", "transition_label", index)
         _field("終演後特典会の準備（分）", "post_prepare", index, kind="number", min_value=0, step=1)
         _field("終演後特典会の開始（空欄なら自動）", "post_start", index)

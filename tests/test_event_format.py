@@ -443,3 +443,68 @@ def test_time_band_has_same_width_as_part_bar_and_translucent_black(monkeypatch)
         assert image.getpixel((x,28+100)) == (0,0,0,160)
         assert image.getpixel((x,28+10))[3] == 255
     assert image.getpixel((27,28+100))[3] == 0
+
+
+def test_hiding_transitions_changes_only_display_not_performance_or_goods_times():
+    from services.event_format_service import timetable_rows
+    part=new_part(0,rows=[row("A",ADJUSTMENT=5),row("B",ADJUSTMENT=10),row("C")])
+    before=deepcopy(part)
+    shown=timetable_rows(part)
+    part["hide_transitions"]=True
+    hidden=timetable_rows(part)
+    assert hidden == [r for r in shown if r[1] != "転換"]
+    assert [r[0] for r in hidden] == ["10:30 - 10:50","10:55 - 11:15","11:25 - 11:45"]
+    assert part["rows"] == before["rows"]
+    assert schedule(part) == schedule(before)
+    part["hide_transitions"]=False
+    assert timetable_rows(part) == shown
+
+
+def test_post_goods_artist_shows_label_but_summary_keeps_times_and_source_unchanged():
+    from services.event_format_service import timetable_rows
+    part=new_part(0,rows=[row("A",IS_POST_GOODS=True,PLACE="B",
+                            GOODS_START_MANUAL="12:00",ADD_GOODS_START="13:00",
+                            ADD_GOODS_DURATION=30,ADD_GOODS_PLACE="C"),row("B")])
+    part.update(post_start="16:00",post_duration=90)
+    original=deepcopy(part)
+    rows=timetable_rows(part)
+    assert rows[0] == ("10:30 - 10:50","A","終演後物販","")
+    assert rows[1][2] == "11:20 - 12:20"
+    assert rows[-1] == ("16:00 - 17:30","終演後物販","","")
+    assert part == original
+    assert schedule(part)[0][0]["goods"] == "16:00–17:30 / 13:00–13:30"
+
+
+def test_normal_post_goods_label_has_no_artist_side_time_or_location():
+    from services.timetable_service import build_tt_gen_list_from_rows
+    artist=TimetableRowDraft(artist_name="A",is_post_goods=True,place="B",goods_start_time="16:00")
+    summary=TimetableRowDraft(artist_name="終演後物販",duration=0,goods_start_time="16:00",goods_duration=90)
+    rows=build_tt_gen_list_from_rows([artist,summary],"10:00","10:30")
+    assert rows[0][2:] == ["終演後物販",""]
+    assert rows[1][2] == "16:00 - 17:30"
+    assert artist.place == "B"
+    assert artist.goods_start_time == "16:00"
+
+
+def test_hide_transition_checkbox_persists_per_part_without_touching_minutes(app_test):
+    from tests.conftest import select_tab
+    from views.workspace import TAB_TT
+    at=app_test.run()
+    label=next(x for x in at.selectbox(key="ws_project_selector_label").options
+               if x not in ("(選択してください)","➕ 新規プロジェクト作成"))
+    at.selectbox(key="ws_project_selector_label").select(label).run()
+    draft=at.session_state["draft_project"]
+    # Simulate existing saved parts without the newly introduced setting.
+    first=new_part(0,rows=[row(ADJUSTMENT=5),row("B")])
+    first.pop("hide_transitions")
+    draft.settings[KEY]=dict(enabled=True,initialized=True,count=2,parts=[first,new_part(1)])
+    at.session_state["draft_project"]=draft
+    select_tab(at,TAB_TT)
+    key=f"eventfmt_{draft.id}_0_hide_transitions"
+    assert at.checkbox(key=key).value is False
+    at.checkbox(key=key).check().run()
+    assert not at.exception
+    parts=at.session_state["draft_project"].settings[KEY]["parts"]
+    assert parts[0]["hide_transitions"] is True
+    assert parts[0]["rows"][0]["ADJUSTMENT"] == 5
+    assert parts[1]["hide_transitions"] is False
