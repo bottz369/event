@@ -1,4 +1,5 @@
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from models.timetable_style import normalize_style
 import logging
 import math
 import os
@@ -246,7 +247,7 @@ def draw_centered_text(draw, text, box_x, box_y, box_w, box_h, font_path, max_fo
     draw.multiline_text((final_x+2, final_y+2), text, fill=(0,0,0,200), font=font, spacing=4, align=align)
     draw.multiline_text((final_x, final_y), text, fill=COLOR_TEXT, font=font, spacing=4, align=align)
 
-def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_width, row_height, columns, image_cache=None, failures=None):
+def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_width, row_height, columns, image_cache=None, failures=None, style=None):
     time_str, name_str = row_data[0], str(row_data[1]).strip()
     goods_time, goods_place = row_data[2], row_data[3]
 
@@ -254,6 +255,11 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
     font_size_artist = min(80, max(20, int(row_height * 0.45)))
     font_size_time = min(70, max(18, int(row_height * 0.40)))
     font_size_goods = min(50, max(15, int(row_height * 0.35)))
+
+    style = normalize_style(style)
+    font_size_artist = max(1, round(font_size_artist * style['artist_font'] / 100))
+    font_size_time = max(1, round(font_size_time * style['time_font'] / 100))
+    font_size_goods = max(1, round(font_size_goods * style['goods_font'] / 100))
 
     # 列数に応じたエリア幅と座標の計算
     if columns == 1:
@@ -272,6 +278,16 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
         time_x = 20
         artist_x = time_x + time_w
         goods_x = row_width - goods_w - 20
+
+    if style['custom_widths']:
+        padding = 40 if columns == 1 else 20
+        available = row_width - padding * 2
+        time_w = int(available * style['time_width'] / 100)
+        goods_w = int(available * style['goods_width'] / 100)
+        artist_w = available - time_w - goods_w
+        time_x = padding
+        artist_x = time_x + time_w
+        goods_x = artist_x + artist_w
 
     # ---------------------------------------------------------
     # 1. 画像処理 & 透過黒フィルター合成
@@ -344,7 +360,8 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
             goods_info = f"{goods_time} ({goods_place})" if goods_place else goods_time
     draw_centered_text(draw, goods_info, base_x + goods_x, base_y, goods_w, row_height, font_path, font_size_goods, align="left")
 
-def generate_timetable_image(timetable_data, font_path=None, columns=2, failures=None, canvas_height=None):
+def generate_timetable_image(timetable_data, font_path=None, columns=2, failures=None, canvas_height=None, style=None):
+    style = normalize_style(style)
     render_height = canvas_height if canvas_height is not None else CANVAS_HEIGHT
     if not timetable_data: return Image.new('RGBA', (COL1_CANVAS_WIDTH, render_height), (0,0,0,255))
     
@@ -385,15 +402,16 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2, failures
         # 実際に描画する高さは、割り当てられた高さからマージンを引いたもの
         row_height = max(10, int(slot_height - margin_between_rows))
 
+        base_column_width = canvas_width if columns == 1 else int((canvas_width - COLUMN_GAP) / 2)
+        single_col_width = round(base_column_width * style['column_width'] / 100)
+        gap = style['column_gap'] if columns == 2 else 0
+        canvas_width = single_col_width if columns == 1 else single_col_width * 2 + gap
+
         # キャンバス生成
         canvas = Image.new('RGBA', (canvas_width, render_height), COLOR_BG_ALL)
         draw = ImageDraw.Draw(canvas)
 
         # 1列あたりの幅を計算
-        if columns == 1:
-            single_col_width = canvas_width
-        else:
-            single_col_width = int((canvas_width - COLUMN_GAP) / 2)
 
         # Phase 3 P2: アー写画像を並列取得 (取得フェーズと加工フェーズの分離)。
         # 段階B B-1.5: 描画先サイズ (single_col_width x row_height) が確定してから
@@ -407,15 +425,15 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2, failures
         # --- 左列の描画 ---
         y = margin_between_rows / 2
         for row in left_data:
-            draw_one_row(draw, canvas, 0, y, row, font_path, db, single_col_width, row_height, columns, image_cache=image_cache)
+            draw_one_row(draw, canvas, 0, y, row, font_path, db, single_col_width, row_height, columns, image_cache=image_cache, style=style)
             y += slot_height
 
         # --- 右列の描画 ---
         if columns == 2:
-            right_col_start_x = single_col_width + COLUMN_GAP
+            right_col_start_x = single_col_width + gap
             y = margin_between_rows / 2 
             for row in right_data:
-                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db, single_col_width, row_height, columns, image_cache=image_cache)
+                draw_one_row(draw, canvas, right_col_start_x, y, row, font_path, db, single_col_width, row_height, columns, image_cache=image_cache, style=style)
                 y += slot_height
             
         return canvas

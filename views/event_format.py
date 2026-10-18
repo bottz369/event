@@ -127,6 +127,8 @@ def render_editor():
                      format_func=lambda f: labels_by_font.get(f, f))
         st.radio("各部のタイムテーブル列数", [1, 2], horizontal=True, key="tt_columns")
         st.caption("アー写を背景にした通常版と同じ行デザインを使います。24行以上の部は2列になります。")
+    from views import timetable_style
+    timetable_style.render()
     labels = [p["name"] or f"{i + 1}部" for i, p in enumerate(active_parts(cfg))]
     index = st.radio("編集する部", range(len(labels)), format_func=lambda i: labels[i],
                      horizontal=True, key=f"eventfmt_selected_{session_manager.get_active_project_id()}")
@@ -281,6 +283,7 @@ def signature():
                            tickets=[t.to_dict() for t in draft.tickets],
                            tt_font=st.session_state.get("tt_font"),
                            tt_columns=st.session_state.get("tt_columns"),
+                           tt_style=st.session_state.get("tt_style"),
                            ticket_notes=draft.ticket_notes, flyer=draft.flyer_settings),
                       ensure_ascii=False, sort_keys=True)
 

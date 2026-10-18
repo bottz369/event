@@ -81,6 +81,7 @@ SESSION_PROJECT_KEYS = [
     "tt_unsaved_changes",
     "tt_columns",
     "tt_font",
+    "tt_style",
     "tt_gen_list",
     "tt_last_generated_params",
     "tt_last_check_times_",
@@ -300,6 +301,9 @@ def sync_session_to_draft() -> bool:
         settings["tt_font"] = st.session_state.tt_font
     if "tt_columns" in st.session_state:
         settings["tt_columns"] = st.session_state.tt_columns
+    if "tt_style" in st.session_state:
+        from models.timetable_style import normalize_style
+        settings["tt_style"] = normalize_style(st.session_state.tt_style)
     if "grid_font" in st.session_state:
         settings["grid_font"] = st.session_state.grid_font
     draft.settings = settings
@@ -424,6 +428,7 @@ def clear_project_session() -> None:
         "f_title_",
         "f_content_",
         "tt_editor_",
+        "tt_style_",
         "coord_grid",
         "coord_tt",
         "last_coord_",

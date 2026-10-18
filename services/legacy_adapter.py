@@ -69,6 +69,8 @@ def sync_draft_to_legacy_session() -> None:
     settings = draft.settings or {}
     st.session_state.tt_font = settings.get("tt_font", "keifont.ttf")
     st.session_state.tt_columns = settings.get("tt_columns", 2)
+    from models.timetable_style import normalize_style
+    st.session_state.tt_style = normalize_style(settings.get("tt_style"))
     st.session_state.grid_font = settings.get("grid_font", "keifont.ttf")
 
     # --- グリッド設定 ---

@@ -366,7 +366,8 @@ def _render_tt_image_for_project(
             logger.info("timetable font resolved: %s", font_path)
 
         return generate_timetable_image(
-            gen_list, font_path=font_path, columns=tt_columns, failures=failures
+            gen_list, font_path=font_path, columns=tt_columns, failures=failures,
+            style=settings.get("tt_style")
         )
 
 

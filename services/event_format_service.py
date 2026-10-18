@@ -157,12 +157,12 @@ def render(project, variant="tt", finished=False, failures=None):
         source_width = 2800 if cols == 1 else 3600
         if data:
             image = generate_timetable_image(data, font_path=path, columns=cols, failures=failures,
-                                              canvas_height=rows_per_col * 148)
+                                              canvas_height=rows_per_col * 148, style=project.settings.get("tt_style"))
         else:
             # The regular empty-table fallback is opaque black. Do not composite it
             # into an empty part: it can overlap independently positioned tickets.
             image = Image.new("RGBA", (source_width, 148))
-        body_height = max(1, round(image.height * (width - gap * 2) / source_width))
+        body_height = max(1, round(image.height * (width - gap * 2) / image.width))
         note_height = max(80, len(part["note"].splitlines()) * 42 + 16) if part.get("note") else 0
         panel = Image.new("RGBA", (width - gap * 2, 160 + body_height + note_height))
         ImageDraw.Draw(panel).rectangle((0, 0, panel.width, 70), fill=part["color"])

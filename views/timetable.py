@@ -290,6 +290,7 @@ def tt_preview_is_stale():
         "gen_list": build_gen_list_from_draft(),
         "font": st.session_state.get("tt_font"),
         "columns": st.session_state.get("tt_columns"),
+        "style": st.session_state.get("tt_style"),
     }
     return last != current
 
@@ -332,7 +333,8 @@ def regenerate_tt_preview():
     try:
         font_path = os.path.join(os.path.abspath(FONT_DIR), st.session_state.tt_font)
         img = generate_timetable_image(
-            gen_list, font_path=font_path, columns=st.session_state.tt_columns
+            gen_list, font_path=font_path, columns=st.session_state.tt_columns,
+            style=st.session_state.get("tt_style")
         )
     except Exception as e:
         st.error(f"タイムテーブル画像の生成エラー: {e}")
@@ -343,6 +345,7 @@ def regenerate_tt_preview():
         "gen_list": gen_list,
         "font": st.session_state.tt_font,
         "columns": st.session_state.tt_columns,
+        "style": st.session_state.get("tt_style"),
     }
     return True
 
@@ -936,6 +939,9 @@ def render_timetable_page():
                     key="tt_columns"
                 )
             
+            from views import timetable_style
+            timetable_style.render()
+
             st.session_state.tt_last_generated_params = st.session_state.get(
                 "tt_last_generated_params"
             )
