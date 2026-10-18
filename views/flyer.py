@@ -98,7 +98,10 @@ def _flyer_preview_signature():
     それぞれの生成パラメータも署名に含める。どれかが変われば
     「変更を保存するとプレビューが更新されます」を出し、DL も止める。
     """
+    from models.event_format import options as event_options
+    draft = session_manager.get_draft_project()
     return {
+        "event_format": event_options(draft.settings) if draft else {},
         "flyer": gather_flyer_settings_from_session(),
         "bg": st.session_state.get("flyer_bg_id"),
         "logo": st.session_state.get("flyer_logo_id"),
@@ -637,6 +640,9 @@ def _generate_preview(proj):
         if asset: logo_url = get_image_url(asset.image_filename)
 
     styles = {k.replace("flyer_",""): v for k, v in st.session_state.items() if k.startswith("flyer_")}
+    from views.event_format import config as event_format_config
+    styles["event_free_viewing"] = event_format_config().get("free_viewing", False)
+    styles["event_free_text"] = event_format_config().get("free_text", "")
     
     # フォント読み込み (絶対パス化 & ダウンロード)
     targets = ["subtitle", "date", "venue", "time", "ticket_name", "ticket_note"]

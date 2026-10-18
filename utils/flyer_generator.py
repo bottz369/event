@@ -607,4 +607,7 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
             except Exception as e:
                 print(f"BUZZチケロゴの合成エラー: {e}")
 
+    if styles.get("event_free_viewing"):
+        from services.event_format_service import free_banner
+        canvas = free_banner(canvas, styles.get("event_free_text", ""), fallback_path)
     return canvas, layout_meta

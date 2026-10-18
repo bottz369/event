@@ -427,6 +427,8 @@ def clear_project_session() -> None:
         "ov_tt_open_time",
         "ov_tt_start_time",
         "flyer_",
+        "eventfmt_",
+        "event_format_preview",
     )
     for key in list(st.session_state.keys()):
         if isinstance(key, str) and key.startswith(dynamic_prefixes):

@@ -187,6 +187,17 @@ def render_workspace_page():
     )
     active_tab = current_tab()
 
+    from views import event_format
+    event_format.render_options()
+    if event_format.config().get("enabled") and active_tab != TAB_OVERVIEW:
+        if active_tab == TAB_TT:
+            event_format.render_editor()
+        elif active_tab == TAB_FLYER:
+            event_format.render_style()
+            st.caption("料金はイベント概要、各部の編集はタイムテーブルで行います。")
+        event_format.render_preview(active_tab)
+        return
+
     if active_tab == TAB_OVERVIEW:
         render_overview_page()
     elif active_tab == TAB_TT:
@@ -334,6 +345,14 @@ def _handle_project_save() -> None:
     """
     active_id = session_manager.get_active_project_id()
 
+    from views import event_format
+    from models.event_format import validate
+    format_errors = validate(event_format.config())
+    if format_errors:
+        for error in format_errors:
+            st.error(error)
+        return
+
     # 保存前の回収: ウィジェットからリスト本体へ戻す必要がある値を先に取り込む
     collect_overview_widget_values(active_id)
     fold_grid_order_from_rows()
@@ -344,7 +363,13 @@ def _handle_project_save() -> None:
 
     tab = current_tab()
     with st.spinner("保存しました。プレビューを作成中..."):
-        if tab == TAB_TT:
+        if event_format.config().get("enabled"):
+            try:
+                event_format.regenerate()
+            except Exception as exc:
+                st.error(f"保存は完了しましたが、複数部の画像生成に失敗しました: {exc}")
+                return
+        elif tab == TAB_TT:
             regenerate_tt_preview()
         elif tab == TAB_GRID:
             regenerate_grid_preview()

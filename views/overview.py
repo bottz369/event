@@ -357,18 +357,19 @@ def render_overview_page():
         finally:
             db.close()
     
+    from views.event_format import config as event_format_config
+    from models.event_format import summary_inputs
+    event_summary = summary_inputs(event_format_config(), artists_list,
+        st.session_state.get("proj_ticket_notes", []), st.session_state.get("proj_free_text", []),
+        st.session_state.get("tt_open_time", "※調整中"), st.session_state.get("tt_start_time", "※調整中"))
     generated_text = build_event_summary_text(
         title=st.session_state.get("proj_title", ""),
         subtitle=st.session_state.get("proj_subtitle", ""),
         date_val=st.session_state.get("proj_date"),
         venue=st.session_state.get("proj_venue", ""),
         url=st.session_state.get("proj_url", ""),
-        open_time=st.session_state.get("tt_open_time", "※調整中"),
-        start_time=st.session_state.get("tt_start_time", "※調整中"),
         tickets=st.session_state.get("proj_tickets", []),
-        ticket_notes=st.session_state.get("proj_ticket_notes", []),
-        artists=artists_list,
-        free_texts=st.session_state.get("proj_free_text", []),
+        **event_summary,
         # #3c: 保持していれば概要に書かれた予定組数を使う(無ければ実組数)
         planned_artist_count=st.session_state.get("flyer_planned_artist_count"),
     )

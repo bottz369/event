@@ -139,6 +139,11 @@ def build_summary_text_for_project(project_id: int) -> Optional[str]:
     # #3c: 概要に書かれた予定組数を保持していれば、それを見出しに使う。
     # 持っていなければ None を渡す = 従来どおり実組数(既存プロジェクトは不変)。
     planned = _planned_artist_count(view.flyer_json)
+    from models.event_format import options as event_options, summary_inputs
+    from services.event_format_service import project_from_db
+    event_project = project_from_db(project_id)
+    event_summary = summary_inputs(event_options(event_project.settings) if event_project else {},
+        filtered_artists, ticket_notes, free_texts, format_time_str(view.open_time), format_time_str(view.start_time))
 
     return build_event_summary_text(
         title=view.title,
@@ -146,12 +151,8 @@ def build_summary_text_for_project(project_id: int) -> Optional[str]:
         date_val=view.event_date,
         venue=view.venue_name,
         url=view.venue_url,
-        open_time=format_time_str(view.open_time),
-        start_time=format_time_str(view.start_time),
         tickets=tickets,
-        ticket_notes=ticket_notes,
-        artists=filtered_artists,
-        free_texts=free_texts,
+        **event_summary,
         planned_artist_count=planned,
     )
 
@@ -178,6 +179,14 @@ def _render_grid_image_for_project(
 
     OOM 対策: モジュールレベルの _render_lock で全体を囲み、同時に1件だけ生成する。
     """
+    from services.event_format_service import project_from_db, render as render_event, png as event_png
+    from models.event_format import options as event_options
+    event_project = project_from_db(project_id)
+    if event_project and event_options(event_project.settings).get("enabled"):
+        with _render_lock:
+            image = render_event(event_project, 'grid', finished=False, failures=failures)
+            return image
+
     with _render_lock:
         db = SessionLocal()
         try:
@@ -283,6 +292,14 @@ def _render_tt_image_for_project(
     OOM 対策: grid と同じ _render_lock を共有し、同時に 1 件だけ生成する
     (段階B でフライヤーが grid + TT + 合成を連続実行するため、両者を跨いで直列化する)。
     """
+    from services.event_format_service import project_from_db, render as render_event, png as event_png
+    from models.event_format import options as event_options
+    event_project = project_from_db(project_id)
+    if event_project and event_options(event_project.settings).get("enabled"):
+        with _render_lock:
+            image = render_event(event_project, 'tt', finished=False, failures=failures)
+            return image
+
     with _render_lock:
         db = SessionLocal()
         try:
@@ -455,6 +472,12 @@ def build_flyer_kwargs_for_project(project_id: int, variant: str = "grid") -> Op
         for e in FLYER_KEY_REGISTRY
         if e.persist
     }
+    from services.event_format_service import project_from_db
+    from models.event_format import options as event_options
+    event_project = project_from_db(project_id)
+    event_config = event_options(event_project.settings) if event_project else {}
+    styles["event_free_viewing"] = event_config.get("free_viewing", False)
+    styles["event_free_text"] = event_config.get("free_text", "")
 
     # --- ★view の「🔗 縦横比を固定」の再現(views/flyer.py:366 / 374) ---
     # grid_link / tt_link は FLYER_KEY_REGISTRY で persist=False = DB に保存されない
@@ -537,6 +560,14 @@ def render_flyer_png_for_project(
       - main_source(grid は 4000x3000 級 / TT は 3600x2400)は合成後すぐ解放して gc する。
         variant ごとに別リクエストなので grid 画像と TT 画像を同時に保持することはない。
     """
+    from services.event_format_service import project_from_db, render as render_event, png as event_png
+    from models.event_format import options as event_options
+    event_project = project_from_db(project_id)
+    if event_project and event_options(event_project.settings).get("enabled"):
+        with _render_lock:
+            image = render_event(event_project, variant, finished=True, failures=failures)
+            return event_png(image)
+
     if variant not in _FLYER_VARIANTS:
         raise ValueError("variant must be one of %r" % (_FLYER_VARIANTS,))
 
