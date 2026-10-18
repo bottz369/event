@@ -472,6 +472,8 @@ def render_flyer_editor(project_id):
             
             render_visual_selector("ロゴ画像", logos, "flyer_logo_id", st.session_state.flyer_logo_id, allow_none=True)
             render_asset_upload("ロゴ画像", "logo", "flyer_logo_id")
+            from views import logo_palette
+            logo_palette.render()
             if st.session_state.flyer_logo_id:
                 with st.expander("ロゴのサイズ・位置・影を調整"):
                     c_l1, c_l2, c_l3 = st.columns(3)

@@ -153,3 +153,86 @@ def test_background_ui_generates_only_on_button_and_keeps_preview_on_error(app_t
     assert not at.exception
     assert generate.call_count==2
     assert at.session_state[prefix+'_bg_result']['data']==result
+
+
+def test_ai_palette_uses_two_bounded_images_and_preserves_alpha(monkeypatch):
+    import json
+    from services import logo_palette as palette
+    response=Mock(status_code=200)
+    response.json.return_value={'choices':[{'finish_reason':'stop','message':{'content':json.dumps(dict(color='#e4a637',brightness=110,reason='金色で背景と調和します。'))}}]}
+    post=Mock(return_value=response);monkeypatch.setattr(palette.requests,'post',post)
+    original=picture((900,600));result=palette.match_logo(original,picture(),'key','code','code')
+    a=np.array(Image.open(io.BytesIO(original)));b=np.array(Image.open(io.BytesIO(result['data'])))
+    assert a.shape==b.shape and np.array_equal(a[:,:,3],b[:,:,3])
+    post.assert_called_once()
+    payload=post.call_args.kwargs['json']
+    assert payload['model']=='gpt-5-mini' and payload['response_format']['json_schema']['strict']
+    images=payload['messages'][1]['content'][1:]
+    assert len(images)==2
+    for item in images:
+        data=base64.b64decode(item['image_url']['url'].split(',')[1])
+        assert max(Image.open(io.BytesIO(data)).size)<=512
+    assert post.call_args.kwargs['allow_redirects'] is False
+
+
+@pytest.mark.parametrize('answer',[
+    dict(color='red',brightness=100,reason='色'),dict(color='#ffffff',brightness=True,reason='色'),
+    dict(color='#ffffff',brightness=151,reason='色'),dict(color='#ffffff',brightness=100,reason=''),
+])
+def test_ai_palette_rejects_invalid_answers(monkeypatch,answer):
+    import json
+    from services import logo_palette as palette
+    response=Mock(status_code=200)
+    response.json.return_value={'choices':[{'finish_reason':'stop','message':{'content':json.dumps(answer)}}]}
+    monkeypatch.setattr(palette.requests,'post',Mock(return_value=response))
+    with pytest.raises(ValueError,match='回答'):palette.match_logo(picture(),picture(),'key','code','code')
+
+
+def test_ai_palette_auth_timeout_and_http_errors_do_not_retry(monkeypatch):
+    from services import logo_palette as palette
+    post=Mock();monkeypatch.setattr(palette.requests,'post',post)
+    with pytest.raises(ValueError):palette.match_logo(picture(),picture(),'key','code','wrong')
+    post.assert_not_called()
+    post.side_effect=palette.requests.Timeout('PRIVATE')
+    with pytest.raises(ValueError,match='自動再試行'):palette.match_logo(picture(),picture(),'key','code','code')
+    assert post.call_count==1
+    post.reset_mock();post.side_effect=None;post.return_value=Mock(status_code=429,text='PRIVATE')
+    with pytest.raises(ValueError,match='利用枠'):palette.match_logo(picture(),picture(),'key','code','code')
+    post.assert_called_once()
+
+
+def test_logo_palette_ui_previews_then_saves_explicitly_and_blocks_stale(app_test,monkeypatch):
+    from tests.conftest import select_tab
+    from views.workspace import TAB_FLYER
+    from views import logo_palette as view
+    from services import asset_service
+    from models.asset import AssetView
+    monkeypatch.setattr(view,'_settings',lambda:('key','code'))
+    match=Mock(return_value=dict(data=picture(),color='#e4a637',brightness=100,reason='金色'))
+    monkeypatch.setattr(view.palette,'match_logo',match)
+    read=Mock(return_value=picture());monkeypatch.setattr(asset_service,'read_image_asset',read)
+    upload=Mock(return_value=AssetView(id=98766,name='配色ロゴ',image_filename='matched.png'))
+    monkeypatch.setattr(asset_service,'upload_image_asset',upload)
+    at=app_test.run()
+    label=next(x for x in at.selectbox(key='ws_project_selector_label').options if x not in ('(選択してください)','➕ 新規プロジェクト作成'))
+    at.selectbox(key='ws_project_selector_label').select(label).run();select_tab(at,TAB_FLYER)
+    prefix=f"logo_palette_{at.session_state['ws_active_project_id']}"
+    at.session_state['flyer_logo_id']=11;at.session_state['flyer_bg_id']=12;at.run()
+    match.assert_not_called();upload.assert_not_called();read.assert_not_called()
+    at.text_input(key=prefix+'_code').input('wrong').run()
+    at.button(key=prefix+'_generate').click().run()
+    match.assert_not_called();read.assert_not_called()
+    at.text_input(key=prefix+'_code').input('code').run()
+    at.button(key=prefix+'_generate').click().run()
+    assert not at.exception
+    match.assert_called_once();assert read.call_count==2;upload.assert_not_called()
+    at.text_input(key=prefix+'_name').input('金ロゴ').run()
+    match.assert_called_once()
+    at.session_state['flyer_bg_id']=13;at.run()
+    assert not any(b.key==prefix+'_save' for b in at.button)
+    at.session_state['flyer_bg_id']=12;at.run()
+    at.button(key=prefix+'_save').click().run()
+    assert not at.exception
+    upload.assert_called_once();assert at.session_state['flyer_logo_id']==98766
+    assert at.button(key=prefix+'_save').disabled
+    at.run();upload.assert_called_once();match.assert_called_once()
