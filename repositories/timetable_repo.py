@@ -101,7 +101,7 @@ def _row_to_draft(r: TimetableRow) -> TimetableRowDraft:
         is_post_goods=bool(r.is_post_goods),
         is_hidden=bool(getattr(r, "is_hidden", False)),
         goods_start_time=r.goods_start_time or "",
-        goods_duration=int(r.goods_duration or 60),
+        goods_duration=int(r.goods_duration if r.goods_duration is not None else 60),
         place=r.place or "",
         add_goods_start_time=r.add_goods_start_time or "",
         add_goods_duration=(int(r.add_goods_duration) if r.add_goods_duration is not None else None),
@@ -118,7 +118,7 @@ def _draft_to_row(project_id: int, sort_order: int, d: TimetableRowDraft) -> Tim
         is_post_goods=bool(d.is_post_goods),
         adjustment=int(d.adjustment or 0),
         goods_start_time=d.goods_start_time,
-        goods_duration=int(d.goods_duration or 60),
+        goods_duration=int(d.goods_duration if d.goods_duration is not None else 60),
         place=d.place,
         add_goods_start_time=d.add_goods_start_time,
         add_goods_duration=d.add_goods_duration,
@@ -164,3 +164,11 @@ def find_projects_by_artist_name(db: Session, name: str) -> List[tuple]:
     if not clean:
         return []
     return list(_query(TimetableRow.artist_name.ilike("%%%s%%" % clean)))
+
+
+def add_new_project_rows(db: Session, project_id: int, drafts: List[TimetableRowDraft]) -> None:
+    """Insert-only path for a newly staged project; never replace existing rows."""
+    if db.query(TimetableRow).filter(TimetableRow.project_id == project_id).first() is not None:
+        raise ValueError("rows already exist")
+    db.add_all([_draft_to_row(project_id, index, row) for index, row in enumerate(drafts)])
+    db.flush()

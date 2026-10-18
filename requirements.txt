@@ -16,3 +16,6 @@ streamlit-image-coordinates==0.4.0
 
 # Local text-layer timetable PDF import (no external OCR service).
 pypdf==6.21.1
+
+# AI production: Excel extraction without executing workbook formulas.
+openpyxl==3.1.5

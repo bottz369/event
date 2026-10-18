@@ -134,6 +134,9 @@ def _autogenerate_previews_if_needed() -> None:
 def render_workspace_page():
     st.title("🚀 プロジェクト・ワークスペース")
 
+    from views import auto_production
+    auto_production.render()
+
     # プロジェクト選択 UI
     _render_project_selector()
 

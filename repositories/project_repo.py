@@ -405,3 +405,14 @@ def reassign_grid_orders(db: Session, old_name: str, new_name: str) -> int:
             f"reassign_grid_orders: project_id={proj.id} {old_name!r} -> {new_name!r}"
         )
     return changed
+
+
+def stage_new_draft(db: Session, draft: ProjectDraft) -> TimetableProject:
+    """Stage a new complete project; caller owns the single transaction."""
+    if draft.id is not None:
+        raise ValueError("new draft required")
+    project = TimetableProject()
+    apply_draft(project, draft)
+    db.add(project)
+    db.flush()
+    return project
