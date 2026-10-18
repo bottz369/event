@@ -93,3 +93,23 @@ def upload_image_asset(data: bytes, original_name: str, asset_type: str, name: s
         raise ValueError("アセットの登録に失敗しました。再度お試しください。") from exc
     finally:
         db.close()
+
+
+def read_image_asset(asset_id):
+    """Fetch an existing asset only on an explicit studio preview action."""
+    import requests
+    from database import get_image_url
+    asset = get_asset_view(asset_id)
+    if not asset or not asset.image_filename:
+        raise ValueError("現在選択中の素材がありません。基本設定で素材を選択してください。")
+    try:
+        with requests.get(get_image_url(asset.image_filename), timeout=(10, 30), stream=True) as response:
+            response.raise_for_status()
+            data = bytearray()
+            for chunk in response.iter_content(65536):
+                data.extend(chunk)
+                if len(data) > IMAGE_UPLOAD_LIMIT:
+                    raise ValueError("画像は20MB以下で選択してください。")
+            return bytes(data)
+    except requests.RequestException as exc:
+        raise ValueError("選択中の素材を読み込めませんでした。再度お試しください。") from exc

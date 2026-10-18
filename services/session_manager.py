@@ -437,6 +437,7 @@ def clear_project_session() -> None:
         "flyer_",
         "eventfmt_",
         "event_format_preview",
+        "image_studio_",
     )
     for key in list(st.session_state.keys()):
         if isinstance(key, str) and key.startswith(dynamic_prefixes):

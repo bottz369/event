@@ -442,6 +442,9 @@ def render_flyer_editor(project_id):
                         else:
                             st.error("同名のテンプレートが存在します")
 
+        from views import image_studio
+        image_studio.render()
+
         with st.expander("🖼️ 基本設定", expanded=True):
             render_visual_selector("背景画像", bgs, "flyer_bg_id", st.session_state.flyer_bg_id)
             render_asset_upload("背景画像", "background", "flyer_bg_id")
