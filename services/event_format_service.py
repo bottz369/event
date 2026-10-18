@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from PIL import Image, ImageDraw, ImageFont
 
-from models.event_format import active_parts, options, schedule, validate, draft_rows
+from models.event_format import active_parts, options, schedule, validate, draft_rows, grid_layout, grid_row_counts
 
 
 def _font(path, size):
@@ -43,14 +43,21 @@ def _part_grid(part, width, font_path, failures):
     rows = [r for r in rows if not r.is_grid_hidden and not r.is_special_row]
     rows.sort(key=lambda r: r.grid_no if r.grid_no is not None else float("inf"))
     artists = artist_service.resolve_artists_in_order([r.artist_name for r in rows], failures=failures)
+    layout = grid_layout(part)
+    counts = grid_row_counts(layout)
+    grid_font = font_path
+    if layout["font"]:
+        from services import font_service
+        grid_font = font_service.ensure_font_path(layout["font"]) or font_path
     image = None
     if artists:
-        counts = [min(5, len(artists) - i) for i in range(0, len(artists), 5)]
-        image = generate_grid_image(artists, "", font_path=font_path, row_counts=counts,
-                                    alignment="left", failures=failures)
+        image = generate_grid_image(artists, "", font_path=grid_font, row_counts=counts,
+                                    is_brick_mode=layout["layout_mode"] == "レンガ (サイズ統一)",
+                                    alignment={"左揃え": "left", "中央揃え": "center", "右揃え": "right"}.get(layout["alignment"], "left"),
+                                    failures=failures)
     if image:
         image = image.convert("RGBA")
-        target_width = round((width - 40) * min(5, len(artists)) / 5)
+        target_width = width - 40 if part.get("grid_settings") else round((width - 40) * min(5, len(artists)) / 5)
         image = image.resize((target_width, max(1, round(image.height * target_width / image.width))))
     height = 160 + (image.height if image else 100)
     out = Image.new("RGBA", (width, height))

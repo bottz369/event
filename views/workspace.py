@@ -195,6 +195,8 @@ def render_workspace_page():
     if event_format.config().get("enabled") and active_tab != TAB_OVERVIEW:
         if active_tab == TAB_TT:
             event_format.render_editor()
+        elif active_tab == TAB_GRID:
+            event_format.render_grid_editor()
         elif active_tab == TAB_FLYER:
             render_flyer_editor(active_id)
             return

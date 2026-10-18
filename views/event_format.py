@@ -187,6 +187,92 @@ def render_editor():
                                    for r in calculated]), height="content", hide_index=True)
 
 
+def _grid_change(index, field, key):
+    from models.event_format import grid_layout
+    cfg = config()
+    layout = grid_layout(cfg["parts"][index])
+    layout[field] = st.session_state[key]
+    cfg["parts"][index]["grid_settings"] = layout
+    _put(cfg)
+
+
+def _grid_reset(index):
+    cfg = config()
+    cfg["parts"][index]["grid_settings"] = dict(rows=5, row_counts="5,5,5,5,5",
+        layout_mode="レンガ (サイズ統一)", alignment="中央揃え", font="keifont.ttf")
+    _put(cfg)
+    prefix = f"eventfmt_grid_{session_manager.get_active_project_id()}_{index}_"
+    for field, value in cfg["parts"][index]["grid_settings"].items():
+        st.session_state[prefix + field] = value
+
+
+def render_grid_editor():
+    from models.event_format import grid_layout, grid_row_counts
+    from services import font_service
+    cfg = config()
+    labels = [p["name"] or f"{i + 1}部" for i, p in enumerate(active_parts(cfg))]
+    index = st.radio("編集する部", range(len(labels)), format_func=lambda i: labels[i],
+                     horizontal=True, key=f"eventfmt_selected_{session_manager.get_active_project_id()}")
+    part = cfg["parts"][index]
+    layout = grid_layout(part)
+    prefix = f"eventfmt_grid_{session_manager.get_active_project_id()}_{index}_"
+    def field(label, name, fn, *args, **kwargs):
+        key = prefix + name
+        if key not in st.session_state:
+            st.session_state[key] = layout[name]
+        return fn(label, *args, key=key, on_change=_grid_change,
+                  args=(index, name, key), **kwargs)
+    st.subheader(labels[index] + "のアー写グリッド")
+    a, b = st.columns([1, 2])
+    with a:
+        field("行数", "rows", st.number_input, min_value=1, step=1)
+    with b:
+        st.button("レイアウト設定をリセット", key=prefix + "reset",
+                  on_click=_grid_reset, args=(index,))
+    field("各行の枚数設定 (カンマ区切り)", "row_counts", st.text_input,
+          help="例: 3,4,6。指定した行数に足りない分は5枚、余った出演者は予備行に表示します。")
+    with st.expander("📐 レイアウト調整 (揃え・モード)", expanded=True):
+        mode = field("配置モード", "layout_mode", st.radio,
+                     ["レンガ (サイズ統一)", "両端揃え (拡大縮小)"], horizontal=True)
+        field("行の配置 (レンガモード時)", "alignment", st.radio,
+              ["左揃え", "中央揃え", "右揃え"], horizontal=True,
+              disabled=mode == "両端揃え (拡大縮小)")
+    fonts = font_service.list_sorted_fonts()
+    names = [f["filename"] for f in fonts]
+    labels_by_font = {f["filename"]: f["name"] for f in fonts}
+    # Empty means the existing timetable font, preserving old projects on first view.
+    field("プレビュー用フォント", "font", st.selectbox,
+          list(dict.fromkeys(["", layout["font"], *names])),
+          format_func=lambda f: labels_by_font.get(f, f) if f else "タイムテーブルと同じ")
+    with st.expander("🔤 フォント一覧見本を表示"):
+        if st.button("フォント見本を表示", key=prefix + "specimen"):
+            image = font_service.build_specimen(sorted(fonts, key=lambda f: f["filename"].lower()))
+            if image:
+                st.image(image, width="stretch")
+    st.caption("並び順・非表示は、各部のタイムテーブルの「アー写順」「アー写非表示」で設定できます。変更後はプロジェクトを保存してください。")
+    try:
+        counts = grid_row_counts(grid_layout(config()["parts"][index]))
+    except ValueError as error:
+        st.error(str(error))
+        return
+    artists = [r for r in draft_rows(part) if not r.is_grid_hidden and not r.is_special_row]
+    artists.sort(key=lambda r: r.grid_no if r.grid_no is not None else float("inf"))
+    names = [r.artist_name for r in artists]
+    preview = []
+    offset = 0
+    while offset < len(names):
+        row_index = len(preview)
+        capacity = counts[row_index] if row_index < len(counts) else 5
+        chunk = names[offset:offset + capacity]
+        preview.append({"行": f"行{row_index + 1}" if row_index < len(counts) else "予備",
+                        "枚数": f"{len(chunk)}/{capacity}", "並び (左 → 右)": " / ".join(chunk)})
+        offset += len(chunk)
+    if preview:
+        st.dataframe(pd.DataFrame(preview), height="content", hide_index=True)
+    else:
+        st.info("この部には表示対象のアーティストがいません。")
+
+
 def signature():
     import json
     draft = session_manager.get_draft_project()

@@ -74,6 +74,11 @@ def validate(config):
                 datetime.strptime(part["post_start"], "%H:%M")
             except (ValueError, TypeError):
                 errors.append(f"{name}: 終演後特典会の開始は HH:MM で入力してください。")
+        if part.get("grid_settings"):
+            try:
+                grid_row_counts(grid_layout(part))
+            except (ValueError, TypeError):
+                errors.append(f"{name}: 各行の枚数は1以上の整数をカンマ区切りで入力してください。")
         for row in part.get("rows", []):
             if not str(row.get("ARTIST", "")).strip():
                 errors.append(f"{name}: 出演者名が空の行があります。")
@@ -116,3 +121,25 @@ def schedule(part):
             extra_end = extra + timedelta(minutes=int(row.get("ADD_GOODS_DURATION") or 0))
             row["goods"] += f" / {extra:%H:%M}–{extra_end:%H:%M}"
     return result, post
+
+
+def grid_layout(part):
+    """Resolve optional per-part layout without altering older saved artwork."""
+    saved = part.get("grid_settings") or {}
+    if not saved:
+        count = sum(not r.is_grid_hidden and not r.is_special_row for r in draft_rows(part))
+        return dict(rows=max(1, (count + 4) // 5),
+                    row_counts=",".join(str(min(5, count - i)) for i in range(0, count, 5)) or "5",
+                    layout_mode="レンガ (サイズ統一)", alignment="左揃え", font="")
+    return dict(rows=saved.get("rows", 5), row_counts=saved.get("row_counts", "5,5,5,5,5"),
+                layout_mode=saved.get("layout_mode", "レンガ (サイズ統一)"),
+                alignment=saved.get("alignment", "左揃え"), font=saved.get("font", ""))
+
+
+def grid_row_counts(layout):
+    """Match requested row count; the renderer retains overflow artists."""
+    rows = max(1, int(layout["rows"]))
+    counts = [int(x.strip()) for x in layout["row_counts"].split(",") if x.strip()]
+    if not counts or any(x < 1 for x in counts):
+        raise ValueError("各行の枚数は1以上の整数をカンマ区切りで入力してください。")
+    return (counts + [5] * max(0, rows - len(counts)))[:rows]

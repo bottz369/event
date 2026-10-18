@@ -510,3 +510,81 @@ def test_hide_transition_checkbox_persists_per_part_without_touching_minutes(app
     assert parts[0]["hide_transitions"] is True
     assert parts[0]["rows"][0]["ADJUSTMENT"] == 5
     assert parts[1]["hide_transitions"] is False
+
+
+def test_multipart_grid_layout_defaults_and_row_count_validation():
+    from models.event_format import grid_layout, grid_row_counts
+    part = new_part(0, rows=[row(str(i)) for i in range(8)])
+    assert grid_row_counts(grid_layout(part)) == [5, 3]
+    assert "grid_settings" not in part
+    part["grid_settings"] = dict(rows=3, row_counts="3,4", alignment="右揃え")
+    assert grid_row_counts(grid_layout(part)) == [3, 4, 5]
+    part["grid_settings"]["rows"] = 1
+    assert grid_row_counts(grid_layout(part)) == [3]
+    for invalid in ("0,3", "-1", "abc", ""):
+        part["grid_settings"]["row_counts"] = invalid
+        assert validate(dict(enabled=True, count=1, parts=[part]))
+
+
+@pytest.mark.parametrize("mode,brick", [("レンガ (サイズ統一)",True),("両端揃え (拡大縮小)",False)])
+def test_multipart_grid_renderer_uses_layout_and_retains_all_artists(monkeypatch, mode, brick):
+    from PIL import Image
+    from services import artist_service, event_format_service, font_service
+    import logic_grid
+    captured = {}
+    monkeypatch.setattr(artist_service, "resolve_artists_in_order", lambda names, **kw: names)
+    monkeypatch.setattr(font_service, "ensure_font_path", lambda name: "/chosen-font.ttf")
+    monkeypatch.setattr(event_format_service, "_text", lambda *args, **kw: None)
+    def generate(artists, directory, **kwargs):
+        captured.update(artists=artists, **kwargs)
+        return Image.new("RGBA", (400, 200))
+    monkeypatch.setattr(logic_grid, "generate_grid_image", generate)
+    part = new_part(0, rows=[row("B",GRID_NO=2),row("A",GRID_NO=1),row("hidden",GRID_HIDDEN=True),row("C")])
+    part["grid_settings"] = dict(rows=1,row_counts="2,6",layout_mode=mode,alignment="右揃え",font="custom.ttf")
+    before = deepcopy(part)
+    image = event_format_service._part_grid(part, 1000, "fallback.ttf", [])
+    assert captured["artists"] == ["A", "B", "C"]
+    assert captured["row_counts"] == [2]
+    assert captured["is_brick_mode"] is brick
+    assert captured["alignment"] == "right"
+    assert captured["font_path"] == "/chosen-font.ttf"
+    assert image.size == (1000,640)
+    assert part == before
+
+
+def test_multipart_grid_editor_edits_parts_independently_and_survives_tab_switch(app_test):
+    from tests.conftest import select_tab
+    from views.workspace import TAB_GRID, TAB_TT
+    at = app_test.run()
+    label = next(x for x in at.selectbox(key="ws_project_selector_label").options
+                 if x not in ("(選択してください)", "➕ 新規プロジェクト作成"))
+    at.selectbox(key="ws_project_selector_label").select(label).run()
+    draft = at.session_state["draft_project"]
+    normal = deepcopy(draft.grid_settings)
+    draft.settings[KEY] = dict(enabled=True,initialized=True,count=2,
+        parts=[new_part(0,rows=[row()]),new_part(1,rows=[row("B")])])
+    at.session_state["draft_project"] = draft
+    select_tab(at,TAB_GRID)
+    prefix = f"eventfmt_grid_{draft.id}_0_"
+    at.number_input(key=prefix+"rows").set_value(2).run()
+    at.text_input(key=prefix+"row_counts").input("3,2").run()
+    at.radio(key=prefix+"alignment").set_value("右揃え").run()
+    at.radio(key=prefix+"layout_mode").set_value("両端揃え (拡大縮小)").run()
+    assert at.radio(key=prefix+"alignment").disabled
+    selected = f"eventfmt_selected_{draft.id}"
+    at.radio(key=selected).set_value(1).run()
+    assert at.number_input(key=f"eventfmt_grid_{draft.id}_1_rows").value == 1
+    select_tab(at,TAB_TT)
+    select_tab(at,TAB_GRID)
+    at.radio(key=selected).set_value(0).run()
+    assert not at.exception
+    assert at.text_input(key=prefix+"row_counts").value == "3,2"
+    current = at.session_state["draft_project"]
+    assert current.grid_settings == normal
+    saved = options(json.loads(json.dumps(current.settings)))
+    assert saved["parts"][0]["grid_settings"]["rows"] == 2
+    assert "grid_settings" not in saved["parts"][1]
+    at.button(key=prefix+"reset").click().run()
+    assert not at.exception
+    assert at.number_input(key=prefix+"rows").value == 5
+    assert at.radio(key=prefix+"alignment").value == "中央揃え"
