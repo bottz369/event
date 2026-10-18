@@ -1,5 +1,4 @@
 """Preview PDF imports before replacing the optional multipart draft. No DB writes."""
-from copy import deepcopy
 import hashlib
 
 import pandas as pd
@@ -9,20 +8,40 @@ from models.event_format import schedule
 from services import session_manager
 
 
-def apply_preview(result):
+def apply_preview(result, indices=None):
     from views import event_format
     config = event_format.config()
-    parts = deepcopy(result["parts"])
-    if not 2 <= len(parts) <= 6:
-        raise ValueError("2〜6部の読み取り結果を選択してください。")
-    config.update(enabled=True, initialized=True, count=len(parts), parts=parts)
+    from services.timetable_pdf_service import select_parts, normal_rows_from_part
+    from models.event_format import new_part
+    parts = select_parts(result, range(len(result["parts"])) if indices is None else indices)
+    if len(parts) == 1:
+        part = parts[0]
+        draft = session_manager.get_draft_project()
+        draft.open_time = part["open_time"]
+        draft.start_time = part["start_time"]
+        draft.goods_start_offset = int(part.get("goods_offset") or 0)
+        session_manager.set_draft_project(draft)
+        session_manager.set_draft_rows(normal_rows_from_part(part))
+        st.session_state.tt_open_time = draft.open_time
+        st.session_state.tt_start_time = draft.start_time
+        st.session_state.tt_goods_offset = draft.goods_start_offset
+        from views.timetable import _bump_editor_seq
+        _bump_editor_seq()
+        st.session_state.request_calc = False
+        st.session_state.tt_unsaved_changes = True
+        config.update(enabled=False, initialized=False, count=2,
+                      parts=[new_part(0), new_part(1)])
+    else:
+        config.update(enabled=True, initialized=True, count=len(parts), parts=parts)
     event_format._put(config)
     pid = session_manager.get_active_project_id()
     # Callback runs before widgets are recreated; imported times replace old widget values.
     for key in list(st.session_state):
-        if key.startswith((f"eventfmt_{pid}_", f"eventfmt_rows_{pid}_", f"eventfmt_revision_{pid}_")) or key == f"eventfmt_selected_{pid}":
+        if key.startswith((f"eventfmt_{pid}_", f"eventfmt_rows_{pid}_", f"eventfmt_revision_{pid}_", f"eventfmt_grid_{pid}_")) or key == f"eventfmt_selected_{pid}":
             st.session_state.pop(key, None)
     st.session_state.pop("event_format_preview", None)
+    for key in ("last_generated_grid_image", "last_generated_tt_image", "flyer_result_grid", "flyer_result_tt"):
+        st.session_state.pop(key, None)
     st.toast("PDFの構成を下書きに反映しました。確認後、上の保存ボタンで保存してください。")
 
 
@@ -52,7 +71,12 @@ def render():
         if cached.get("digest") != digest:
             return
         result = cached["result"]
-        for part in result["parts"]:
+        st.caption("読み込む部にチェックを入れてください。1部だけなら通常イベント、2部以上なら複数部イベントとして反映します。")
+        selected = []
+        for index, part in enumerate(result["parts"]):
+            if st.checkbox(f"{part['name']}を読み込む", value=True,
+                           key=f"eventfmt_pdf_select_{pid}_{digest}_{index}"):
+                selected.append(index)
             st.markdown(f"**{part['name']}：OPEN {part['open_time']} / START {part['start_time']}**")
             rows, _ = schedule(part)
             st.dataframe(pd.DataFrame([dict(アーティスト=r["ARTIST"], 開始=r["start"], 終了=r["end"],
@@ -67,6 +91,12 @@ def render():
         if result["unmatched"]:
             st.warning("登録名と一致しない出演者：" + "、".join(result["unmatched"]) +
                        "。名前はそのまま取り込みます。アー写は登録・名前の修正後に反映できます。")
-        st.caption("反映すると現在の複数部構成を置き換えます。通常公演のデータ・料金・画像設定は保持します。DBへの保存は上の「プロジェクトを保存する」で行います。")
+        if len(selected) == 1:
+            st.info("選択した1部を通常イベントとして取り込みます。現在の通常タイムテーブルを置き換えます。")
+        elif selected:
+            st.info(f"選択した{len(selected)}部を複数部イベントとして取り込みます。現在の複数部構成を置き換え、通常タイムテーブルは保持します。")
+        else:
+            st.warning("読み込む部を1つ以上選択してください。")
+        st.caption("料金・画像設定は保持します。DBへの保存は上の「プロジェクトを保存する」で行います。")
         st.button("確認した内容をタイムテーブルに反映する", key=f"btn_pdf_apply_{pid}",
-                  on_click=apply_preview, args=(result,))
+                  on_click=apply_preview, args=(result, selected), disabled=not selected)

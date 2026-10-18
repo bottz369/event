@@ -116,3 +116,91 @@ def test_pdf_preview_requires_apply_and_preserves_normal_rows_and_styles(app_tes
     assert draft.tickets == before.tickets
     assert at.text_input(key=f"eventfmt_{pid}_0_start_time").value == "10:30"
     assert at.checkbox(key=f"eventfmt_{pid}_None_enabled").value is True
+
+
+def test_select_pdf_parts_excludes_unchecked_and_preserves_source_order(layout):
+    from services.timetable_pdf_service import select_parts
+    result = parse_layout(layout)
+    third = deepcopy(result['parts'][1])
+    third['name'] = '3部'
+    result['parts'].append(third)
+    original = deepcopy(result)
+    assert [p['name'] for p in select_parts(result, [2, 0])] == ['1部', '3部']
+    assert [p['name'] for p in select_parts(result, [1])] == ['2部']
+    for indices in ([], [-1], [3]):
+        with pytest.raises(ValueError):
+            select_parts(result, indices)
+    assert result == original
+
+
+def test_single_pdf_part_adapts_post_goods_without_changing_times(layout):
+    from services.timetable_pdf_service import normal_rows_from_part
+    from services.timetable_service import build_tt_gen_list_from_rows
+    part = parse_layout(layout)['parts'][1]
+    before = deepcopy(part)
+    rows = normal_rows_from_part(part)
+    assert rows[0].goods_start_time == '18:25'
+    assert rows[0].goods_duration == 90
+    assert rows[-1].is_post_goods_row
+    data = build_tt_gen_list_from_rows(rows, part['open_time'], part['start_time'])
+    assert data[0][0] == '17:50 - 18:15'
+    assert data[-1][2] == '18:25 - 19:55'
+    assert part == before
+
+
+@pytest.mark.parametrize('selected', [[0], [1], [0,2]])
+def test_pdf_checkboxes_apply_only_selected_parts_and_use_normal_for_one(app_test, layout, monkeypatch, selected):
+    import hashlib
+    from tests.conftest import select_tab
+    from views.workspace import TAB_TT, TAB_GRID
+    from services import timetable_pdf_service as service
+    from views import pdf_import
+    result = parse_layout(layout)
+    third = deepcopy(result['parts'][1])
+    third['name'] = '3部'
+    third['rows'][0]['ARTIST'] = 'Third'
+    result['parts'].append(third)
+    monkeypatch.setattr(pdf_import.st, 'file_uploader', lambda *a, **k:
+        type('Upload', (), {'getvalue': lambda self: b'fixture'})())
+    monkeypatch.setattr(service, 'read_pdf', lambda data: deepcopy(result))
+    at = app_test.run()
+    label = next(x for x in at.selectbox(key='ws_project_selector_label').options
+                 if x not in ('(選択してください)', '➕ 新規プロジェクト作成'))
+    at.selectbox(key='ws_project_selector_label').select(label).run()
+    select_tab(at, TAB_TT)
+    pid = at.session_state['ws_active_project_id']
+    before = deepcopy(at.session_state['draft_project'])
+    normal = deepcopy(at.session_state['draft_rows'])
+    at.button(key=f'btn_pdf_parse_{pid}').click().run()
+    digest = hashlib.sha256(b'fixture').hexdigest()
+    for i in range(3):
+        at.checkbox(key=f'eventfmt_pdf_select_{pid}_{digest}_{i}').uncheck().run()
+    assert at.button(key=f'btn_pdf_apply_{pid}').disabled
+    assert at.session_state['draft_rows'] == normal
+    for i in selected:
+        at.checkbox(key=f'eventfmt_pdf_select_{pid}_{digest}_{i}').check().run()
+    at.button(key=f'btn_pdf_apply_{pid}').click().run()
+    assert not at.exception
+    draft = at.session_state['draft_project']
+    cfg = draft.settings[KEY]
+    assert cfg['enabled'] is (len(selected) > 1)
+    assert draft.tickets == before.tickets
+    assert draft.flyer_settings == before.flyer_settings
+    if len(selected) == 1:
+        part = result['parts'][selected[0]]
+        assert draft.open_time == part['open_time']
+        assert draft.start_time == part['start_time']
+        rows = at.session_state['draft_rows']
+        assert [r.artist_name for r in rows if not r.is_special_row] == [r['ARTIST'] for r in part['rows']]
+        assert at.session_state['tt_start_time'] == part['start_time']
+        if selected == [1]:
+            assert rows[-1].goods_start_time == '18:25'
+            assert rows[-1].goods_duration == 90
+        select_tab(at, TAB_GRID)
+        assert at.number_input(key='grid_rows')
+    else:
+        assert [p['name'] for p in cfg['parts']] == ['1部','3部']
+        assert at.session_state['draft_rows'] == normal
+        assert cfg['count'] == 2
+    at.run()
+    assert not at.exception

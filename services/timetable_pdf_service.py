@@ -201,3 +201,29 @@ def match_artists(result, registered_names):
                 unmatched.append(row["ARTIST"])
     result["unmatched"] = list(dict.fromkeys(unmatched))
     return result
+
+
+def select_parts(result, indices):
+    """Select source indices in PDF order, without changing the parsed preview."""
+    selected = set(indices)
+    if not selected or any(not isinstance(i, int) or i < 0 or i >= len(result["parts"]) for i in selected):
+        raise ValueError("読み込む部を1つ以上選択してください。")
+    if len(selected) > 6:
+        raise ValueError("読み込む部は6部以内で選択してください。")
+    return [deepcopy(part) for i, part in enumerate(result["parts"]) if i in selected]
+
+
+def normal_rows_from_part(part):
+    """Adapt one selected part to the normal editor, preserving explicit goods times."""
+    from models.timetable import POST_GOODS_ARTIST_NAME
+    from models.event_format import draft_rows
+    rows = draft_rows(part)
+    _, post_start = schedule(part)
+    for row in rows:
+        if row.is_post_goods:
+            row.goods_start_time = post_start
+            row.goods_duration = int(part.get("post_duration") or 0)
+    if any(row.is_post_goods for row in rows):
+        rows.append(TimetableRowDraft(artist_name=POST_GOODS_ARTIST_NAME, duration=0,
+            goods_start_time=post_start, goods_duration=int(part.get("post_duration") or 0), place=""))
+    return rows
