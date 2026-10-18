@@ -367,8 +367,8 @@ def calculate_timetable_flow(df, open_time, start_time):
         final_place_display = ""
         
         if is_post_goods:
-            place = safe_str(row["PLACE"])
-            final_goods_display = "終演後物販"
+            place = safe_str(row["PLACE"]).strip()
+            final_goods_display = f"終演後物販 ({place})" if place else "終演後物販"
             final_place_display = "" 
         else:
             goods_start = safe_str(row["GOODS_START_MANUAL"])

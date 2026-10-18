@@ -77,7 +77,9 @@ def timetable_rows(part):
             places += " / " + str(row.get("ADD_GOODS_PLACE") or "")
         goods = row["goods"].replace("–", " - ")
         if row.get("IS_POST_GOODS"):
-            goods, places = "終演後物販", ""
+            location = str(row.get("PLACE") or "").strip()
+            goods = f"終演後物販 ({location})" if location else "終演後物販"
+            places = ""
         result.append((f"{row['start']} - {row['end']}", row["ARTIST"], goods, places))
         if int(row.get("ADJUSTMENT") or 0) and not part.get("hide_transitions", False):
             result.append((f"{row['end']} - {row['change_end']}",

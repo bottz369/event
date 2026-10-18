@@ -460,29 +460,31 @@ def test_hiding_transitions_changes_only_display_not_performance_or_goods_times(
     assert timetable_rows(part) == shown
 
 
-def test_post_goods_artist_shows_label_but_summary_keeps_times_and_source_unchanged():
+@pytest.mark.parametrize("location,label", [("B","終演後物販 (B)"),("C","終演後物販 (C)"),("","終演後物販"),("  ","終演後物販")])
+def test_post_goods_artist_shows_label_but_summary_keeps_times_and_source_unchanged(location,label):
     from services.event_format_service import timetable_rows
-    part=new_part(0,rows=[row("A",IS_POST_GOODS=True,PLACE="B",
+    part=new_part(0,rows=[row("A",IS_POST_GOODS=True,PLACE=location,
                             GOODS_START_MANUAL="12:00",ADD_GOODS_START="13:00",
                             ADD_GOODS_DURATION=30,ADD_GOODS_PLACE="C"),row("B")])
     part.update(post_start="16:00",post_duration=90)
     original=deepcopy(part)
     rows=timetable_rows(part)
-    assert rows[0] == ("10:30 - 10:50","A","終演後物販","")
+    assert rows[0] == ("10:30 - 10:50","A",label,"")
     assert rows[1][2] == "11:20 - 12:20"
     assert rows[-1] == ("16:00 - 17:30","終演後物販","","")
     assert part == original
     assert schedule(part)[0][0]["goods"] == "16:00–17:30 / 13:00–13:30"
 
 
-def test_normal_post_goods_label_has_no_artist_side_time_or_location():
+@pytest.mark.parametrize("location,label", [("B","終演後物販 (B)"),("C","終演後物販 (C)"),("","終演後物販"),("  ","終演後物販")])
+def test_normal_post_goods_label_includes_only_artist_location(location,label):
     from services.timetable_service import build_tt_gen_list_from_rows
-    artist=TimetableRowDraft(artist_name="A",is_post_goods=True,place="B",goods_start_time="16:00")
-    summary=TimetableRowDraft(artist_name="終演後物販",duration=0,goods_start_time="16:00",goods_duration=90)
+    artist=TimetableRowDraft(artist_name="A",is_post_goods=True,place=location,goods_start_time="16:00")
+    summary=TimetableRowDraft(artist_name="終演後物販",duration=0,place="まとめ行には表示しない",goods_start_time="16:00",goods_duration=90)
     rows=build_tt_gen_list_from_rows([artist,summary],"10:00","10:30")
-    assert rows[0][2:] == ["終演後物販",""]
-    assert rows[1][2] == "16:00 - 17:30"
-    assert artist.place == "B"
+    assert rows[0][2:] == [label,""]
+    assert rows[1][2:] == ["16:00 - 17:30",""]
+    assert artist.place == location
     assert artist.goods_start_time == "16:00"
 
 
