@@ -70,7 +70,7 @@ def _asset_select(label,kind,key):
 
 def _image_source(kind,prefix):
     label='背景' if kind=='background' else 'ロゴ'
-    choices=['AIで新しく作る','アセットから選ぶ','画像をアップロード','指定なし'] if kind=='background' else ['アセットから選ぶ','画像をアップロード','イベント名をロゴにする']
+    choices=['AIで新しく作る','アセットから選ぶ','画像をアップロード','指定なし'] if kind=='background' else ['標準ロゴを使う','アセットから選ぶ','画像をアップロード','イベント名をロゴにする']
     mode=st.selectbox(label+'の用意方法',choices,key=prefix+'_mode')
     asset_id=0;data=None
     if mode=='アセットから選ぶ':asset_id=_asset_select(label+'素材',kind,prefix+'_asset')
@@ -145,7 +145,8 @@ def render():
                 parts.append(part)
         if not parts:st.warning('制作対象の部を1つ以上選んでください。')
         st.caption('1部だけなら通常イベント、2部以上なら複数部イベントとして作成します。')
-        names=list(dict.fromkeys(str(r.get('artist') or '') for p in parts for r in p.get('rows',[]) if r.get('artist')))
+        performance_names=[str(r.get('artist') or '') for p in parts for r in p.get('rows',[]) if r.get('artist')]
+        names=list(dict.fromkeys(performance_names+[str(n) for n in event.get('artists',[]) if n]))
         registered=[a.name for a in artist_service.list_artists()]
         aliases=production.match_names(names,registered)
         for name in names:
@@ -156,10 +157,11 @@ def render():
         confirmed=st.checkbox('日付・料金・出演順・時刻・名前の確認事項を確認しました',key=prefix+'_confirmed')
         st.subheader('② フライヤーのイメージ')
         design=st.text_area('希望するデザイン',key='autoprod_design',max_chars=2000,placeholder='赤いお祭り風。ロゴは金色。提灯と花火を周囲に。')
-        palette=st.selectbox('背景の色合い',['赤・朱色・金','青・紺・金','黒・金','ピンク・紫','指示に合わせる'],key='autoprod_palette')
+        palette=st.selectbox('背景の色合い',['指示に合わせる','赤・朱色・金','青・紺・金','黒・金','ピンク・紫'],key='autoprod_palette')
         bg=_image_source('background',prefix+'_bg')
         reference=st.file_uploader('背景の参考画像（AI生成時・任意）',type=['png','jpg','jpeg','webp'],key=prefix+'_reference') if bg['mode']=='AIで新しく作る' else None
         logo=_image_source('logo',prefix+'_logo')
+        st.caption('標準ロゴは登録済みのBASICを使用します。背景の希望とロゴの選択・色は別々に指定できます。')
         logo_tint=st.selectbox('ロゴの色',['元の色','背景に合わせる',*image_studio.PALETTES],key=prefix+'_logo_tint')
         current=digest(dict(event=event,parts=parts,aliases=aliases,transitions=show_transitions,design=design,palette=palette,
             bg={**bg,'data':bytes_hash(bg['data'])},logo={**logo,'data':bytes_hash(logo['data'])},tint=logo_tint,
@@ -181,7 +183,11 @@ def render():
                             bg_data=image_studio.generate_background(design,palette,api_key,access_code,code,reference.getvalue() if reference else None)
                             state.update(bg_hash=bg_hash,bg_data=bg_data)
                     logo_data=logo['data']
-                    if logo['mode']=='アセットから選ぶ' and logo['asset_id']:logo_data=asset_service.read_image_asset(logo['asset_id'])
+                    if logo['mode']=='標準ロゴを使う':
+                        logo_data=production.read_default_logo()
+                    elif logo['mode']=='アセットから選ぶ':
+                        if not logo['asset_id']:raise ValueError('ロゴ素材を選択してください。')
+                        logo_data=asset_service.read_image_asset(logo['asset_id'])
                     elif logo['mode']=='画像をアップロード' and not logo_data:raise ValueError('ロゴ画像を選択してください。')
                     if not logo_data:
                         from services import font_service

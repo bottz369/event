@@ -252,3 +252,70 @@ def test_failed_commit_blocks_repeat_inserts_and_reuses_registered_assets(monkey
     assert draft.flyer_settings['bg_id']==7 and draft.flyer_settings['logo_id']==8
     view._create('reviewed')
     upload.assert_called_once();save.assert_called_once()
+
+
+def test_exact_spelling_wins_while_ambiguous_case_variants_still_require_review():
+    registered=['One last bloom','One last Bloom','One Last Bloom']
+    assert production.match_names(['One last bloom','ONE LAST BLOOM'],registered)=={'One last bloom':'One last bloom'}
+
+
+def test_27_artist_input_keeps_overview_order_two_gaps_and_pre_live_goods():
+    e=event();e['artists']=[f'Artist {i}' for i in range(27)]
+    e['artists'][0]='Short name'
+    p=part();p['rows']=[]
+    minute=630
+    for i in range(27):
+        fmt=lambda n:f'{n//60:02d}:{n%60:02d}'
+        row=deepcopy(part()['rows'][0])
+        row.update(artist=f'Artist {i}',start=fmt(minute),end=fmt(minute+20),goods_start='09:00',goods_end='10:00')
+        p['rows'].append(row)
+        minute+=20+(5 if i in (8,16) else 0)
+    draft,rows=production.compile_plan(e,[p],{'Short name':'Artist 0'})
+    assert len(rows)==27
+    assert [i for i,r in enumerate(rows) if r.adjustment]==[8,16]
+    assert sum(r.adjustment for r in rows)==10
+    assert draft.grid_settings['row_counts_str']=='5,5,5,6,6'
+    assert draft.grid_settings['order']==[f'Artist {i}' for i in range(27)]
+    assert rows[0].goods_start_time=='09:00'
+
+
+def test_three_ticket_lines_and_drink_note_fit_finished_canvas(monkeypatch):
+    from services import font_service,artist_service
+    import logic_grid,logic_timetable
+    import utils.flyer_generator as compositor
+    from constants import FONT_DIR
+    from pathlib import Path
+    path=str(Path(FONT_DIR)/'keifont.ttf')
+    if not Path(path).exists():pytest.skip('font unavailable')
+    monkeypatch.setattr(font_service,'ensure_font_path',lambda _:path)
+    monkeypatch.setattr(artist_service,'resolve_artists_in_order',lambda names,**kw:names)
+    monkeypatch.setattr(logic_grid,'generate_grid_image',lambda *a,**kw:Image.new('RGBA',(1000,600),'gray'))
+    monkeypatch.setattr(logic_timetable,'generate_timetable_image',lambda *a,**kw:Image.new('RGBA',(3600,2400),'gray'))
+    original=compositor.draw_text_with_shadow
+    captured=[]
+    def draw(canvas,text,*args,**kwargs):
+        bounds=kwargs.setdefault('layout_bounds',{})
+        height=original(canvas,text,*args,**kwargs)
+        if text=='※各ドリンク代別':captured.append(dict(bounds))
+        return height
+    monkeypatch.setattr(compositor,'draw_text_with_shadow',draw)
+    e=event();e.update(free_viewing=False,ticket_common_note='※各ドリンク代別',tickets=[
+        dict(name='Sチケット',price='¥6,000',note='前方エリア、指定グループ静止画撮影可能'),
+        dict(name='Aチケット',price='¥2,000',note='撮影不可'),dict(name='当日',price='各+¥1,000',note='')])
+    draft,rows=production.compile_plan(e,[part()])
+    package=production.render_package(draft,rows)
+    # Each variant is measured twice before its final rendering.
+    for bounds in (captured[2],captured[5]):assert 1100<bounds['top']<bounds['bottom']<1330
+    assert package['draft'].flyer_settings['ticket_gap']<0
+
+
+def test_default_logo_uses_only_unique_exact_basic_asset(monkeypatch):
+    from services import asset_service
+    assets=[SimpleNamespace(id=1,name='ROCKFIELD ULTRA LIVE - BASIC'),SimpleNamespace(id=2,name='OTHER')]
+    monkeypatch.setattr(asset_service,'list_assets_by_type',lambda kind:assets)
+    read=Mock(return_value=b'original-logo');monkeypatch.setattr(asset_service,'read_image_asset',read)
+    assert production.read_default_logo()==b'original-logo'
+    read.assert_called_once_with(1)
+    assets.append(SimpleNamespace(id=3,name='ROCKFIELD ULTRA LIVE - BASIC'))
+    with pytest.raises(ValueError):production.read_default_logo()
+    assert read.call_count==1

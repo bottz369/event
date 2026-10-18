@@ -36,8 +36,9 @@ def duration(start,end):
 def match_names(names,registered):
     table={}
     for name in registered: table.setdefault(normalized(name),set()).add(name)
-    return {name:next(iter(table[normalized(name)])) for name in names
-            if len(table.get(normalized(name),set()))==1}
+    exact=set(registered)
+    return {name:(name if name in exact else next(iter(table[normalized(name)]))) for name in names
+            if name in exact or len(table.get(normalized(name),set()))==1}
 
 
 def compile_plan(event,raw_parts,aliases=None,show_transitions=False):
@@ -106,6 +107,10 @@ def compile_plan(event,raw_parts,aliases=None,show_transitions=False):
              parts=parts if len(parts)>1 else [new_part(0),new_part(1)],
              free_viewing=event.get('free_viewing') is True,free_text=str(event.get('free_text') or ''),
              free_notices=str(event.get('free_notices') or ''))
+    count=len(build_grid_order_from_rows(rows))
+    grid_rows=min(5,max(1,math.ceil(count/5)))
+    per_row,remainder=divmod(count,grid_rows)
+    row_counts=[per_row]*(grid_rows-remainder)+[per_row+1]*remainder
     draft=ProjectDraft(title=event['event_name'].strip(),subtitle=str(event.get('subtitle') or ''),event_date=event_date,
         venue_name=event['venue'].strip(),venue_url=str(event.get('venue_url') or ''),
         open_time=first['open_time'],start_time=first['start_time'],goods_start_offset=0,
@@ -113,9 +118,18 @@ def compile_plan(event,raw_parts,aliases=None,show_transitions=False):
         ticket_notes=[event['ticket_common_note']] if event.get('ticket_common_note') else [],
         free_texts=[FreeTextDraft(title=str(t.get('title') or ''),content=str(t.get('body') or '')) for t in event.get('free_texts',[])],
         settings={'tt_font':'keifont.ttf','grid_font':'keifont.ttf','tt_columns':2,KEY:cfg},
-        grid_settings={'order':build_grid_order_from_rows(rows),'rows':5,'row_counts_str':'5,5,5,5,5',
+        grid_settings={'order':build_grid_order_from_rows(rows),'rows':grid_rows,'row_counts_str':','.join(map(str,row_counts)),
                        'layout_mode':'レンガ (サイズ統一)','alignment':'中央揃え'})
     return draft,rows
+
+
+def read_default_logo():
+    from services import asset_service
+    assets=[a for a in asset_service.list_assets_by_type('logo')
+            if a.name=='ROCKFIELD ULTRA LIVE - BASIC']
+    if len(assets)!=1:
+        raise ValueError('標準ロゴを一意に選択できません。アセットからロゴを選んでください。')
+    return asset_service.read_image_asset(assets[0].id)
 
 
 def title_logo(title,font_path):
@@ -152,21 +166,23 @@ def render_package(draft,rows,background=None,logo=None):
         for variant in ('grid','tt'): sources[variant]=event_format_service.render(project,variant,failures=failures)
     else:
         artists=artist_service.resolve_artists_in_order(build_grid_order_from_rows(rows),failures=failures)
-        sources['grid']=generate_grid_image(artists,'',font_path=font,row_counts=[5]*20,failures=failures)
-        sources['tt']=generate_timetable_image(build_tt_gen_list_from_rows(rows,project.open_time,project.start_time),font_path=font,columns=2,failures=failures)
+        counts=[int(n) for n in project.grid_settings['row_counts_str'].split(',')]
+        sources['grid']=generate_grid_image(artists,'',font_path=font,row_counts=counts,failures=failures)
+        tt_rows=build_tt_gen_list_from_rows(rows,project.open_time,project.start_time)
+        sources['tt']=generate_timetable_image(tt_rows,font_path=font,columns=2,failures=failures)
     styles={e.short_key:e.default for e in FLYER_KEY_REGISTRY if e.persist}
     styles.update(logo_scale=min(1.65, 235/(432*logo_image.height/logo_image.width)),logo_pos_y=0.0,footer_pos_y=600,subtitle_size=38,date_size=56,
                   venue_size=32,time_size=36,ticket_name_size=30,ticket_note_size=17,
-                  ticket_gap=8,note_gap=4,area_gap=22,free_viewing_size=50,free_note_size=24,free_notice_size=17)
+                  ticket_gap=-30,note_gap=0,area_gap=22,free_viewing_size=50,free_note_size=24,free_notice_size=17)
     results={};metadata={}
     for variant,source in sources.items():
         if source is None: raise ValueError('出演者の画像を生成できませんでした。')
         # Fit the image into the content area without stretching faces or type.
-        width_pct=min(94,max(10,round(480*source.width/(1080*source.height)*100)))
+        width_pct=min(94,max(10,round(560*source.width/(1080*source.height)*100)))
         height_pct=width_pct
         target_h=source.height*(1080/source.width)*(height_pct/100)
         # Put the main image below header; ticket block starts independently at 1100.
-        position=round(675-(590+target_h/2))
+        position=round(675-(510+target_h/2))
         styles.update({f'{variant}_scale_w':width_pct,f'{variant}_scale_h':height_pct,f'{variant}_pos_y':position})
         render_styles={**styles,'event_multipart':cfg['enabled'],'event_free_viewing':cfg.get('free_viewing',False),
             'event_free_text':cfg.get('free_text',''),'event_free_notices':cfg.get('free_notices',''),
@@ -178,11 +194,14 @@ def render_package(draft,rows,background=None,logo=None):
             open_time=project.open_time,start_time=project.start_time,ticket_info_list=[t.to_dict() for t in project.tickets],
             common_notes_list=project.ticket_notes,system_fallback_filename=font,failures=failures)
         _,meta=create_flyer_image_shadow(**args)
-        for field,y in (('subtitle',300),('date',365),('venue',455),('time',510)):
+        for field,y in (('subtitle',300),('date',380),('venue',455),('time',380)):
             if field in meta:
                 offset=round(meta[field]['base_y']-y)
                 render_styles[field+'_pos_y']=offset
                 styles[field+'_pos_y']=offset
+        if not cfg['enabled']:
+            render_styles.update(date_pos_x=-230,venue_pos_x=-230,time_pos_x=265)
+            styles.update(date_pos_x=-230,venue_pos_x=-230,time_pos_x=265)
         _,meta=create_flyer_image_shadow(**args)
         ticket_shift=round(meta['ticket_name']['base_y']-1100)
         render_styles.update(ticket_name_pos_y=ticket_shift,ticket_note_pos_y=ticket_shift)
