@@ -44,7 +44,19 @@ def load_rows(db: Session, project_id: int) -> List[TimetableRowDraft]:
         rows = []
 
     if rows:
-        return [_row_to_draft(r) for r in rows]
+        drafts = [_row_to_draft(r) for r in rows]
+        proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()
+        try:
+            settings = json.loads(proj.settings_json or "{}") if proj else {}
+            flags = settings.get("comingsoon_rows", [])
+            for entry in flags:
+                index = entry.get("index")
+                if isinstance(index, int) and 0 <= index < len(drafts):
+                    row = drafts[index]
+                    row.is_comingsoon = entry.get("artist") == row.artist_name and not row.is_special_row
+        except (ValueError, TypeError, AttributeError):
+            logger.warning("Invalid comingsoon metadata for project %s", project_id)
+        return drafts
 
     # フォールバック: 旧 data_json から読み込む(読み込みのみ・保存しない)
     proj = db.query(TimetableProject).filter(TimetableProject.id == project_id).first()

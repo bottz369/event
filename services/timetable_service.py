@@ -73,6 +73,6 @@ def build_tt_gen_list_from_rows(
         if is_hidden:
             continue
 
-        gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
+        gen_list.append([row["TIME_DISPLAY"], "comingsoon" if rows[row_idx - 1].is_comingsoon and not rows[row_idx - 1].is_special_row else row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
 
     return gen_list

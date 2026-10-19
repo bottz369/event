@@ -1561,6 +1561,18 @@ def handle_event(event: dict, config: BotConfig) -> None:
     # Keep private image-wait state separate from the owner's group requests.
     pending_user = "dm:" + user_id if direct else user_id
 
+    # Existing-project edits use exactly the ordinary owner/group authorization.
+    if event_type in ("message", "postback") and (direct or _is_group_active(group_id)):
+        from bot import comingsoon
+        if event_type == "postback":
+            if comingsoon.handle(event, config):
+                return
+        elif message.get("type") == "text":
+            mentions = ((message.get("mention") or {}).get("mentionees")) or []
+            if direct or is_self_mentioned(mentions):
+                if comingsoon.handle(event, config, strip_self_mentions(message.get("text", ""), mentions)):
+                    return
+
     if direct:
         from bot import auto_production
         if auto_production.handle(event, config):

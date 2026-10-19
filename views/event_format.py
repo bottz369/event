@@ -168,6 +168,7 @@ def render_editor():
                    hide_index=False, on_change=_rows_changed, args=(key, index),
                    column_config={
                        "ORDER": st.column_config.NumberColumn("出演順", min_value=1, step=1),
+                       "COMINGSOON": st.column_config.CheckboxColumn("comingsoon"),
                        "ARTIST": st.column_config.TextColumn("アーティスト", required=True),
                        "DURATION": st.column_config.NumberColumn("出演（分）", min_value=0, step=1),
                        "ADJUSTMENT": st.column_config.NumberColumn("転換（分）", min_value=0, step=1),

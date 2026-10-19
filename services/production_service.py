@@ -189,7 +189,8 @@ def render_package(draft,rows,background=None,logo=None,template=None):
     if cfg['enabled']:
         for variant in ('grid','tt'): sources[variant]=event_format_service.render(project,variant,failures=failures)
     else:
-        artists=artist_service.resolve_artists_in_order(build_grid_order_from_rows(rows),failures=failures)
+        from services.comingsoon import resolve_public_artists
+        artists=resolve_public_artists(build_grid_order_from_rows(rows), rows, failures=failures)
         counts=[int(n) for n in project.grid_settings['row_counts_str'].split(',')]
         grid_font=font_service.ensure_font_path(project.settings.get('grid_font') or 'keifont.ttf')
         tt_font=font_service.ensure_font_path(project.settings.get('tt_font') or 'keifont.ttf')
@@ -306,6 +307,8 @@ def persist_new_project(draft,rows,images=None):
     from repositories import project_repo,timetable_repo
     if draft.id is not None: raise ValueError('新規プロジェクト専用です。既存データは上書きしません。')
     draft=deepcopy(draft)
+    draft.settings['comingsoon_rows'] = [dict(index=i, artist=r.artist_name)
+                                        for i, r in enumerate(rows) if r.is_comingsoon and not r.is_special_row]
     if images is not None:
         from services.project_previews import KEY as PREVIEW_KEY, prepare
         draft.flyer_settings[PREVIEW_KEY]=prepare(images)

@@ -273,7 +273,7 @@ def build_gen_list_from_draft():
         idx += 1
         if is_hidden:
             continue
-        gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
+        gen_list.append([row["TIME_DISPLAY"], "comingsoon" if rows[idx - 1].is_comingsoon and not rows[idx - 1].is_special_row else row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
     return gen_list
 
 
@@ -739,6 +739,7 @@ def render_timetable_page():
                         "タイムテーブル非表示", width="small",
                         help="タイムテーブル画像から消します。アー写グリッドには影響しません。",
                     ),
+                    "COMINGSOON": st.column_config.CheckboxColumn("comingsoon"),
                     "ARTIST": st.column_config.TextColumn("アーティスト", disabled=True),
                     "GRID_NO": st.column_config.NumberColumn(
                         "アー写グリッド表示順", width="small", min_value=1, step=1,
@@ -880,7 +881,7 @@ def render_timetable_page():
                 if is_hidden:
                     continue
                 
-                gen_list.append([row["TIME_DISPLAY"], row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
+                gen_list.append([row["TIME_DISPLAY"], "comingsoon" if bool(edited_df.iloc[edited_row_idx - 1].get("COMINGSOON", False)) and row["ARTIST"] not in ("開演前物販", "終演後物販") else row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
 
             st.session_state.tt_gen_list = gen_list
             

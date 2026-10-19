@@ -219,7 +219,9 @@ def _render_grid_image_for_project(
 
         # #4: artists に無い名前も枠として残す(未登録は C-6a の黒プレースホルダ)。
         # 落とすと出演者のセルごと消えて「TT にはいるのにグリッドに出ない」になる。
-        artists = artist_service.resolve_artists_in_order(order, failures=failures)
+        from services.comingsoon import resolve_public_artists
+        from services.timetable_service import get_rows_for_project
+        artists = resolve_public_artists(order, get_rows_for_project(project_id), failures=failures)
         if not artists:
             return None
 

@@ -163,3 +163,12 @@ python3 -m pytest tests/test_bot_line.py -v
 ```bash
 .venv/bin/python -m pytest tests/test_bot_line.py tests/test_bot_flow.py tests/test_bot_intake.py tests/test_bot_api.py tests/test_bot_auto_production.py -q
 ```
+
+### 既存プロジェクトの comingsoon 編集
+
+個人トークではオーナー本人、起動済みグループではBotへのメンションで利用できます。
+「comingsoonにする」「comingsoonを解除する」でイベント→出演枠をボタンで選び、
+「確定して画像を更新」を押すと保存・再生成します。
+「花いろはをcomingsoonにして」「花いろはのcomingsoonを解除して」のような完全一致の名前指定も可能です。
+複数部の出演枠は部ごとに選択します。選択は本人・トークに紐づき、10分で失効します。
+元の登録名とアー写は保持し、解除すると戻ります。

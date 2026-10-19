@@ -555,7 +555,10 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                     # Phase 3 P2: 並列取得済みの image_cache から取り出し (出力不変・get_image_url/load_image_from_url の直列呼び出しを置換)
                     img = image_cache.get(target_artist.id)
                 
-                if img:
+                if getattr(target_artist, "is_comingsoon", False):
+                    from services.comingsoon import placeholder
+                    cropped = placeholder(TILE_WIDTH, TILE_HEIGHT, valid_font_path)
+                elif img:
                     # DB値の読み込み
                     crop_scale = getattr(target_artist, 'crop_scale', 1.0) or 1.0
                     crop_x = getattr(target_artist, 'crop_x', 0) or 0

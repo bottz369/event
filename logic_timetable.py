@@ -160,7 +160,7 @@ def _prefetch_tt_images(timetable_data, db, target_size=None, failures=None):
       DB N+1 解消は別タスク。
     """
     from database import Artist, get_image_url
-    SKIP_NAMES = {"OPEN / START", "開演前物販", "終演後物販"}
+    SKIP_NAMES = {"OPEN / START", "開演前物販", "終演後物販", "comingsoon"}
 
     # 1. name_str → url を集める (DBクエリ + URL生成は直列)
     name_to_url = {}
@@ -295,7 +295,7 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
     row_img = Image.new('RGBA', (int(row_width), int(row_height)), (0, 0, 0, 0))
     has_image = False
 
-    if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販"]:
+    if name_str and name_str not in ["OPEN / START", "開演前物販", "終演後物販", "comingsoon"]:
         try:
             from database import Artist, get_image_url
             artist = db.query(Artist).filter(Artist.name == name_str, Artist.is_deleted == False).first()
@@ -332,7 +332,7 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
     if has_image:
         overlay_color = (0, 0, 0, OVERLAY_OPACITY)
     else:
-        overlay_color = (40, 40, 40, 230)
+        overlay_color = (0, 0, 0, 255) if name_str == "comingsoon" else (40, 40, 40, 230)
 
     overlay = Image.new('RGBA', (int(row_width), int(row_height)), overlay_color)
     

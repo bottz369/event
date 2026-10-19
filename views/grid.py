@@ -44,7 +44,8 @@ def regenerate_grid_preview():
     # #4: 未登録の名前も枠として残す(黒プレースホルダで可視化)。
     # repo 直呼びをやめ service を通す(3層規律)。
     _unresolved = []
-    target_artists = artist_service.resolve_artists_in_order(order, failures=_unresolved)
+    from services.comingsoon import resolve_public_artists
+    target_artists = resolve_public_artists(order, session_manager.get_draft_rows(), failures=_unresolved)
     if not target_artists:
         st.warning("表示するアーティストデータがありません。")
         return False

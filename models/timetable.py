@@ -69,6 +69,7 @@ class TimetableRowDraft:
     # 「🔄 設定反映」の保存直前に build_grid_hidden_from_rows が名前列へ変換する。
     # ★ grid_no と同じく保存内容を左右するため _rows_to_comparable に含める。
     is_grid_hidden: bool = False
+    is_comingsoon: bool = False  # Public display only; retain registered identity.
 
     # ----- 判定ヘルパー -----
     @property
@@ -123,6 +124,7 @@ class TimetableRowDraft:
             duration=_to_int(d.get("DURATION") or d.get("duration"), 20),
             adjustment=_to_int(d.get("ADJUSTMENT") or d.get("adjustment"), 0),
             is_post_goods=bool(d.get("IS_POST_GOODS") or d.get("is_post_goods") or False),
+            is_comingsoon=str(d.get("COMINGSOON", d.get("is_comingsoon", False))).lower() in ("true", "1"),
             is_hidden=bool(d.get("IS_HIDDEN") or d.get("is_hidden") or False),
             # 列を持たない旧 dict (data_json fallback / CSV 取込) は False。
             # 既存プロジェクトの移行は session_manager.reload_project の seed が担う
@@ -154,6 +156,7 @@ class TimetableRowDraft:
             # UI 専用列。DB へは書き出されず、draft_rows_to_df 経由で
             # data_editor に渡すためだけに存在する(models の is_delete_marked)。
             "DELETE": self.is_delete_marked,
+            "COMINGSOON": self.is_comingsoon,
             "ARTIST": self.artist_name,
             # UI 専用列。DB へは書き出されず、保存時に
             # build_grid_order_from_rows で grid_order_json["order"] へ畳まれる。
@@ -188,6 +191,7 @@ class TimetableRowDraft:
 TIMETABLE_DF_COLUMNS: list[str] = [
     "DELETE",
     "IS_HIDDEN",
+    "COMINGSOON",
     "ARTIST",
     "GRID_NO",
     "GRID_HIDDEN",
@@ -391,6 +395,7 @@ _DF_KEY_TO_DRAFT_KEY = {
     "ADD_GOODS_DURATION": "add_goods_duration",
     "ADD_GOODS_PLACE": "add_goods_place",
     "IS_HIDDEN": "is_hidden",
+    "COMINGSOON": "is_comingsoon",
 }
 
 

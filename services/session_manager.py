@@ -516,7 +516,7 @@ def _rows_to_comparable(rows: List[TimetableRowDraft]):
     """
     return tuple(
         (
-            r.artist_name, r.duration, r.adjustment, r.is_post_goods, r.is_hidden,
+            r.artist_name, r.duration, r.adjustment, r.is_post_goods, r.is_hidden, r.is_comingsoon,
             r.goods_start_time, r.goods_duration, r.place,
             r.add_goods_start_time, r.add_goods_duration, r.add_goods_place,
             r.grid_no,

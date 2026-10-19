@@ -192,9 +192,8 @@ def apply_draft(
     Draft の内容を ORM オブジェクトに反映する(commit はしない)。
     DB スキーマには手を入れない方針なので、JSON カラムへの書き戻しはここで行う。
 
-    rows 引数は過去の data_json 同時書き出しの名残で、現在は未使用
-    (Phase 4 で data_json 書き出しを撤去。引数は呼び出し側互換のため残置、
-     Phase 6 の整理で削除予定)。
+    rows が指定された場合は comingsoon の表示フラグを settings_json に保存する。
+    data_json の書き出しは行わない。
 
     flyer_json は既存 JSON と draft.flyer_settings をマージする
     (init_s 由来の動的キーが消失するのを防ぐ)。
@@ -212,7 +211,13 @@ def apply_draft(
     proj.tickets_json = json.dumps([t.to_dict() for t in draft.tickets], ensure_ascii=False)
     proj.ticket_notes_json = json.dumps(list(draft.ticket_notes), ensure_ascii=False)
     proj.free_text_json = json.dumps([f.to_dict() for f in draft.free_texts], ensure_ascii=False)
-    proj.settings_json = json.dumps(draft.settings, ensure_ascii=False)
+    saved_settings = dict(draft.settings)
+    if rows is not None:
+        saved_settings["comingsoon_rows"] = [
+            {"index": i, "artist": r.artist_name} for i, r in enumerate(rows)
+            if r.is_comingsoon and not r.is_special_row
+        ]
+    proj.settings_json = json.dumps(saved_settings, ensure_ascii=False)
     proj.grid_order_json = json.dumps(draft.grid_settings, ensure_ascii=False)
 
     # --- flyer_json: 既存値と draft.flyer_settings をマージ ---
@@ -272,7 +277,7 @@ def update_project_from_draft(
 ) -> bool:
     """
     Draft の内容で既存プロジェクトを更新。
-    rows 引数は過去互換の名残で現在は未使用(Phase 4 で data_json 書き出しを撤去)。
+    rows が指定された場合は comingsoon の表示フラグも保存する。
     """
     if draft.id is None:
         logger.error("update_project_from_draft: draft.id is None")

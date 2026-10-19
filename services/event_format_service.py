@@ -42,7 +42,8 @@ def _part_grid(part, width, font_path, failures):
     rows = draft_rows(part)
     rows = [r for r in rows if not r.is_grid_hidden and not r.is_special_row]
     rows.sort(key=lambda r: r.grid_no if r.grid_no is not None else float("inf"))
-    artists = artist_service.resolve_artists_in_order([r.artist_name for r in rows], failures=failures)
+    from services.comingsoon import resolve_public_artists
+    artists = resolve_public_artists([r.artist_name for r in rows], rows, failures=failures)
     layout = grid_layout(part)
     counts = grid_row_counts(layout)
     grid_font = font_path
@@ -87,7 +88,7 @@ def timetable_rows(part):
             location = str(row.get("PLACE") or "").strip()
             goods = f"終演後物販 ({location})" if location else "終演後物販"
             places = ""
-        result.append((f"{row['start']} - {row['end']}", row["ARTIST"], goods, places))
+        result.append((f"{row['start']} - {row['end']}", "comingsoon" if row.get("COMINGSOON") else row["ARTIST"], goods, places))
         if int(row.get("ADJUSTMENT") or 0) and not part.get("hide_transitions", False):
             result.append((f"{row['end']} - {row['change_end']}",
                            part.get("transition_label") or "転換", "", ""))

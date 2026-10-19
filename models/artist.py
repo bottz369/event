@@ -23,3 +23,4 @@ class ArtistView:
     crop_scale: float
     crop_x: int
     crop_y: int
+    is_comingsoon: bool = False
