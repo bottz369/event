@@ -128,9 +128,17 @@ def analyze(overview,document_text,api_key,access_code,supplied_code):
         raise ValueError('利用コードを確認してください。')
     if not overview.strip() or len(overview)>20001 or not document_text.strip() or len(document_text)>MAX_TEXT:
         raise ValueError('概要と訂正は合計20000文字以内、資料は1〜60000文字で入力してください。')
-    payload=dict(model=TEXT_MODEL,messages=[dict(role='system',content=SYSTEM),
+    from services.production_table import single_table
+    table=single_table(document_text)
+    if table and len(table['rows'])>100:
+        raise ValueError(f'Excelに{len(table["rows"])}出演行あります。対応は合計100出演行までです。')
+    schema=_obj(dict(event=EVENT_SCHEMA,questions=_arr(S),warnings=_arr(S))) if table else SCHEMA
+    instructions=SYSTEM
+    if table:
+        instructions+='\nThe app has strictly extracted ONE session from named Excel columns. Return event, questions, warnings only. Do not re-extract timetable parts or rows; the app will insert source rows directly. Read event OPEN/START only from explicit overview facts.'
+    payload=dict(model=TEXT_MODEL,messages=[dict(role='system',content=instructions),
         dict(role='user',content=json.dumps(dict(overview=overview,timetable=document_text),ensure_ascii=False))],
-        response_format=dict(type='json_schema',json_schema=dict(name='concert_production',strict=True,schema=SCHEMA)),
+        response_format=dict(type='json_schema',json_schema=dict(name='concert_production',strict=True,schema=schema)),
         reasoning_effort='low',max_completion_tokens=14000)
     try:
         response=requests.post('https://api.openai.com/v1/chat/completions',json=payload,
@@ -146,7 +154,7 @@ def analyze(overview,document_text,api_key,access_code,supplied_code):
         if choice['finish_reason']!='stop' or choice['message'].get('refusal'):
             raise ValueError('資料を短くして再度お試しください。')
         result=json.loads(choice['message']['content'])
-        if not isinstance(result.get('event'),dict) or not isinstance(result.get('parts'),list): raise ValueError()
+        if not isinstance(result.get('event'),dict): raise ValueError()
     except (KeyError,IndexError,TypeError,ValueError) as exc:
         raise ValueError('解析結果を読み取れませんでした。資料を絞って再度お試しください。') from exc
     def valid(value,schema):
@@ -156,9 +164,15 @@ def analyze(overview,document_text,api_key,access_code,supplied_code):
         if kind=='array': return isinstance(value,list) and all(valid(v,schema['items']) for v in value)
         if kind=='boolean': return isinstance(value,bool)
         return isinstance(value,str)
-    if not valid(result,SCHEMA): raise ValueError('解析結果の項目が不正です。資料を絞って再度お試しください。')
-    if not 1<=len(result['parts'])<=6 or sum(len(p['rows']) for p in result['parts'])>100:
-        raise ValueError('AIおまかせ制作は1〜6部・合計100出演行以内です。資料を絞って再度お試しください。')
+    if not valid(result,schema): raise ValueError('解析結果の項目が不正です。資料を絞って再度お試しください。')
+    if table:result['parts']=[table]
+    part_count=len(result['parts']);row_count=sum(len(p['rows']) for p in result['parts'])
+    if not part_count:
+        raise ValueError('資料から公演の部・出演行を読み取れませんでした（0部）。100行超過ではありません。資料の列名と開始・終了時刻を確認してください。')
+    if part_count>6:
+        raise ValueError(f'解析結果が{part_count}部になっています。対応は6部までです。部の区切りを確認してください。')
+    if row_count>100:
+        raise ValueError(f'解析結果が{part_count}部・{row_count}出演行になっています。対応は合計100出演行までです。重複や別公演の混入を確認してください。')
     # Every performance must have a verbatim source excerpt. Block unsupported guesses.
     source=normalized(document_text)
     for part in result['parts']:
@@ -170,4 +184,5 @@ def analyze(overview,document_text,api_key,access_code,supplied_code):
     from services.production_normalization import normalize_event,normalize_parts
     result['event']=normalize_event(result['event'],overview)
     result['parts']=normalize_parts(result['parts'],result['event'],overview)
+    if table:result['warnings'].append(f'Excelの列名から{len(table["rows"])}出演行を直接読み取りました。調整行と無関係な列は取り込んでいません。')
     return result

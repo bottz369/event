@@ -325,3 +325,63 @@ def test_default_logo_uses_only_unique_exact_basic_asset(monkeypatch):
     assets.append(SimpleNamespace(id=3,name='ROCKFIELD ULTRA LIVE - BASIC'))
     with pytest.raises(ValueError):production.read_default_logo()
     assert read.call_count==1
+
+
+def table_text(count=27):
+    lines=['シート: Sheet1','START\tEND\tグループ名\t持ち時間\t物販開始\t物販終了\t物販時間\t物販場所\t']
+    for i in range(count):
+        start=600+i*20;end=start+20
+        clock=lambda n:f'{n//60:02d}:{n%60:02d}'
+        lines.append(f'{clock(start)}\t{clock(end)}\tArtist {i}\t20\t11:00\t12:00\t60\tA\t2026-11-21 00:00:00')
+    lines.insert(3,'10:20\t10:25\t調整\t5\t\t\t\t\t')
+    return '\n'.join(lines)
+
+
+def test_named_excel_columns_use_exact_source_rows_not_model_parts(monkeypatch):
+    from services.production_table import single_table
+    text=table_text();parsed=single_table(text)
+    assert len(parsed['rows'])==27
+    assert parsed['rows'][0]['artist']=='Artist 0' and parsed['rows'][-1]['artist']=='Artist 26'
+    assert parsed['rows'][0]['goods_start']=='11:00'
+    output=result();output.pop('parts');output['event']['open_time']='';output['event']['start_time']=''
+    response=Mock(status_code=200)
+    response.json.return_value={'choices':[{'finish_reason':'stop','message':{'content':json.dumps(output)}}]}
+    post=Mock(return_value=response);monkeypatch.setattr(intake.requests,'post',post)
+    answer=intake.analyze('OPEN▶09:30 START▶10:00',text,'key','code','code')
+    assert len(answer['parts'])==1 and len(answer['parts'][0]['rows'])==27
+    assert answer['parts'][0]['open_time']=='09:30' and answer['parts'][0]['start_time']=='10:00'
+    assert 'parts' not in post.call_args.kwargs['json']['response_format']['json_schema']['schema']['properties']
+    assert any('27出演行' in warning for warning in answer['warnings'])
+
+
+@pytest.mark.parametrize('change',[
+    lambda text:text+'\nシート: Sheet2',
+    lambda text:text.replace('START\tEND','第2部 START\tEND'),
+    lambda text:text.replace('物販場所\t','物販場所\t追加開始'),
+    lambda text:text.replace('11:00\t12:00','終演後物販\t12:00'),
+    lambda text:text.replace('10:00\t10:20','不明\t10:20'),
+])
+def test_ambiguous_or_unsupported_tables_keep_existing_ai_route(change):
+    from services.production_table import single_table
+    assert single_table(change(table_text())) is None
+
+
+@pytest.mark.parametrize('count,rows,expected',[(0,0,'0部'),(7,2,'7部'),(1,101,'101出演行')])
+def test_invalid_part_count_and_actual_row_limit_have_distinct_messages(monkeypatch,count,rows,expected):
+    output=result();output['parts']=[deepcopy(part()) for _ in range(count)]
+    if count:output['parts'][0]['rows']=[deepcopy(part()['rows'][0]) for _ in range(rows)]
+    response=Mock(status_code=200)
+    response.json.return_value={'choices':[{'finish_reason':'stop','message':{'content':json.dumps(output)}}]}
+    monkeypatch.setattr(intake.requests,'post',Mock(return_value=response))
+    with pytest.raises(ValueError,match=expected):intake.analyze('overview','source','key','code','code')
+
+
+def test_oversized_structured_table_is_rejected_before_paid_analysis(monkeypatch):
+    from services.production_table import single_table
+    text=table_text(1)
+    row=text.splitlines()[2]
+    text+='\n'+'\n'.join([row]*100)
+    assert len(single_table(text)['rows'])==101
+    post=Mock();monkeypatch.setattr(intake.requests,'post',post)
+    with pytest.raises(ValueError,match='101出演行'):intake.analyze('overview',text,'key','code','code')
+    post.assert_not_called()
