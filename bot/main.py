@@ -1552,6 +1552,13 @@ def handle_event(event: dict, config: BotConfig) -> None:
     # Keep private image-wait state separate from the owner's group requests.
     pending_user = "dm:" + user_id if direct else user_id
 
+    if direct:
+        from bot import auto_production
+        if auto_production.handle(event, config):
+            # Do not carry an older photo-replacement request across AI production.
+            pending_store.pop_valid(pending_user, time.time())
+            return
+
     # --- B-4: メンバー/ボット自身の出入り ---
     if event_type == "memberLeft":
         _handle_member_left(event, group_id, reply_token, config)
