@@ -280,3 +280,17 @@ def test_full_width_subtitle_is_not_mistaken_for_date_column(monkeypatch):
     assert meta['bounds']['time'][0]['top']>=meta['bounds']['subtitle'][0]['bottom']+8
     assert meta['bounds']['date'][0]['right']<meta['bounds']['time'][0]['left']
     assert abs(meta['bounds']['date'][0]['top']-meta['bounds']['time'][0]['top'])<2
+
+
+def test_saved_logo_near_top_edge_keeps_template_scale_and_position(render_sources):
+    from services.image_studio import png
+    p,rows=project()
+    template=recipe()
+    template.update(logo_scale=1.17,logo_pos_x=0.,logo_pos_y=3.)
+    logo=Image.new('RGBA',(1795,856),'white')
+    output=production.render_package(p,rows,logo=png(logo),template=template)
+    for meta in output['metadata'].values():
+        assert not layout.issues(meta)
+        assert meta['bounds']['logo'][0]['top'] < 20
+    for key in ('logo_scale','logo_pos_x','logo_pos_y'):
+        assert output['draft'].flyer_settings[key]==template[key]

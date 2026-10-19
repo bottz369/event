@@ -349,8 +349,9 @@ def test_buzz_logo_switches_position_and_preserves_rectangle_ratio(top_right):
     if top_right:
         assert result.getpixel((1079,1)) != bg.getpixel((1079,1))
         assert result.getpixel((1000,1250)) == bg.getpixel((1000,1250))
-        assert result.getpixel((840,81)) != bg.getpixel((840,81))
-        assert result.getpixel((840,83)) == bg.getpixel((840,83))
+        assert result.getpixel((960,40)) != bg.getpixel((960,40))
+        assert result.getpixel((960,41)) == bg.getpixel((960,41))
+        assert result.getpixel((959,1)) == bg.getpixel((959,1))
     else:
         assert result.getpixel((1000,1250)) != bg.getpixel((1000,1250))
         assert result.getpixel((1079,1)) == bg.getpixel((1079,1))

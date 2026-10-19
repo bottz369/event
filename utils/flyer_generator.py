@@ -703,7 +703,7 @@ def create_flyer_image_shadow(bg_source, logo_source, main_source, styles,
                     # preserving its proportions and omitting the small footer tagline.
                     w, h = buzz_img.size
                     wordmark = buzz_img.crop((0, round(h * .33), w, round(h * .67)))
-                    logo_w = 240
+                    logo_w = 120
                     logo_h = round(wordmark.height * logo_w / wordmark.width)
                     buzz_resized = wordmark.resize((logo_w, logo_h), Image.LANCZOS)
                 else:

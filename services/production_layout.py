@@ -55,7 +55,9 @@ def fit(args,zone=None,row_count=0,columns=2,grid_rows=0):
             b=group(key)
             if not b:continue
             if key=='logo':
-                if b['left']<20 or b['right']>1060 or b['top']<20:
+                # A saved logo may intentionally sit close to the canvas edge.
+                # Preserve its scale and offsets unless visible pixels leave it.
+                if b['left']<0 or b['right']>1080 or b['top']<0 or b['bottom']>1350:
                     styles['logo_scale']=max(.1,styles.get('logo_scale',1)*.9)
                     styles['logo_pos_x']=0.;styles['logo_pos_y']=0.;changed=True
             elif b['left']<20 or b['right']>1060:
