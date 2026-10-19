@@ -10,7 +10,8 @@ from services import artist_service
 # 画像処理ロジックの読み込み
 try:
     from logic_grid import (
-        load_image_from_url, crop_smart, create_no_image_placeholder
+        load_image_from_url, apply_manual_crop as grid_manual_crop,
+        TILE_WIDTH, TILE_HEIGHT, create_no_image_placeholder
     )
     HAS_LOGIC = True
 except ImportError:
@@ -18,37 +19,9 @@ except ImportError:
 
 # --- 手動トリミング用の関数 ---
 def apply_manual_crop(img, scale=1.0, x_off=0, y_off=0, target_w=400, target_h=225):
-    """画像を中心からトリミング・リサイズ・配置する関数"""
-    if not img: 
-        if 'create_no_image_placeholder' in globals():
-            return create_no_image_placeholder(target_w, target_h)
-        else:
-            return Image.new("RGB", (target_w, target_h), (50, 50, 50))
-
-    img_ratio = img.width / img.height
-    target_ratio = target_w / target_h
-
-    if img_ratio > target_ratio:
-        base_h = target_h
-        base_w = int(base_h * img_ratio)
-    else:
-        base_w = target_w
-        base_h = int(base_w / img_ratio)
-
-    final_w = max(1, int(base_w * scale))
-    final_h = max(1, int(base_h * scale))
-
-    resized_img = img.resize((final_w, final_h), Image.LANCZOS)
-    canvas = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 255))
-
-    paste_x = int((target_w - final_w) / 2 + x_off)
-    paste_y = int((target_h - final_h) / 2 + y_off)
-
-    if resized_img.mode != "RGBA":
-        resized_img = resized_img.convert("RGBA")
-    
-    canvas.paste(resized_img, (paste_x, paste_y), resized_img)
-    return canvas.convert("RGB")
+    """Use the generator's 800×450 coordinate space, then scale for display."""
+    return grid_manual_crop(img, scale, x_off, y_off, TILE_WIDTH, TILE_HEIGHT).resize(
+        (target_w, target_h), Image.LANCZOS)
 
 # 画像処理をキャッシュ化
 @st.cache_data(show_spinner=False)
@@ -62,12 +35,7 @@ def get_processed_thumbnail(image_filename, scale=1.0, x=0, y=0):
         if url:
             img = load_image_from_url(url)
             if img:
-                is_manual = (scale != 1.0) or (x != 0) or (y != 0)
-                if is_manual:
-                    return apply_manual_crop(img, scale, x, y, target_w, target_h)
-                else:
-                    cropped = crop_smart(img)
-                    return cropped.resize((target_w, target_h), Image.LANCZOS)
+                return apply_manual_crop(img, scale, x, y, target_w, target_h)
     
     return create_no_image_placeholder(target_w, target_h)
 
@@ -135,8 +103,7 @@ def render_artists_page():
                     cx = getattr(target_artist, 'crop_x', 0) or 0
                     cy = getattr(target_artist, 'crop_y', 0) or 0
                     
-                    thumb = get_processed_thumbnail(target_artist.image_filename, s, cx, cy)
-                    st.image(thumb, caption="現在の表示 (黒背景)", width='stretch')
+                    preview = st.empty()
 
                 # 右カラム: 編集コントロール
                 with c_edit:
@@ -166,8 +133,11 @@ def render_artists_page():
                                 if k in st.session_state: del st.session_state[k]
                             st.rerun()
 
-                    new_x = st.slider("左右 (X)", -200, 200, int(cx), 1, key=f"sx_{selected_id}")
-                    new_y = st.slider("上下 (Y)", -112, 112, int(cy), 1, key=f"sy_{selected_id}")
+                    new_x = st.slider("左右：← 左（−） ／ 右（＋）→", -200, 200, int(cx), 1, key=f"sx_{selected_id}")
+                    new_y = st.slider("上下：← 上（−） ／ 下（＋）→", -112, 112, int(cy), 1, key=f"sy_{selected_id}")
+
+                    preview.image(get_processed_thumbnail(target_artist.image_filename, new_scale, new_x, new_y),
+                        caption="アー写グリッドと同じ切り抜き（未保存の調整も表示）", width='stretch')
 
                     # 変更検知して保存ボタン
                     has_changed = (new_scale != s) or (new_x != cx) or (new_y != cy)
