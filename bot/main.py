@@ -11,8 +11,8 @@
 
 セキュリティ(§40 ガード原則):
 - 署名検証必須(X-Line-Signature = channel secret の HMAC-SHA256 → base64)。不一致は 400。
-- 実行は「(1)グループ発 (2)送信者 userId が OWNER_USER_IDS (3)テキストで自ボット宛メンション」を
-  全て満たす時のみ。DM は完全無視。
+- グループでは起動済み＋自ボット宛メンションが必須。
+- 個人トークは OWNER_USER_IDS の本人だけ許可し、メンション不要で同じ処理を使う。
 
 秘密情報はコードに持たない。全て環境変数から遅延読み込みする(bot/.env.example 参照)。
 """
@@ -1542,13 +1542,15 @@ def handle_event(event: dict, config: BotConfig) -> None:
     group_id = _source_group_id(source)
     user_id = source.get("userId")
 
-    # 共通ガード: グループ発 + 許可グループであること。DM は完全無視。
-    # ★段階B B-3(合意済み): 送信者が OWNER かどうかのゲートは撤去した。
-    #   許可グループの中なら誰でも使える。代わりに【テキストのトリガーは
-    #   自ボット宛メンション必須】(is_self_mentioned)を維持して誤爆を防ぐ。
-    #   config.owner_user_ids は互換のため残すが、ゲートには使わない。
-    if not _passes_group_guard(group_id, config):
+    # Private test conversations are owner-only. All ordinary group guards remain.
+    direct = source.get("type") == "user" and _is_owner(user_id, config)
+    if direct:
+        if event_type not in ("message", "postback"):
+            return
+    elif not _passes_group_guard(group_id, config):
         return
+    # Keep private image-wait state separate from the owner's group requests.
+    pending_user = "dm:" + user_id if direct else user_id
 
     # --- B-4: メンバー/ボット自身の出入り ---
     if event_type == "memberLeft":
@@ -1570,13 +1572,13 @@ def handle_event(event: dict, config: BotConfig) -> None:
     if event_type == "postback":
         # B-4: ボタンは有効グループにしか出さないが、念のため再チェックする
         # (古いボタンを無効化後に押された場合など)。
-        if not _is_group_active(group_id):
+        if not direct and not _is_group_active(group_id):
             reply_text(reply_token, MSG_NOT_ACTIVATED, config.channel_access_token)
             return
         parsed = parse_postback_data(((event.get("postback") or {}).get("data")) or "")
         if not parsed:
             return  # 不正 data は静かに無視
-        _handle_postback(parsed, reply_token, source.get("userId"), config)
+        _handle_postback(parsed, reply_token, pending_user, config)
         return
 
     msg_type = message.get("type")
@@ -1585,12 +1587,12 @@ def handle_event(event: dict, config: BotConfig) -> None:
 
     if msg_type == "text":
         mentionees = ((message.get("mention") or {}).get("mentionees")) or []
-        if not is_self_mentioned(mentionees):
+        if not direct and not is_self_mentioned(mentionees):
             return  # 自ボット宛でないテキストは無視
         cleaned = strip_self_mentions(message.get("text", ""), mentionees)
 
         # --- B-4: 起動制御を最上流で捌く ---
-        active = _is_group_active(group_id)
+        active = direct or _is_group_active(group_id)
         if _is_activation_request(cleaned):
             if active:
                 reply_text(reply_token, MSG_ALREADY_ACTIVE, config.channel_access_token)
@@ -1635,9 +1637,9 @@ def handle_event(event: dict, config: BotConfig) -> None:
         return
 
     if msg_type == "image":
-        if not _is_group_active(group_id):
+        if not direct and not _is_group_active(group_id):
             return  # 無効グループの画像は静かに無視(pending も持たないはず)
-        pending = pending_store.pop_valid(user_id, now)
+        pending = pending_store.pop_valid(pending_user, now)
         if not pending:
             return  # 直近の pending が無い画像は無視
         project_id, artist, mode = pending

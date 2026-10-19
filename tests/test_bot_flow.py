@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime
+from unittest.mock import Mock
 import json
 
 import pytest
@@ -1167,3 +1168,41 @@ def test_registration_runs_in_daemon_thread(monkeypatch):
     assert t.daemon is True
     t.join(timeout=5)
     assert len(done) == 1
+
+
+@pytest.mark.parametrize('text',['アー写変更','フライヤー','再生成','新規作成'])
+def test_owner_dm_matches_group_mention_reply(text,sent,stub_events,activation):
+    bm.handle_event(_text_event('@Bot '+text,user=OWNER),_cfg_b4())
+    expected=list(sent);sent.clear()
+    activation['active'].clear()
+    ev=_text_event(text,mentioned=False,user=OWNER)
+    ev['source']={'type':'user','userId':OWNER}
+    bm.handle_event(ev,_cfg_b4())
+    assert sent==expected and sent
+    assert not activation['active']
+
+
+@pytest.mark.parametrize('user',[USER,None,''])
+@pytest.mark.parametrize('kind',['text','postback','image'])
+def test_non_owner_private_events_are_ignored(user,kind,sent,activation):
+    event=(_text_event('フライヤー',mentioned=False) if kind=='text' else
+           _postback_event('evt|flow=get|pid=39') if kind=='postback' else _image_event())
+    event['source']={'type':'user','userId':user}
+    bm.handle_event(event,_cfg_b4())
+    assert not sent
+
+
+def test_owner_dm_photo_flow_is_separate_from_group_pending(monkeypatch,sent,activation):
+    bm.pending_store._data.clear()
+    bm.pending_store.put(OWNER,99,'Group artist',_time.time())
+    event=_postback_event('art|pid=39|artist=DM artist',user=OWNER)
+    event['source']={'type':'user','userId':OWNER}
+    activation['active'].clear()
+    bm.handle_event(event,_cfg_b4())
+    spawned=Mock()
+    monkeypatch.setattr(bm,'_spawn_photo_update',spawned)
+    image=_image_event(user=OWNER);image['source']={'type':'user','userId':OWNER}
+    bm.handle_event(image,_cfg_b4())
+    spawned.assert_called_once_with(39,'DM artist','m1','RT',_cfg_b4())
+    assert bm.pending_store.pop_valid(OWNER,_time.time())==(99,'Group artist',bm.PENDING_MODE_REPLACE)
+    bm.handle_event(image,_cfg_b4());assert spawned.call_count==1

@@ -720,3 +720,12 @@ def test_intake_path_never_calls_project_service_create():
         assert forbidden not in imported, f"{forbidden} を import している"
     # 書き込みに使うのは repo だけ
     assert {"project_repo", "timetable_repo"} <= imported
+
+
+def test_owner_dm_intake_uses_same_parser_without_group_activation(sent,run_inline,activation):
+    activation['active'].clear()
+    event=_text_event(FILLED,mentioned=False)
+    event['source']={'type':'user','userId':USER}
+    bm.handle_event(event,_config(owners=(USER,)))
+    assert len(run_inline)==1
+    assert not activation['active']
