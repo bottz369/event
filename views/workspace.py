@@ -196,7 +196,8 @@ def render_workspace_page():
 
     from views import event_format
     if active_tab == TAB_TT:
-        from views import pdf_import
+        from views import pdf_import, excel_import
+        excel_import.render()
         pdf_import.render()
     event_format.render_options()
     if event_format.config().get("enabled") and active_tab != TAB_OVERVIEW:

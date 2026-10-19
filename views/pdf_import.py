@@ -8,7 +8,7 @@ from models.event_format import schedule
 from services import session_manager
 
 
-def apply_preview(result, indices=None):
+def apply_preview(result, indices=None, source="PDF"):
     from views import event_format
     config = event_format.config()
     from services.timetable_pdf_service import select_parts, normal_rows_from_part
@@ -42,7 +42,7 @@ def apply_preview(result, indices=None):
     st.session_state.pop("event_format_preview", None)
     for key in ("last_generated_grid_image", "last_generated_tt_image", "flyer_result_grid", "flyer_result_tt"):
         st.session_state.pop(key, None)
-    st.toast("PDFの構成を下書きに反映しました。確認後、上の保存ボタンで保存してください。")
+    st.toast(f"{source}の構成を下書きに反映しました。確認後、上の保存ボタンで保存してください。")
 
 
 def render():
