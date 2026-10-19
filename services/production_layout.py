@@ -74,10 +74,13 @@ def fit(args,zone=None,row_count=0,columns=2,grid_rows=0):
             for other in HEADERS[i+1:]:
                 b=group(other)
                 if not b or not overlap(a,b,8):continue
-                if abs((a['left']+a['right']-b['left']-b['right'])/2)>200 and abs(a['top']-b['top'])<80:
-                    changed=shrink(other) or shrink(key) or changed
-                else:
-                    move(other,a['bottom']+12);changed=True
+                # A full-width subtitle is not a neighboring column just because
+                # its center is far from a left-aligned date. Shrinking it changes
+                # every later baseline in the renderer and can create new overlaps.
+                # Keep type sizes here; only move the later intersecting block.
+                # Truly side-by-side date/time blocks have disjoint x bounds and
+                # do not enter this branch, so their relationship is preserved.
+                move(other,a['bottom']+12);changed=True
                 break
             if changed:break
         if not changed:break

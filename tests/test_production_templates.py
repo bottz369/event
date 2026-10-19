@@ -258,3 +258,25 @@ def test_part_specific_grid_designs_are_saved_without_part_event_data():
     assert parts[0]['grid_settings']['layout_mode']=='レンガ (サイズ統一)'
     assert parts[1]['grid_settings']['layout_mode']=='両端揃え (拡大縮小)'
     assert parts[1]['color']=='#123456'
+
+
+def test_full_width_subtitle_is_not_mistaken_for_date_column(monkeypatch):
+    """Real renderer baselines depend on earlier font heights; shrinking can cascade."""
+    from utils import flyer_generator
+    def render(**args):
+        s=args['styles'];subtitle=s.get('subtitle_size',60);date=s.get('date_size',95);time=s.get('time_size',70)
+        def box(x,y,w,h,size=30):return dict(left=x,top=y,right=x+w,bottom=y+h,font_size=size)
+        bounds=dict(
+            subtitle=[box(540-658*subtitle/60/2,277-s.get('subtitle_pos_y',0),658*subtitle/60,58*subtitle/60,subtitle)],
+            date=[box(330-435*date/95/2,342+(subtitle-60)+(date-95)*.2-s.get('date_pos_y',0),435*date/95,65*date/95,date)],
+            time=[box(628,342+(subtitle-60)+(date-95)-s.get('time_pos_y',0),317,113*time/70,time)])
+        return Image.new('RGBA',(1080,1350)),dict(bounds=bounds)
+    monkeypatch.setattr(flyer_generator,'create_flyer_image_shadow',render)
+    args=dict(styles=dict(subtitle_size=60,date_size=95,time_size=70),main_source=Image.new('RGBA',(1000,600)))
+    _,meta,styles,_=layout.fit(args)
+    assert not layout.issues(meta)
+    assert [styles[k+'_size'] for k in ('subtitle','date','time')]==[60,95,70]
+    assert meta['bounds']['date'][0]['top']>=meta['bounds']['subtitle'][0]['bottom']+8
+    assert meta['bounds']['time'][0]['top']>=meta['bounds']['subtitle'][0]['bottom']+8
+    assert meta['bounds']['date'][0]['right']<meta['bounds']['time'][0]['left']
+    assert abs(meta['bounds']['date'][0]['top']-meta['bounds']['time'][0]['top'])<2

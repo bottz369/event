@@ -256,3 +256,12 @@ def test_entering_ai_clears_only_owners_private_photo_wait(isolated):
     main.handle_event(event(ai.START),CONFIG)
     assert main.pending_store.pop_valid('dm:'+USER,ai.time.time()) is None
     assert main.pending_store.pop_valid(USER,ai.time.time())==(2,'group photo',main.PENDING_MODE_REPLACE)
+
+
+def test_layout_failure_explains_stop_and_keeps_review_and_background(monkeypatch,isolated):
+    s=start();s.result=result();s.stage='review';s.bg_cache=dict(hash='same',data=b'cached-background')
+    monkeypatch.setattr(ai,'_render',Mock(side_effect=ValueError('配置の自動検査を通過しませんでした：subtitle／date：重なり')))
+    ai.handle(press(s,'preview'),CONFIG)
+    message=isolated[1].call_args.args[1][0]['text']
+    assert '生成を停止' in message and '保持' in message and '確認' in message
+    assert s.stage=='review' and s.result is not None and s.bg_cache['data']==b'cached-background' and not s.busy

@@ -245,6 +245,8 @@ def _run(user,s,config,action,message=None):
         with LOCK:s.busy=False;s.touched=time.time()
         # Never expose transport bodies, credentials or internal exceptions to LINE.
         error=str(exc) if isinstance(exc,ValueError) else '処理を完了できませんでした。「確認」で状態を確認してください。'
+        if action=='preview':
+            error+='\n生成を停止しました。解析結果と作成済み背景はこの下書きに保持しています。「確認」で内容を表示できます。'
         _push(user,[_text(error)],config)
 
 
