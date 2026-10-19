@@ -18,8 +18,9 @@ LOCK=threading.RLock()
 SESSIONS={}
 SEEN={}
 START='AIおまかせ制作'
+UPDATE_STARTS=('プロジェクト更新','AIおまかせ更新','既存プロジェクトを更新')
 HELP=('公演概要を送信し、PDF・Excel（.xlsx）・CSVをファイル添付してください。\n'
-      '「デザイン: 青と紫の放射状の光」のように希望を送れます。ロゴは標準ロゴです。\nロゴの色は「ロゴ色: 背景に合わせる」などで指定できます。\n'
+      '「デザイン: 青と紫の放射状の光」のように希望を送れます。指定しなければ標準テンプレートの背景・ロゴを使います。\nロゴの色は「ロゴ色: 背景に合わせる」などで指定できます。\n'
       '「背景画像を送る」「ロゴ画像を送る」の後に画像を送るとその素材を使います。\n'
       '構図の参考だけに使う画像は「背景参考画像を送る」の後に送信してください。\n'
       '概要・資料が揃ったら「資料をAIで解析」ボタンを押してください（OpenAIへ送信・API料金が発生）。\n'
@@ -51,6 +52,12 @@ class Session:
     package:dict=None
     project_id:int=None
     uncertain:bool=False
+    target_id:int=None
+    baseline:dict=None
+    targets:list=field(default_factory=list)
+    target_page:int=0
+    target_more:bool=False
+    document_name:str=''
 
 
 def _transport():
@@ -111,8 +118,14 @@ def _review(s):
                       + (f" ／追加 {r['add_start']}〜{r['add_end']} ({r['add_place']})" if r['add_start'] else '')]
         if p['post_start']:lines += [f"終演後物販 {p['post_start']}〜{p['post_end']}"]
     for entry in e.get('free_texts',[]):lines += [entry['title'],entry['body']]
-    lines += ['■デザイン',s.design or 'アップロードした背景', 'ロゴ色：'+s.logo_tint]
+    lines += ['■デザイン',s.design or ('現在の背景・ロゴを引き継ぐ' if s.target_id else ('アップロードした背景' if s.background else '標準テンプレートの背景・ロゴ')), 'ロゴ色：'+s.logo_tint]
     lines += ['■要確認']+s.result.get('questions',[])+s.result.get('warnings',[])
+    if s.target_id:
+        old=s.baseline['draft']
+        lines=[f'■更新先 #{s.target_id} {old.title} - {old.subtitle}',
+               '新しい概要・資料で更新します。既存のデザイン・comingsoon設定は引き継ぎます。',
+               'まだ保存していません。完成プレビューの確認後に更新を確定してください。']+lines
+    if s.document_name:lines.insert(0,'■資料 '+s.document_name)
     return '\n'.join(lines)
 
 
@@ -126,14 +139,17 @@ def _preview_messages(s):
         messages.append(main.build_image_message(original,thumbnail))
     failures=[f.get('name','') for f in s.package.get('failures',[]) if f.get('name')]
     if failures:messages+=_chunks('アー写を確認：'+'、'.join(dict.fromkeys(failures)))
-    messages.append(_controls(s,'完成プレビューです。「保存する」で新規プロジェクトと素材を保存します。\n'
-        '修正は「訂正: …」、デザインの変更は「デザイン: …」。修正後は再確認が必要です。', [('保存する','save')]))
+    label='このプロジェクトを更新' if s.target_id else '保存する'
+    text=(f'完成プレビューです。「{label}」でプロジェクト #{s.target_id} の概要・タイムテーブル・完成画像を更新します。'
+          if s.target_id else '完成プレビューです。「保存する」で新規プロジェクトと素材を保存します。')
+    messages.append(_controls(s,text+'\n修正は「訂正: …」、デザインの変更は「デザイン: …」。修正後は再確認が必要です。', [(label,'save')]))
     return messages
 
 
 def _status(s):
     if s.busy:return [_text('処理中です。完了後に通知します。')]
-    if s.project_id:return [_text(f'プロジェクト #{s.project_id} に保存済みです。アプリでも編集できます。')]
+    if s.stage=='choose':return _project_choices_message(s)
+    if s.project_id:return [_text(f'プロジェクト #{s.project_id} '+('を更新しました。' if s.target_id else 'に保存済みです。')+'アプリの一覧からも確認・編集できます。')]
     if s.uncertain:return [_text('保存結果をアプリの一覧で確認してください。重複防止のため、この下書きは再保存できません。')]
     if s.stage=='preview':return _preview_messages(s)
     if s.stage=='review':
@@ -146,8 +162,31 @@ def _status(s):
     missing=[]
     if not s.overview:missing.append('公演概要')
     if not s.document:missing.append('タイムテーブル資料')
-    if not s.design and not s.background:missing.append('デザイン希望または背景画像')
-    return [_controls(s,'受け取り待ち：'+('、'.join(missing) or 'なし')+'\n'+HELP,[('資料をAIで解析','analyze')])]
+    target=(f"更新先 #{s.target_id}：{s.baseline['draft'].title} - {s.baseline['draft'].subtitle}\n既存の背景・ロゴ・デザインを使います。新しい概要とPDF・Excel（.xlsx）・CSVを送ってください。\n" if s.target_id else '')
+    received=('受領資料：'+s.document_name+'\n') if s.document_name else ''
+    help_text=HELP
+    if s.target_id:
+        help_text=help_text.replace('指定しなければ標準テンプレートの背景・ロゴを使います。','指定しなければ現在の背景・ロゴを引き継ぎます。').replace('保存までは新規プロジェクトを作りません。','更新を確定するまで保存済みプロジェクトは変更しません。')
+    return [_controls(s,target+received+'受け取り待ち：'+('、'.join(missing) or 'なし')+'\n'+help_text,[('資料をAIで解析','analyze')])]
+
+
+def _load_projects(s,page=0):
+    from services import event_service
+    targets,more=event_service.list_recent_events(limit=10,page=page)
+    s.targets=targets;s.target_page=page;s.target_more=more
+
+
+def _project_choices_message(s):
+    actions=[];lines=['更新する既存プロジェクトを選んでください。ID・開催日を確認してください。']
+    for target in s.targets:
+        date=target.event_date.isoformat() if target.event_date else '日付未定'
+        title=f'#{target.project_id} {date} {str(target.title)[:160]}'
+        lines.append(title)
+        actions.append((title if len(title)<=20 else title[:19]+'…',f'target:{target.project_id}'))
+    if s.target_page:actions.append(('前のページ',f'projects:{s.target_page-1}'))
+    if s.target_more:actions.append(('次のページ',f'projects:{s.target_page+1}'))
+    if not s.targets:lines.append('該当するプロジェクトがありません。')
+    return [_controls(s,'\n'.join(lines)+'\n「中止」で終了できます。',actions)]
 
 
 def _download(message,config,limit):
@@ -180,26 +219,50 @@ def _analyze(s):
 def _render(s):
     from services import production_service as production,artist_service,image_studio,template_service
     from services.production_templates import decode,META
-    if not s.design and not s.background:raise ValueError('「デザイン: …」か背景画像を送ってください。')
     parts=[p for i,p in enumerate(s.result['parts']) if s.selected is None or i in s.selected]
     names=list(dict.fromkeys([r['artist'] for p in parts for r in p['rows']]+s.result['event']['artists']))
     aliases=production.match_names(names,[a.name for a in artist_service.list_artists()]);aliases.update(s.aliases)
     draft,rows=production.compile_plan(s.result['event'],parts,aliases)
+    if s.target_id:
+        from services import production_update
+        production_update.ensure_current(s.target_id,s.baseline['revision'])
+        draft,rows=production_update.merge_plan(s.baseline['draft'],s.baseline['rows'],draft,rows)
     template=None
-    for item in template_service.list_templates():
+    for item in ([] if s.target_id else template_service.list_templates()):
         try:value=decode(item.data_json)
         except ValueError:continue
         if value[META].get('default'):template=value;break
+    if s.target_id:
+        from services.production_templates import capture
+        template=capture(s.baseline['draft'])
     # Default templates affect appearance; explicitly requested materials override their assets.
     bg=s.background
-    if not bg:
+    reused={}
+    materials=s.baseline['draft'].flyer_settings if s.target_id else (template or {})
+    if not bg and not s.design:
+        from services import asset_service
+        asset_id=materials.get('bg_id')
+        if asset_id:
+            bg=asset_service.read_image_asset(asset_id);reused['background']=asset_id
+        elif not s.target_id:
+            raise ValueError('標準テンプレートに背景がありません。「デザイン: …」か背景画像を送るか、アプリで背景入りの標準テンプレートを保存してください。')
+    if not bg and s.design:
         fingerprint=hashlib.sha256(s.design.encode()+(s.reference or b'')).hexdigest()
         if s.bg_cache.get('hash')==fingerprint:bg=s.bg_cache['data']
         else:
             bg=image_studio.generate_background(s.design,'指示に合わせる',*_credentials(),reference=s.reference)
             s.bg_cache=dict(hash=fingerprint,data=bg)
-    logo=s.logo or production.read_default_logo()
+    logo=s.logo
+    if not logo:
+        from services import asset_service
+        asset_id=materials.get('logo_id')
+        if asset_id:
+            logo=asset_service.read_image_asset(asset_id)
+            if s.logo_tint=='元の色':reused['logo']=asset_id
+        elif not s.target_id:logo=production.read_default_logo()
+    if s.logo_tint!='元の色' and not logo:raise ValueError('配色するロゴ画像を送ってください。')
     if s.logo_tint=='背景に合わせる':
+        if not bg:raise ValueError('配色に使う背景画像を送ってください。')
         from services.logo_palette import match_logo
         fingerprint=hashlib.sha256(logo+bg).hexdigest()
         if s.logo_cache.get('hash')==fingerprint:logo=s.logo_cache['data']
@@ -208,6 +271,7 @@ def _render(s):
             s.logo_cache=dict(hash=fingerprint,data=logo)
     elif s.logo_tint!='元の色':logo=image_studio.recolor(logo,image_studio.PALETTES[s.logo_tint])
     s.package=production.render_package(draft,rows,bg,logo,template=template)
+    s.package['asset_ids'].update(reused)
     s.stage='preview'
 
 
@@ -215,6 +279,10 @@ def _save(s):
     from services import production_service as production,asset_service
     if s.project_id or s.uncertain:raise ValueError('保存済み、または保存結果の確認待ちです。アプリの一覧を確認してください。')
     package=s.package
+    if s.target_id:
+        from services import production_update
+        if package['draft'].id!=s.target_id:raise ValueError('更新先が一致しません。プロジェクトを選び直してください。')
+        production_update.ensure_current(s.target_id,s.baseline['revision'])
     for kind,key in (('background','bg_id'),('logo','logo_id')):
         data=package.get(kind)
         if data and kind not in package['asset_ids']:
@@ -224,22 +292,33 @@ def _save(s):
     s.uncertain=True  # Set BEFORE inserting, including an unknown network outcome.
     from services.project_previews import OutputStorageError
     try:
-        s.project_id=production.persist_new_project(package['draft'],package['rows'],images=package['images'])
+        if s.target_id:
+            s.project_id=production_update.persist_update(package['draft'],package['rows'],package['images'],s.baseline['revision'])
+        else:
+            s.project_id=production.persist_new_project(package['draft'],package['rows'],images=package['images'])
     except OutputStorageError:
         s.uncertain=False
+        raise
+    except Exception as exc:
+        from services.production_update import ProjectChanged
+        if isinstance(exc,ProjectChanged):s.uncertain=False
         raise
     s.uncertain=False;s.stage='saved'
 
 
 def _run(user,s,config,action,message=None):
     try:
-        if action=='analyze':_analyze(s)
+        if action=='target':
+            from services import production_update
+            baseline=production_update.load_target(int(message['project_id']))
+            s.target_id=baseline['draft'].id;s.baseline=baseline;s.revision+=1;s.stage='collect'
+        elif action=='analyze':_analyze(s)
         elif action=='preview':_render(s)
         elif action=='save':_save(s)
         elif action=='file':
             from services.production_intake import extract_document
             text=extract_document(_download(message,config,10*1024*1024),message['fileName'])
-            s.document=text;s.result=None;s.selected=None;_invalidate(s)
+            s.document=text;s.document_name=str(message['fileName'])[:200];s.result=None;s.selected=None;_invalidate(s)
         elif action=='image':
             from services.image_studio import open_image,png
             data=png(open_image(_download(message,config,20*1024*1024)))
@@ -261,7 +340,7 @@ def handle(event,config):
     if source.get('type')!='user' or not user or user not in config.owner_user_ids:return False
     message=event.get('message') or {};text=str(message.get('text','')).strip()
     data=str((event.get('postback') or {}).get('data',''))
-    trigger=event.get('type')=='message' and message.get('type')=='text' and text==START
+    trigger=event.get('type')=='message' and message.get('type')=='text' and text in (START,)+UPDATE_STARTS
     with LOCK:
         now=time.time()
         for uid,state in list(SESSIONS.items()):
@@ -293,9 +372,14 @@ def handle(event,config):
             if len(SESSIONS)>=4 and user not in SESSIONS:
                 respond([_text('制作処理が混み合っています。時間をおいてお試しください。')]);return True
             s=Session();SESSIONS[user]=s
+            if text in UPDATE_STARTS:
+                try:_load_projects(s)
+                except Exception:
+                    SESSIONS.pop(user,None);respond([_text('プロジェクト一覧を取得できませんでした。少し待って再度お試しください。')]);return True
+                s.stage='choose'
             respond(_status(s));return True
         if not s:
-            respond([_text('制作下書きの期限が切れたか、Botが再起動しました。「AIおまかせ制作」から始めてください。保存済みのプロジェクトは残ります。')]);return True
+            respond([_text('制作下書きの期限が切れたか、Botが再起動しました。「AIおまかせ制作」または「プロジェクト更新」から始めてください。保存済みのプロジェクトは残ります。')]);return True
         s.touched=now
         if s.uncertain:
             respond(_status(s));return True
@@ -308,12 +392,24 @@ def handle(event,config):
             if s.stage=='preview':action='status'
             else:respond(_status(s));return True
         elif event.get('type')=='postback':
-            match=re.fullmatch(r'aip\|([0-9a-f]{16})\|(\d{1,6})\|(analyze|preview|save)',data)
+            match=re.fullmatch(r'aip\|([0-9a-f]{16})\|(\d{1,6})\|(analyze|preview|save|target:\d{1,12}|projects:\d{1,6})',data)
             if not match or match[1]!=s.token or int(match[2])!=s.revision:
                 respond([_text('古い確認ボタンです。「確認」で現在の内容を表示してください。')]);return True
             action=match[3]
-            if s.stage!=dict(analyze='collect',preview='review',save='preview')[action]:
+            if action.startswith('projects:') and s.stage=='choose':
+                try:_load_projects(s,int(action.split(':')[1]))
+                except Exception:
+                    respond([_text('プロジェクト一覧を取得できませんでした。再度お試しください。')]);return True
+                s.revision+=1;respond(_status(s));return True
+            if action.startswith('target:') and s.stage=='choose':
+                pid=int(action.split(':')[1])
+                if pid not in [target.project_id for target in s.targets]:
+                    respond([_text('現在表示されている一覧から選んでください。')]);return True
+                message={'project_id':pid};action='target'
+            if s.stage!=dict(analyze='collect',preview='review',save='preview',target='choose').get(action):
                 respond([_text('この操作は処理済みか、現在の段階では使えません。「確認」で続行してください。')]);return True
+        elif s.stage=='choose':
+            respond(_status(s));return True
         elif message.get('type')=='file':
             filename=str(message.get('fileName',''))
             ext=filename.rsplit('.',1)[-1].lower()

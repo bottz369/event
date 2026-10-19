@@ -75,9 +75,10 @@ def load_rows(db: Session, project_id: int) -> List[TimetableRowDraft]:
     return []
 
 
-def save_rows(db: Session, project_id: int, drafts: List[TimetableRowDraft]) -> bool:
+def save_rows(db: Session, project_id: int, drafts: List[TimetableRowDraft], *, commit: bool = True) -> bool:
     """
     指定プロジェクトの行データを置き換える(全削除→挿入)。
+    commit=False は呼び出し側が所有するトランザクションに追加する。
     """
     if project_id is None:
         logger.error("save_rows: project_id is None")
@@ -87,11 +88,16 @@ def save_rows(db: Session, project_id: int, drafts: List[TimetableRowDraft]) -> 
         db.query(TimetableRow).filter(TimetableRow.project_id == project_id).delete()
         new_rows = [_draft_to_row(project_id, idx, d) for idx, d in enumerate(drafts)]
         db.add_all(new_rows)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         logger.info(f"save_rows: project={project_id}, count={len(new_rows)}")
         return True
     except Exception as e:
         logger.error(f"save_rows failed: {e}", exc_info=True)
+        if not commit:
+            raise
         db.rollback()
         return False
 

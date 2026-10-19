@@ -265,3 +265,176 @@ def test_layout_failure_explains_stop_and_keeps_review_and_background(monkeypatc
     message=isolated[1].call_args.args[1][0]['text']
     assert '生成を停止' in message and '保持' in message and '確認' in message
     assert s.stage=='review' and s.result is not None and s.bg_cache['data']==b'cached-background' and not s.busy
+
+
+def update_start(monkeypatch):
+    from services import event_service,production_update,production_service
+    from tests.test_auto_production import event as facts,part
+    draft,rows=production_service.compile_plan(facts(),[part()]);draft.id=49
+    draft.flyer_settings.update(bg_id=10,logo_id=20,logo_scale=1.5)
+    rows[0].is_comingsoon=True
+    baseline=dict(draft=draft,rows=rows,revision='baseline')
+    monkeypatch.setattr(event_service,'list_recent_events',lambda **_:([
+        SimpleNamespace(project_id=49,title='Same title',event_date=None),
+        SimpleNamespace(project_id=48,title='Same title',event_date=None)],False))
+    monkeypatch.setattr(production_update,'load_target',lambda pid:deepcopy(baseline))
+    ai.handle(event('プロジェクト更新'),CONFIG)
+    s=ai.SESSIONS[USER]
+    assert s.stage=='choose' and s.target_id is None
+    ai.handle(press(s,'target:49'),CONFIG)
+    assert s.stage=='collect' and s.target_id==49
+    return s
+
+
+def test_update_selection_uses_id_and_collects_new_sources_without_writes(monkeypatch,isolated):
+    from services import production_update
+    save=Mock();monkeypatch.setattr(production_update,'persist_update',save)
+    s=update_start(monkeypatch)
+    status=json.dumps(ai._status(s),ensure_ascii=False)
+    assert '更新先 #49' in status and '現在の背景・ロゴ' in status
+    assert not s.overview and not s.document
+    save.assert_not_called()
+    ai.handle(event('概要: 新しい公演概要'),CONFIG)
+    assert s.overview=='新しい公演概要' and s.target_id==49
+    save.assert_not_called()
+    ai.handle(event('中止'),CONFIG)
+    assert USER not in ai.SESSIONS
+
+
+def test_update_preview_reuses_existing_assets_and_keeps_comingsoon_without_image_ai(monkeypatch):
+    from services import production_update,production_service,artist_service,image_studio,asset_service
+    s=update_start(monkeypatch);s.result=result();s.stage='review'
+    monkeypatch.setattr(production_update,'ensure_current',Mock())
+    monkeypatch.setattr(artist_service,'list_artists',lambda:[])
+    read=Mock(side_effect=lambda pid:b'bg' if pid==10 else b'logo');monkeypatch.setattr(asset_service,'read_image_asset',read)
+    bg=Mock();monkeypatch.setattr(image_studio,'generate_background',bg)
+    render=Mock(return_value=package());monkeypatch.setattr(production_service,'render_package',render)
+    ai._render(s)
+    bg.assert_not_called()
+    assert render.call_args.args[0].id==49
+    assert render.call_args.args[1][0].is_comingsoon
+    assert render.call_args.args[2:]==(b'bg',b'logo')
+    assert render.call_args.kwargs['template']['logo_scale']==1.5
+    assert s.package['asset_ids']=={'background':10,'logo':20}
+    assert 'このプロジェクトを更新' in ai._preview_messages(s)[-1]['text']
+
+
+def test_update_save_is_explicit_same_project_and_idempotent(monkeypatch):
+    from services import production_update,production_service,asset_service
+    s=update_start(monkeypatch);s.package=package();s.package['draft'].id=49
+    s.package['asset_ids']={'background':10,'logo':20};s.stage='preview'
+    check=Mock();save=Mock(return_value=49);new=Mock();upload=Mock()
+    monkeypatch.setattr(production_update,'ensure_current',check)
+    monkeypatch.setattr(production_update,'persist_update',save)
+    monkeypatch.setattr(production_service,'persist_new_project',new)
+    monkeypatch.setattr(asset_service,'upload_image_asset',upload)
+    button=press(s,'save');ai.handle(button,CONFIG);ai.handle(button,CONFIG)
+    save.assert_called_once();new.assert_not_called();upload.assert_not_called()
+    assert s.project_id==49 and not s.uncertain
+
+
+def test_update_conflict_stops_before_assets_or_save(monkeypatch):
+    from services import production_update,asset_service
+    s=update_start(monkeypatch);s.package=package();s.package['draft'].id=49;s.stage='preview'
+    monkeypatch.setattr(production_update,'ensure_current',Mock(side_effect=production_update.ProjectChanged('変更されています')))
+    save=Mock();upload=Mock()
+    monkeypatch.setattr(production_update,'persist_update',save);monkeypatch.setattr(asset_service,'upload_image_asset',upload)
+    ai.handle(press(s,'save'),CONFIG)
+    save.assert_not_called();upload.assert_not_called()
+    assert not s.uncertain and s.project_id is None
+
+
+def test_update_unknown_commit_outcome_blocks_all_retries(monkeypatch):
+    from services import production_update
+    s=update_start(monkeypatch);s.package=package();s.package['draft'].id=49;s.stage='preview'
+    s.package['asset_ids']={'background':10,'logo':20}
+    monkeypatch.setattr(production_update,'ensure_current',Mock())
+    save=Mock(side_effect=RuntimeError('network failure'))
+    monkeypatch.setattr(production_update,'persist_update',save)
+    ai.handle(press(s,'save'),CONFIG);ai.handle(press(s,'save'),CONFIG)
+    save.assert_called_once();assert s.uncertain
+
+
+def test_existing_update_owner_gate_and_selection_are_versioned(monkeypatch):
+    from services import event_service
+    monkeypatch.setattr(event_service,'list_recent_events',lambda **_:([SimpleNamespace(project_id=49,title='Test',event_date=None)],False))
+    for source,uid in [('group',USER),('user','not-owner')]:
+        assert not ai.handle(event('プロジェクト更新',uid=uid,source=source),CONFIG)
+    ai.handle(event('プロジェクト更新'),CONFIG);s=ai.SESSIONS[USER]
+    ai.handle(press(s,'target:999'),CONFIG)
+    assert s.stage=='choose' and s.target_id is None
+    old=press(s,'target:49')
+    ai.handle(press(s,'projects:1'),CONFIG)
+    ai.handle(old,CONFIG)
+    assert s.stage=='choose' and s.target_id is None
+
+
+def test_xlsx_and_overview_are_a_complete_new_event_intake(monkeypatch):
+    from services import production_intake,production_service
+    from tests.test_timetable_excel import workbook_bytes
+    data=workbook_bytes([
+        ['START','END','グループ名','持ち時間','物販開始','物販終了','物販時間','物販場所'],
+        ['10:30','10:50','A',20,'11:00','12:00',60,'A'],
+        ['10:50','10:55','調整',5],
+        ['10:55','11:15','B',20,'11:30','12:30',60,'B']])
+    # This test file has two sheets; send only the actual timetable sheet to the strict path.
+    from openpyxl import load_workbook
+    import io
+    workbook=load_workbook(io.BytesIO(data));del workbook['Notes']
+    output=io.BytesIO();workbook.save(output);data=output.getvalue();workbook.close()
+    monkeypatch.setattr(ai,'_download',lambda *_:data)
+    response=Mock(status_code=200)
+    response.json.return_value={'choices':[{'finish_reason':'stop','message':{'content':json.dumps({k:v for k,v in result().items() if k!='parts'})}}]}
+    post=Mock(return_value=response);monkeypatch.setattr(production_intake.requests,'post',post)
+    s=start()
+    ai.handle(event('概要: OPEN▶10:00\nSTART▶10:30\n■出演者\nB\nA'),CONFIG)
+    ai.handle(event(kind='file',fileName='timetable.xlsx'),CONFIG)
+    assert s.document_name=='timetable.xlsx' and 'シート: Timetable' in s.document
+    ai.handle(press(s,'analyze'),CONFIG)
+    assert s.stage=='review'
+    assert len(s.result['parts'])==1 and len(s.result['parts'][0]['rows'])==2
+    draft,rows=production_service.compile_plan(s.result['event'],s.result['parts'])
+    assert draft.id is None and draft.start_time=='10:30' and rows[0].adjustment==5
+    assert draft.grid_settings['order']==['B','A']
+    post.assert_called_once()
+
+
+def test_new_creation_can_use_default_template_materials_without_design_prompt(monkeypatch):
+    from services import production_service,artist_service,template_service,asset_service,image_studio
+    from services.production_templates import capture
+    from tests.test_auto_production import event as facts,part
+    draft,rows=production_service.compile_plan(facts(),[part()])
+    draft.flyer_settings.update(bg_id=10,logo_id=20)
+    recipe=capture(draft,default=True)
+    monkeypatch.setattr(template_service,'list_templates',lambda:[SimpleNamespace(data_json=recipe)])
+    monkeypatch.setattr(artist_service,'list_artists',lambda:[])
+    monkeypatch.setattr(asset_service,'read_image_asset',lambda pid:b'bg' if pid==10 else b'logo')
+    bg=Mock();monkeypatch.setattr(image_studio,'generate_background',bg)
+    render=Mock(return_value=package());monkeypatch.setattr(production_service,'render_package',render)
+    s=start();s.result=result();s.stage='review'
+    ai._render(s)
+    bg.assert_not_called()
+    assert render.call_args.args[2:]==(b'bg',b'logo')
+    assert s.package['asset_ids']=={'background':10,'logo':20}
+
+
+def test_overview_with_comingsoon_is_not_mistaken_for_mask_edit():
+    from bot.comingsoon import command
+    assert command('【公演概要】\n■出演者\ncomingsoon') is None
+
+
+def test_update_selection_buttons_cannot_be_used_by_another_owner(monkeypatch):
+    from services import event_service
+    monkeypatch.setattr(event_service,'list_recent_events',lambda **_:([SimpleNamespace(project_id=49,title='Test',event_date=None)],False))
+    other=main.BotConfig('s','t',frozenset([USER,'Uowner2']),frozenset())
+    ai.handle(event('プロジェクト更新'),other);s=ai.SESSIONS[USER]
+    ai.handle(event('プロジェクト更新',uid='Uowner2'),other)
+    stolen=press(s,'target:49');stolen['source']['userId']='Uowner2'
+    ai.handle(stolen,other)
+    assert ai.SESSIONS['Uowner2'].stage=='choose' and ai.SESSIONS['Uowner2'].target_id is None
+
+
+def test_new_intake_does_not_require_extra_design_when_template_will_be_used():
+    s=start();s.overview='overview';s.document='table'
+    assert '受け取り待ち：なし' in ai._status(s)[0]['text']
+    assert '標準テンプレートの背景・ロゴ' in ai._status(s)[0]['text']

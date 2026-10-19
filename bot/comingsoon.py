@@ -10,6 +10,8 @@ SESSIONS = {}
 
 
 def command(text):
+    if len(text or '') > 200 or '■' in (text or '') or '【公演概要】' in (text or ''):
+        return None
     match = re.search(r'coming\s*soon|カミングスーン', text or '', re.I)
     if not match:
         return None
