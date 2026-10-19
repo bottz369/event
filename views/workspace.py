@@ -137,8 +137,11 @@ def render_workspace_page():
     from views import auto_production
     auto_production.render()
 
-    # プロジェクト選択 UI
-    _render_project_selector()
+    from views import project_browser
+    project_browser.render()
+    # Searchable quick switch remains available alongside the visual list.
+    with st.expander('名前からすばやく切り替える・新規作成'):
+        _render_project_selector()
 
     # 未選択時は何もしない
     active_id = session_manager.get_active_project_id()
@@ -167,6 +170,7 @@ def render_workspace_page():
 
     # ヘッダー(タイトル / 日付 / 会場 + 複製ボタン)
     _render_project_header(draft)
+    project_browser.render_exports(active_id)
 
     # 旧 ensure_generated_contents の置き換え(現状は no-op)
     _autogenerate_previews_if_needed()

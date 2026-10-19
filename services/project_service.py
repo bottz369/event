@@ -79,6 +79,7 @@ def create_new_project(
 
     # Phase 3 cache-selector: 新規行追加でセレクタ一覧が変わるため無効化。
     list_projects_for_selector.clear()
+    list_project_cards.clear()
 
     # 新規プロジェクトをロード(セッションをクリアして読み直す)
     session_manager.reload_project(new_id)
@@ -138,6 +139,7 @@ def save_active_project() -> bool:
                 or draft.event_date != old_date
                 or draft.subtitle != old_subtitle):
             list_projects_for_selector.clear()
+        list_project_cards.clear()
         logger.info(f"save_active_project: saved id={draft.id}, rows={len(rows)}")
         return True
     except Exception as e:
@@ -224,7 +226,7 @@ def build_selector_label(event_date, title, subtitle=None) -> str:
 # ---------------------------------------------------------
 # 一覧取得(view から軽く呼ぶ用)
 # ---------------------------------------------------------
-@_cache_data
+@_cache_data(ttl=15)
 def list_projects_for_selector() -> List[Tuple[int, str]]:
     """
     プロジェクト選択 UI 用に、軽量な (id, label) のリストを返す。
@@ -247,7 +249,9 @@ def list_projects_for_selector() -> List[Tuple[int, str]]:
                                         getattr(p, "subtitle", None)))
             for p in projects
         ]
-        return result
+        from collections import Counter
+        counts = Counter(label for _, label in result)
+        return [(pid, f"{label} [#{pid}]" if counts[label] > 1 else label) for pid, label in result]
     finally:
         db.close()
 
@@ -280,3 +284,36 @@ def get_project_flyer_view(project_id: int) -> Optional[ProjectView]:
         return project_repo.get_project_view(db, project_id)
     finally:
         db.close()
+
+
+@_cache_data(ttl=15)
+def list_project_cards():
+    """Browse saved thumbnails without generating images or loading artists."""
+    from services.project_previews import decode
+    db = SessionLocal()
+    try:
+        projects = project_repo.list_projects(db)
+        return [dict(id=p.id, title=p.title, subtitle=p.subtitle or '',
+                     event_date=str(p.event_date or ''), venue=p.venue_name or '',
+                     images=decode(p.flyer_json))
+                for p in sorted(projects, key=lambda p:(str(p.event_date or ''), p.id), reverse=True)]
+    finally:
+        db.close()
+
+
+def project_pdf_exports(project_id):
+    from utils import create_event_summary_pdf, create_business_pdf, calculate_timetable_flow
+    from models.timetable import draft_rows_to_df
+    project = get_project_flyer_view(project_id)
+    if project is None:
+        raise ValueError('プロジェクトがありません。')
+    result = {'summary': create_event_summary_pdf(project).getvalue()}
+    db = SessionLocal()
+    try:
+        rows = timetable_repo.load_rows(db, project_id)
+    finally:
+        db.close()
+    if rows:
+        df = calculate_timetable_flow(draft_rows_to_df(rows), project.open_time, project.start_time)
+        result['timetable'] = create_business_pdf(df, project.title, project.event_date, project.venue_name).getvalue()
+    return result

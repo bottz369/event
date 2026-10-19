@@ -8,7 +8,6 @@ from utils.logger import get_logger  # ロガー有効化(except: pass を撲滅
 
 # --- 各画面の読み込み ---
 from views.workspace import render_workspace_page   # 統合ワークスペース
-from views.projects import render_projects_page    # プロジェクト管理
 from views.assets import render_assets_page        # 素材アーカイブ（アセット管理）
 from views.artists import render_artists_page      # アーティスト管理
 from views.template import render_template_management_page # テンプレート管理
@@ -61,7 +60,6 @@ st.sidebar.title("メニュー")
 # メニュー構成
 menu_items = [
     "ワークスペース",
-    "プロジェクト管理",
     "テンプレート管理",
     "アーティスト管理",
     "アセット管理"
@@ -82,9 +80,6 @@ current_page = menu_selection
 # ==========================================
 if current_page == "ワークスペース":
     render_workspace_page()
-
-elif current_page == "プロジェクト管理":
-    render_projects_page()
 
 elif current_page == "テンプレート管理":
     render_template_management_page()

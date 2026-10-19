@@ -48,6 +48,7 @@ def _create(expected):
         st.error(str(exc));return
     state['project_id']=new_id;st.session_state[STATE]=state
     project_service.list_projects_for_selector.clear()
+    project_service.list_project_cards.clear()
     if session_manager.reload_project(new_id):
         labels=dict(project_service.list_projects_for_selector())
         st.session_state['ws_project_selector_label']=labels.get(new_id,'(選択してください)')

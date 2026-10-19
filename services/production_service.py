@@ -293,6 +293,9 @@ def render_package(draft,rows,background=None,logo=None,template=None):
         text+='\n\n■各部の時間\n'+'\n'.join(f'{p["name"]} OPEN {p["open_time"]} / START {p["start_time"]}' for p in cfg['parts'])
     if cfg.get('free_viewing'):
         text+='\n\n■観覧無料\n'+cfg.get('free_text','')+'\n'+cfg.get('free_notices','')
+    from services.project_previews import KEY as PREVIEW_KEY, snapshot
+    preview = snapshot(results)
+    if preview: project.flyer_settings[PREVIEW_KEY] = preview
     return dict(draft=project,rows=deepcopy(rows),images=results,background=background,logo=logo_data,
                 text=text,failures=failures,metadata=metadata,layout_reports=layout_reports,asset_ids={})
 

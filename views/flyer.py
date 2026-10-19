@@ -185,6 +185,17 @@ def regenerate_flyer_preview(project_id):
     # 素材(grid / TT)の生成パラメータも含めた署名を残す。以後これと
     # 現在の設定を比べて「保存済みの画像かどうか」を判定する。
     st.session_state.flyer_last_generated_params = _flyer_preview_signature()
+    from services import project_previews
+    try:
+        preview = project_previews.save(project_id, dict(grid=st.session_state.flyer_result_grid,
+                                                        tt=st.session_state.get('flyer_result_tt')))
+        draft = session_manager.get_draft_project()
+        if preview and draft and draft.id == project_id:
+            draft.flyer_settings[project_previews.KEY] = preview
+            session_manager.mark_saved()
+        project_service.list_project_cards.clear()
+    except Exception:
+        st.warning('フライヤーは生成できましたが、一覧用プレビューの保存に失敗しました。再度保存してください。')
     return True
 
 
