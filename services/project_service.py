@@ -197,6 +197,7 @@ def delete_project_by_id(project_id: int) -> bool:
         if ok:
             # Phase 3 cache-selector: 削除でセレクタ一覧が変わる。
             list_projects_for_selector.clear()
+            list_project_cards.clear()
             # active を消した場合はセッションもクリア
             if session_manager.get_active_project_id() == project_id:
                 session_manager.clear_project_session()

@@ -121,3 +121,42 @@ def test_old_editor_does_not_restore_obsolete_download_links():
     apply_draft(row,draft)
     assert json.loads(row.flyer_json)[previews.KEY]['originals']['grid']=='new.png'
     assert json.loads(row.flyer_json)['logo_scale']==1.17
+
+
+def browser_cards(count):
+    pictures=previews.decode({previews.KEY:previews.snapshot({k:Image.new('RGB',(1080,1350),'navy') for k in ('grid','tt')})})
+    return [dict(id=9000+i,title='公演',subtitle=f'サブ{i}',event_date='2026-11-21',venue='会場',images=pictures) for i in range(count)]
+
+
+def test_compact_list_has_ten_items_both_previews_and_bottom_pagination(app_test,monkeypatch):
+    records=browser_cards(11)
+    monkeypatch.setattr(projects,'list_project_cards',Mock(return_value=records))
+    at=app_test.run();assert not at.exception
+    assert len([b for b in at.button if b.key and b.key.startswith('btn_browser_open_')])==10
+    assert not any(r.key=='browser_variant' for r in at.radio)
+    assert not any(n.label=='ページ' for n in at.number_input)
+    assert any(m.value=='公演 - サブ0' for m in at.markdown)
+    assert len(at.get('image'))==20
+    assert at.button(key='btn_browser_prev').disabled
+    at.button(key='btn_browser_next').click().run();assert not at.exception
+    assert at.button(key='btn_browser_open_9010')
+    assert at.button(key='btn_browser_next').disabled
+    at.text_input(key='browser_search').set_value('サブ0').run();assert not at.exception
+    assert at.button(key='btn_browser_open_9000')
+    assert at.button(key='btn_browser_prev').disabled
+
+
+def test_delete_requires_explicit_confirmation_and_cancel_never_deletes(app_test,monkeypatch):
+    records=browser_cards(2)
+    monkeypatch.setattr(projects,'list_project_cards',Mock(side_effect=lambda:list(records)))
+    delete=Mock(return_value=True);monkeypatch.setattr(projects,'delete_project_by_id',delete)
+    at=app_test.run()
+    at.button(key='btn_browser_delete_9000').click().run();assert not at.exception
+    delete.assert_not_called()
+    assert at.button(key='btn_browser_delete_confirm').disabled
+    at.button(key='btn_browser_delete_cancel').click().run();delete.assert_not_called()
+    at.button(key='btn_browser_delete_9001').click().run()
+    at.checkbox(key='browser_delete_confirmed').check().run()
+    at.button(key='btn_browser_delete_confirm').click().run();assert not at.exception
+    delete.assert_called_once_with(9001)
+    assert 'browser_delete_target' not in at.session_state
