@@ -1575,6 +1575,9 @@ def handle_event(event: dict, config: BotConfig) -> None:
                     return
 
     if direct:
+        from bot import artist_crop
+        if artist_crop.handle(event, config):
+            return
         from bot import auto_production
         if auto_production.handle(event, config):
             # Do not carry an older photo-replacement request across AI production.
