@@ -248,7 +248,7 @@ def test_failed_commit_blocks_repeat_inserts_and_reuses_registered_assets(monkey
     from services import asset_service
     draft,rows=production.compile_plan(event(),[part()])
     state={'preview_hash':'reviewed','package':dict(draft=draft,rows=rows,background=png(),logo=png(),
-                                                asset_ids={'background':7})}
+                                                asset_ids={'background':7},images={'grid':png(),'tt':png()})}
     monkeypatch.setattr(view.st,'session_state',{view.STATE:state})
     monkeypatch.setattr(view.st,'error',Mock())
     upload=Mock(return_value=SimpleNamespace(id=8));monkeypatch.setattr(asset_service,'upload_image_asset',upload)

@@ -40,8 +40,11 @@ def _create(expected):
             except ValueError as exc:
                 st.error(str(exc));return
         if kind in package['asset_ids']:package['draft'].flyer_settings[key]=package['asset_ids'][kind]
+    from services.project_previews import OutputStorageError
     try:
-        new_id=production.persist_new_project(package['draft'],package['rows'])
+        new_id=production.persist_new_project(package['draft'],package['rows'],images=package['images'])
+    except OutputStorageError as exc:
+        st.error(str(exc));return
     except ValueError as exc:
         # Unknown commit outcome must not trigger an automatic duplicate insert.
         state['save_uncertain']=True;st.session_state[STATE]=state

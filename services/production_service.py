@@ -300,11 +300,15 @@ def render_package(draft,rows,background=None,logo=None,template=None):
                 text=text,failures=failures,metadata=metadata,layout_reports=layout_reports,asset_ids={})
 
 
-def persist_new_project(draft,rows):
+def persist_new_project(draft,rows,images=None):
     """Insert one new project and its rows in one transaction. No DELETE or overwrite."""
     from database import SessionLocal
     from repositories import project_repo,timetable_repo
     if draft.id is not None: raise ValueError('新規プロジェクト専用です。既存データは上書きしません。')
+    draft=deepcopy(draft)
+    if images is not None:
+        from services.project_previews import KEY as PREVIEW_KEY, prepare
+        draft.flyer_settings[PREVIEW_KEY]=prepare(images)
     db=SessionLocal()
     try:
         project=project_repo.stage_new_draft(db,draft)

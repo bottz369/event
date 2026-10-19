@@ -56,6 +56,9 @@ def render():
                     if p['subtitle']: st.write(p['subtitle'])
                     st.caption(p['venue'])
                     if not image: st.caption('フライヤーセットを生成・保存すると表示されます。')
+                    for variant, label in (('grid', '📥 アー写グリッド版 PNG'), ('tt', '📥 タイムテーブル版 PNG')):
+                        url = p.get('downloads', {}).get(variant)
+                        if url: st.link_button(label, url)
                     st.button('このプロジェクトを開く', key=f"btn_browser_open_{p['id']}", on_click=open_project, args=(p['id'],))
 
 

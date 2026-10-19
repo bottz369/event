@@ -220,6 +220,8 @@ def _stub_generation(monkeypatch, results):
     results: {variant: (png_or_None, [failures...])}
     """
     import services.generation_service as gs
+    from services import project_previews
+    monkeypatch.setattr(project_previews, 'save', Mock())
 
     def _fake(pid, variant="grid", failures=None):
         png, fails = results.get(variant, (None, []))

@@ -626,6 +626,7 @@ def render_flyer_set_for_project(project_id: int) -> Tuple[List[dict], List[dict
 
     failures: List[dict] = []
     messages: List[dict] = []
+    originals = {}
 
     for variant in FLYER_VARIANTS:
         try:
@@ -642,6 +643,7 @@ def render_flyer_set_for_project(project_id: int) -> Tuple[List[dict], List[dict
             logger.warning("flyer not generated: pid=%s variant=%s", project_id, variant)
             continue
 
+        originals[variant] = png
         original_url = upload_generated_png(png, project_id, variant)
         if not original_url:
             continue
@@ -650,6 +652,13 @@ def render_flyer_set_for_project(project_id: int) -> Tuple[List[dict], List[dict
         )
         messages.append(build_image_message(original_url, preview_url or original_url))
 
+    if len(originals) == 2:
+        try:
+            from services.project_previews import save
+            save(project_id, originals)
+        except Exception:
+            logger.exception('Could not store latest flyer set: pid=%s', project_id)
+            failures.append(dict(kind='project_output', name=None, url=None, reason='save_failed'))
     return (messages, failures)
 
 

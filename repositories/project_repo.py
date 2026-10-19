@@ -230,7 +230,10 @@ def apply_draft(
                 f"treating as empty: {e}"
             )
     merged_flyer = dict(existing_flyer)
-    merged_flyer.update(draft.flyer_settings or {})
+    # Generated files belong to the last successful render, not an editor snapshot.
+    # An older open editor must not restore stale download links on an overview save.
+    merged_flyer.update({k:v for k,v in (draft.flyer_settings or {}).items()
+                         if k != '_project_preview' or proj.id is None})
     proj.flyer_json = json.dumps(merged_flyer, ensure_ascii=False)
 
 

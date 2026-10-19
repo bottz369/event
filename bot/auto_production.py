@@ -222,7 +222,12 @@ def _save(s):
             package['asset_ids'][kind]=asset.id
         if kind in package['asset_ids']:package['draft'].flyer_settings[key]=package['asset_ids'][kind]
     s.uncertain=True  # Set BEFORE inserting, including an unknown network outcome.
-    s.project_id=production.persist_new_project(package['draft'],package['rows'])
+    from services.project_previews import OutputStorageError
+    try:
+        s.project_id=production.persist_new_project(package['draft'],package['rows'],images=package['images'])
+    except OutputStorageError:
+        s.uncertain=False
+        raise
     s.uncertain=False;s.stage='saved'
 
 

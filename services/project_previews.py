@@ -9,6 +9,10 @@ from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 KEY = '_project_preview'
 
 
+class OutputStorageError(ValueError):
+    """Original uploads failed before any project transaction began."""
+
+
 def thumbnail(source):
     if isinstance(source, bytes):
         source = Image.open(io.BytesIO(source))
@@ -59,16 +63,70 @@ def decode(value):
         return {}
 
 
-def save(project_id, images):
-    """Save only the thumbnail key after an explicit saved-project render."""
+def prepare(images):
+    """Upload immutable original PNGs only on explicit generation/save, never browse."""
+    import hashlib
+    from database import upload_image_to_supabase
+    if set(images) != {'grid', 'tt'} or any(images[k] is None for k in ('grid', 'tt')):
+        raise ValueError('フライヤーセット2種が揃っていません。')
+    originals = {}
+    for kind in ('grid', 'tt'):
+        source = images[kind]
+        if isinstance(source, bytes):
+            with Image.open(io.BytesIO(source)) as image:
+                if image.format != 'PNG': raise ValueError('原寸画像はPNGで保存してください。')
+                image.verify()
+            blob = source
+        else:
+            out = io.BytesIO(); source.save(out, 'PNG'); blob = out.getvalue()
+        filename = f"project_outputs/{hashlib.sha256(blob).hexdigest()}/{kind}.png"
+        if not upload_image_to_supabase(io.BytesIO(blob), filename):
+            raise OutputStorageError('ダウンロード用画像の保管に失敗しました。再度保存してください。')
+        originals[kind] = filename
+    payload = snapshot(images)
+    payload['originals'] = originals
+    return payload
+
+
+def downloads(value, project_id):
+    """Return small public download links, without fetching original image bytes."""
+    import re
+    from urllib.parse import urlencode
+    from database import get_image_url
+    try:
+        data = json.loads(value) if isinstance(value, str) else value
+        files = data.get(KEY, {}).get('originals', {})
+        return {kind: get_image_url(path) + '?' + urlencode({'download': f'flyer_{project_id}_{kind}.png'})
+                for kind, path in files.items() if kind in ('grid', 'tt') and isinstance(path, str)
+                and re.fullmatch(r'project_outputs/[a-f0-9]{64}/' + kind + r'\.png', path)}
+    except (ValueError, TypeError, AttributeError):
+        return {}
+
+
+def revision(project):
+    """Fingerprint saved settings without generated metadata for safe one-time backfill."""
+    import hashlib
+    data = {c.name: getattr(project, c.name) for c in project.__table__.columns}
+    flyer = json.loads(data.get('flyer_json') or '{}')
+    flyer.pop(KEY, None)
+    data['flyer_json'] = flyer
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str, ensure_ascii=False).encode()).hexdigest()
+
+
+def save(project_id, images, expected_revision=None):
+    """Atomically publish thumbnails + both stored originals after saved-project rendering."""
     from database import SessionLocal
     from repositories import project_repo
-    payload = snapshot(images)
-    if not payload:
-        return False
+    payload = prepare(images)
     db = SessionLocal()
     try:
-        project = project_repo.get_project(db, project_id)
+        if expected_revision is not None:
+            from database import TimetableProject
+            project = db.query(TimetableProject).filter_by(id=project_id).with_for_update().first()
+            if project is None or revision(project) != expected_revision:
+                raise ValueError('生成後にプロジェクトが変更されたため保存を止めました。')
+        else:
+            project = project_repo.get_project(db, project_id)
         if project is None:
             return False
         data = json.loads(project.flyer_json or '{}')
