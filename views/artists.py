@@ -35,6 +35,8 @@ def get_processed_thumbnail(image_filename, scale=1.0, x=0, y=0):
         if url:
             img = load_image_from_url(url)
             if img:
+                from services.face_framing import protect
+                scale, x, y = protect(img, image_filename, (scale, x, y))
                 return apply_manual_crop(img, scale, x, y, target_w, target_h)
     
     return create_no_image_placeholder(target_w, target_h)
@@ -120,6 +122,7 @@ def render_artists_page():
                                 st.rerun()
 
                     st.markdown("#### 🖼️ 位置調整")
+                    st.caption("顔の見切れ防止を自動適用します。顔を検出できない画像は全体を収めます。黒い余白が出る場合があります。")
                     
                     col_slide1, col_slide2 = st.columns(2)
                     with col_slide1:

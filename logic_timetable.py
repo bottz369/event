@@ -94,7 +94,8 @@ def load_image(path_or_url):
 #
 # ★座標補正が不要な理由: TT のアー写描画は draw_one_row の
 #   ImageOps.fit(img, (row_width, row_height), centering=(0.5, 0.5)) だけで、
-#   手動クロップ座標 (crop_scale / crop_x / crop_y) を一切使わない(grid と違う点)。
+#   手動クロップ座標 (crop_scale / crop_x / crop_y) は使わず、画像ごとの顔位置キャッシュ
+#   で横長枠の見切れを防止する。
 #   fit は完全に「描画先サイズ基準」なので、元画像側を縮めても構図・位置は動かない。
 #
 # ★なぜ「最長辺 N px への一様縮小」(grid 方式)ではないか:
@@ -108,7 +109,7 @@ def load_image(path_or_url):
 #   よって draw_one_row 側は無変更のままで出力が変わらない。差分は draft の
 #   DCT スケール由来のみ(scratch/parity_tt_downscale.py で知覚不能レベルを数値化)。
 # =========================================================
-def _load_and_fit_tt(url, target_w, target_h):
+def _load_and_fit_tt(url, target_w, target_h, filename=None):
     """URL 取得 → JPEG draft デコード → 描画先サイズへ fit(worker スレッド内)。
 
     Image.draft は load() より前に呼ぶ必要がある。draft は要求サイズを下回らない
@@ -130,6 +131,9 @@ def _load_and_fit_tt(url, target_w, target_h):
         except Exception:
             pass  # draft 非対応(PNG 等)/失敗時はフル復号にフォールバック
         im = im.convert("RGBA")
+        if filename:
+            from services.face_framing import fit_timetable
+            return fit_timetable(im, filename, (int(target_w), int(target_h)))
         # draw_one_row と完全に同じ引数で fit する(ここで縮めても結果は変わらない)。
         return ImageOps.fit(
             im, (int(target_w), int(target_h)),
@@ -164,6 +168,7 @@ def _prefetch_tt_images(timetable_data, db, target_size=None, failures=None):
 
     # 1. name_str → url を集める (DBクエリ + URL生成は直列)
     name_to_url = {}
+    name_to_filename = {}
     for row in timetable_data:
         if not row or len(row) < 2:
             continue
@@ -181,6 +186,7 @@ def _prefetch_tt_images(timetable_data, db, target_size=None, failures=None):
             url = get_image_url(artist.image_filename)
             if url:
                 name_to_url[name_str] = url
+                name_to_filename[name_str] = artist.image_filename
 
     # 2. ThreadPoolExecutor で並列 HTTP 取得
     image_cache = {}
@@ -191,7 +197,7 @@ def _prefetch_tt_images(timetable_data, db, target_size=None, failures=None):
             if target_size is not None:
                 _tw, _th = target_size
                 future_to_name = {
-                    executor.submit(_load_and_fit_tt, url, _tw, _th): name
+                    executor.submit(_load_and_fit_tt, url, _tw, _th, name_to_filename.get(name)): name
                     for (name, url) in name_to_url.items()
                 }
             else:

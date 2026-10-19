@@ -8,7 +8,8 @@ DB から引数を組む streamlit フリーの gather 層。
   views/ や session_manager / project_service(いずれも streamlit を引く)は import しない。
 - 既存ロジック関数(utils.text_generator.build_event_summary_text /
   logic_grid.generate_grid_image)は「呼ぶだけ」で中身は変更しない。
-- read + generate のみ。DB / Storage への書き込みは行わない。
+- プロジェクトDBは read + generate のみ。共有描画処理は画像ごとの顔検出結果を
+  Storageにキャッシュする(検出の再実行を避ける)。完成画像・プロジェクト自体は変更しない。
 
 gather は既存 view(views/flyer.py:490-516 / views/grid.py の設定マッピング)の
 導出を「そのまま」DB からに移植したもの。session_state フォールバックは持たない。

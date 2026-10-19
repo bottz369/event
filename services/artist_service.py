@@ -123,6 +123,15 @@ def resolve_artists_in_order(names, failures=None) -> List[ArtistView]:
     return out
 
 
+def _frame_uploaded(db, view, image_file, filename):
+    if view is not None and image_file is not None and filename:
+        from services.face_framing import registration
+        crop = registration(image_file, filename)
+        if crop is not None:
+            return artist_repo.update_artist_crop(db, view.id, *crop)
+    return view
+
+
 # ---------------------------------------------------------
 # 書き込み(commit/rollback は service が握る)
 # ---------------------------------------------------------
@@ -147,10 +156,12 @@ def create_artist(name: str, image_file=None) -> Tuple[Optional[ArtistView], str
         existing = artist_repo.get_artist_by_name(db, name)
         if existing is None:
             view = artist_repo.create_artist(db, name, image_filename)
+            view = _frame_uploaded(db, view, image_file, image_filename)
             db.commit()
             return (view, "created")
         if existing.is_deleted:
             view = artist_repo.restore_artist(db, existing.id, image_filename)
+            view = _frame_uploaded(db, view, image_file, image_filename)
             db.commit()
             return (view, "restored")
         # 既存 & 生存中: 登録済み。書き込みは行わない。
@@ -174,6 +185,7 @@ def update_artist(artist_id: int, name: str, image_file=None) -> Optional[Artist
     try:
         image_filename = _upload_image(image_file)
         view = artist_repo.update_artist(db, artist_id, name, image_filename)
+        view = _frame_uploaded(db, view, image_file, image_filename)
         if view is None:
             db.rollback()
             return None
@@ -193,7 +205,11 @@ def update_artist_crop(artist_id: int, scale: float, x: int, y: int) -> Optional
     """
     db = SessionLocal()
     try:
-        view = artist_repo.update_artist_crop(db, artist_id, scale, x, y)
+        from services.face_framing import bounds, corrected
+        current = artist_repo.get_artist(db, artist_id)
+        if current and current.image_filename:
+            scale, x, y = corrected(bounds(current.image_filename), (scale, x, y))
+        view = artist_repo.update_artist_crop(db, artist_id, max(.1, scale), int(x), int(y))
         if view is None:
             db.rollback()
             return None

@@ -183,3 +183,21 @@ def tab():
     from views import workspace
 
     return workspace
+
+
+@pytest.fixture(autouse=True)
+def _face_checks_isolate_storage(monkeypatch):
+    """No real face-cache writes or detector work during unrelated regression tests.
+
+    The dedicated face tests explicitly inject cached bounds/detector results and
+    exercise the real geometry, registration and both rendering paths.
+    """
+    from services import face_framing
+    face_framing.CACHE.clear()
+    monkeypatch.setattr(face_framing, '_read', lambda _: None)
+    monkeypatch.setattr(face_framing, '_write', lambda *_: None)
+    def unavailable(_):
+        raise RuntimeError('Face detector stubbed in unrelated tests')
+    monkeypatch.setattr(face_framing, 'detect', unavailable)
+    yield
+    face_framing.CACHE.clear()

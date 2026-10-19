@@ -42,6 +42,8 @@ def _preview(user, session, instruction, config):
         if image is None:
             raise ValueError('アー写を取得できませんでした。画像登録を確認してください。')
         crop = artist_crop.adjust(image, session['crop'], instruction)
+        from services.face_framing import protect
+        crop = protect(image, session['artist'].image_filename, crop)
         preview = apply_manual_crop(image, *crop)
         output = io.BytesIO(); preview.save(output, format='PNG')
         url = main.upload_generated_png(output.getvalue(), 0, 'artist_crop_'+session['token'])
@@ -54,7 +56,7 @@ def _preview(user, session, instruction, config):
             controls = _message(session,
                 f"{session['artist'].name} の調整プレビュー（未保存）です。\n"
                 '「右30」「縮小15%」のような追加指示もできます。\n'
-                '黒い余白は許容します。元画像ですでに切れている顔は復元できません。\n'
+                '顔の見切れ防止を自動適用します。黒い余白は許容します。元画像ですでに切れている顔は復元できません。\n'
                 '保存するとアーティスト管理の共通設定が変わり、このアーティストを使う全プロジェクトの次回生成に反映されます。保存済みの完成画像は再生成するまで変わりません。',
                 [('縮小10%', '縮小10%'), ('拡大10%', '拡大10%'), ('左20', '左20'), ('右20', '右20'),
                  ('上20', '上20'), ('下20', '下20'), ('全体を収める', '全体を収める'),

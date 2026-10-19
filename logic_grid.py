@@ -564,12 +564,10 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                     crop_x = getattr(target_artist, 'crop_x', 0) or 0
                     crop_y = getattr(target_artist, 'crop_y', 0) or 0
 
-                    # Phase 3 P2 コミットB: 顔検出(crop_smart)を grid から撤去。
-                    # 未設定(scale=1.0,x=0,y=0)でも apply_manual_crop は中央寄せ Cover
-                    # (黒余白なし)になるため分岐不要。手動設定済みは従来通り設定値が
-                    # 反映される(動作不変)。
-                    # crop_smart 関数自体は views/artists.py が使うため残置(ここから
-                    # 呼ばないだけ)。
+                    # Reuse photo-version face bounds; no repeat detector/API call.
+                    from services.face_framing import protect
+                    crop_scale, crop_x, crop_y = protect(img, target_artist.image_filename,
+                                                       (crop_scale, crop_x, crop_y))
                     cropped = apply_manual_crop(img, crop_scale, crop_x, crop_y, TILE_WIDTH, TILE_HEIGHT)
                 else:
                     # C-6a: アー写が無い/引けない枠は黒プレースホルダ + 案内文。
