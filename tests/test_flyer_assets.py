@@ -29,7 +29,7 @@ def test_upload_saves_verified_image_and_commits_asset(monkeypatch, kind):
     args = create.call_args.args
     assert args[:3] == (db, '祭り', kind)
     assert args[3].startswith('asset_') and args[3].endswith('.png')
-    assert storage.call_args.args[0].getvalue() == data  # transparency preserved
+    assert storage.call_args_list[0].args[0].getvalue() == data  # transparency preserved
     db.commit.assert_called_once()
     db.close.assert_called_once()
 

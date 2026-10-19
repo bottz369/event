@@ -87,6 +87,8 @@ def upload_image_asset(data: bytes, original_name: str, asset_type: str, name: s
                                             asset_type, filename)
         result = _to_view(asset)
         db.commit()
+        from services.asset_thumbnails import try_store
+        try_store(data, filename)
         return result
     except Exception as exc:
         db.rollback()
