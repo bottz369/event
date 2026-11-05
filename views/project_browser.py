@@ -104,7 +104,7 @@ def render():
                 grid_col, tt_col, info_col = st.columns([1, 1, 5])
                 for col, kind, label in ((grid_col, 'grid', 'グリッド'), (tt_col, 'tt', 'タイムテーブル')):
                     with col:
-                        st.caption(label)
+                        st.caption(('完成画像' if kind=='grid' else '原本') if p.get('free_flyer') else label)
                         image = p['images'].get(kind)
                         if image: st.image(image, width=100)
                         else: st.caption('プレビュー未保存')
@@ -116,7 +116,7 @@ def render():
                     open_col.button('開く', key=f"btn_browser_open_{p['id']}", on_click=open_project, args=(p['id'],), width='stretch')
                     for col, kind, label in ((grid_dl, 'grid', 'グリッド PNG'), (tt_dl, 'tt', 'タイムテーブル PNG')):
                         url = p.get('downloads', {}).get(kind)
-                        if url: col.link_button(label, url, width='stretch')
+                        if url: col.link_button(('完成 PNG' if kind=='grid' else '原本 PNG') if p.get('free_flyer') else label, url, width='stretch')
                     delete_col.button('プロジェクトを削除', key=f"btn_browser_delete_{p['id']}",
                                       on_click=_request_delete, args=(p,), width='stretch')
         previous, position, following = st.columns([1, 1, 1])

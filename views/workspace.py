@@ -160,6 +160,12 @@ def render_workspace_page():
         st.error("プロジェクトデータの取得に失敗しました。")
         return
 
+    from services.free_flyer import KEY as FREE_KEY
+    if FREE_KEY in draft.flyer_settings:
+        from views.free_flyer import render as render_free_flyer
+        render_free_flyer(active_id)
+        return
+
     # タブ遅延描画で非表示タブの未保存編集が消えないよう延命する
     # (ウィジェット実体化より前に行う必要があるためタブ描画の手前で呼ぶ)
     _pin_session_keys()

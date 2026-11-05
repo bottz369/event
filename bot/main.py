@@ -247,6 +247,12 @@ class PendingStore:
         with self._lock:
             self._data[user_id] = ((int(project_id), name, mode), now)
 
+    def has_valid(self, user_id: str, now: float) -> bool:
+        """Read-only routing check; do not consume an artist replacement photo."""
+        with self._lock:
+            item = self._data.get(user_id)
+            return bool(item and now - item[1] <= self._ttl)
+
     def pop_valid(self, user_id: str, now: float) -> Optional[Tuple[int, str, str]]:
         """TTL 内の pending があれば (pid, artist, mode) を返して消費する。
 
@@ -894,7 +900,7 @@ _USAGE_TEXT = (
     "・新しいイベントを作る → 「新規作成」とメンションしてください\n"
     "・アー写を差し替える → 「アー写変更」とメンションしてください\n"
     "・最新のフライヤーだけ欲しい → 「フライヤー」とメンションしてください\n"
-    "・オーナーの個人トークでは「AIおまかせ制作」「プロジェクト更新」も使えます\n"
+    "・オーナーの個人トークでは「AIおまかせ制作」「プロジェクト更新」「画像からフライヤー」も使えます\n"
     "そのあとはボタンで選べます。"
 )
 
@@ -1575,6 +1581,10 @@ def handle_event(event: dict, config: BotConfig) -> None:
                     return
 
     if direct:
+        from bot import free_flyer
+        if free_flyer.handle(event, config):
+            pending_store.pop_valid(pending_user, time.time())
+            return
         from bot import artist_crop
         if artist_crop.handle(event, config):
             return

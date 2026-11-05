@@ -27,6 +27,8 @@ def load_target(project_id):
         project = project_repo.get_project(db, project_id)
         if project is None:
             raise ValueError('更新先のプロジェクトが見つかりません。選び直してください。')
+        if 'free_flyer' in json.loads(getattr(project, 'flyer_json', None) or '{}'):
+            raise ValueError(f'画像プロジェクトは「画像プロジェクト: #{project_id}」で編集してください。')
         rows = timetable_repo.load_rows(db, project_id)
         token = fingerprint(project, rows)
         draft = project_repo.to_draft(project)

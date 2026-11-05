@@ -291,12 +291,14 @@ def get_project_flyer_view(project_id: int) -> Optional[ProjectView]:
 def list_project_cards():
     """Browse saved thumbnails without generating images or loading artists."""
     from services.project_previews import decode, downloads
+    from services.free_flyer import is_project as is_free_project
     db = SessionLocal()
     try:
         projects = project_repo.list_projects(db)
         return [dict(id=p.id, title=p.title, subtitle=p.subtitle or '',
                      event_date=str(p.event_date or ''), venue=p.venue_name or '',
-                     images=decode(p.flyer_json), downloads=downloads(p.flyer_json, p.id))
+                     images=decode(p.flyer_json), downloads=downloads(p.flyer_json, p.id),
+                     free_flyer=is_free_project(p.flyer_json))
                 for p in sorted(projects, key=lambda p:(str(p.event_date or ''), p.id), reverse=True)]
     finally:
         db.close()

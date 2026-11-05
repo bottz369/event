@@ -568,6 +568,11 @@ def render_flyer_png_for_project(
     from services.event_format_service import project_from_db, render as render_event, png as event_png
     from models.event_format import options as event_options
     event_project = project_from_db(project_id)
+    from services.free_flyer import KEY as FREE_KEY, get_image as free_image
+    if event_project and FREE_KEY in event_project.flyer_settings:
+        # A free flyer has one completed image; do not fabricate a timetable.
+        if variant not in _FLYER_VARIANTS: raise ValueError('不明な画像種別です。')
+        return free_image(event_project.flyer_settings[FREE_KEY]['current']) if variant=='grid' else None
     if event_project and event_options(event_project.settings).get("enabled"):
         with _render_lock:
             image = render_event(event_project, variant, finished=True, failures=failures)

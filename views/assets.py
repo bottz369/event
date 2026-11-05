@@ -146,8 +146,8 @@ def _render_upload(db):
                 name = st.text_input("素材名 (未入力の場合はファイル名になります)")
                 a_type = st.selectbox(
                     "種類",
-                    ["logo", "background", "font"],
-                    format_func=lambda x: {"logo":"ロゴ", "background":"背景", "font":"フォント"}.get(x, x)
+                    ["logo", "background", "font", "flyer"],
+                    format_func=lambda x: {"logo":"ロゴ", "background":"背景", "font":"フォント", "flyer":"フライヤー素材"}.get(x, x)
                 )
             with c2:
                 f = st.file_uploader("ファイル", type=ALLOWED_EXTENSIONS)
@@ -305,8 +305,8 @@ def render_assets_page():
     db = next(get_db())
     try:
         _render_upload(db)
-        kind = st.radio('素材の種類', ['logo', 'background', 'font'], horizontal=True,
-                        format_func=lambda value:{'logo':'ロゴ','background':'背景','font':'フォント'}[value],
+        kind = st.radio('素材の種類', ['logo', 'background', 'font', 'flyer'], horizontal=True,
+                        format_func=lambda value:{'logo':'ロゴ','background':'背景','font':'フォント','flyer':'フライヤー素材'}[value],
                         key='assets_kind', on_change=_reset_asset_page)
         query = st.text_input('名前・ファイル名で検索', key='assets_search', on_change=_reset_asset_page).strip()
         assets, count, page, pages = _asset_page(db, kind, query, st.session_state.get('assets_page', 1))
