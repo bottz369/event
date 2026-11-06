@@ -522,21 +522,26 @@ def render_flyer_editor(project_id):
                 else: st.info("フォントが見つかりません")
 
         with st.expander("📐 コンテンツ・余白調整", expanded=False):
+            # Keep fitted fractional scales when reopening a saved production.
+            for prefix in ("grid", "tt"):
+                for axis in ("w", "h"):
+                    key = f"flyer_{prefix}_scale_{axis}"
+                    st.session_state[key] = float(st.session_state[key])
             st.markdown("**メイン画像サイズ・位置**")
             t_sz1, t_sz2 = st.tabs(["グリッド画像", "TT画像"])
             with t_sz1:
                 c_link1, c_link2 = st.columns([0.15, 0.85])
                 with c_link1: st.checkbox("🔗", key="flyer_grid_link", help="縦横比を固定", on_change=_sync_linked_scale_h, args=("grid",))
                 c1, c2 = st.columns(2)
-                with c1: st.slider("横幅 (%)", 10, 150, step=1, key="flyer_grid_scale_w", on_change=_sync_linked_scale_h, args=("grid",))
-                with c2: st.slider("高さ (%)", 10, 150, step=1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
+                with c1: st.slider("横幅 (%)", 10.0, 150.0, step=0.1, key="flyer_grid_scale_w", on_change=_sync_linked_scale_h, args=("grid",))
+                with c2: st.slider("高さ (%)", 10.0, 150.0, step=0.1, key="flyer_grid_scale_h", disabled=st.session_state.flyer_grid_link)
                 st.number_input("Y位置 (上+/下-)", step=10, key="flyer_grid_pos_y")
             with t_sz2:
                 c_link1, c_link2 = st.columns([0.15, 0.85])
                 with c_link1: st.checkbox("🔗", key="flyer_tt_link", help="縦横比を固定", on_change=_sync_linked_scale_h, args=("tt",))
                 c1, c2 = st.columns(2)
-                with c1: st.slider("横幅 (%)", 10, 150, step=1, key="flyer_tt_scale_w", on_change=_sync_linked_scale_h, args=("tt",))
-                with c2: st.slider("高さ (%)", 10, 150, step=1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
+                with c1: st.slider("横幅 (%)", 10.0, 150.0, step=0.1, key="flyer_tt_scale_w", on_change=_sync_linked_scale_h, args=("tt",))
+                with c2: st.slider("高さ (%)", 10.0, 150.0, step=0.1, key="flyer_tt_scale_h", disabled=st.session_state.flyer_tt_link)
                 st.number_input("Y位置 (上+/下-)", step=10, key="flyer_tt_pos_y")
             
             st.markdown("---")

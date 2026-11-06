@@ -24,7 +24,7 @@ def render():
         key = 'tt_style_' + field
         st.session_state.setdefault(key, style[field])
         st.slider(label, *LIMITS[field], step=1, key=key, on_change=_change, args=(field,))
-    with st.expander('📏 タイムテーブルの列幅・文字サイズ'):
+    with st.expander('📏 タイムテーブルの列幅・文字サイズ・写真表示'):
         slider('列全体の幅（基準比 %）', 'column_width')
         slider('2列の間隔（px）', 'column_gap')
         st.session_state.setdefault('tt_style_custom_widths', style['custom_widths'])
@@ -37,5 +37,10 @@ def render():
         slider('アーティスト名の文字サイズ（%）', 'artist_font')
         slider('出演時間の文字サイズ（%）', 'time_font')
         slider('物販時間・場所の文字サイズ（%）', 'goods_font')
+        for label, field in [('写真を横幅いっぱいに表示する', 'photo_cover'),
+                             ('物販の記載がない欄は空欄にする', 'blank_goods')]:
+            st.session_state.setdefault('tt_style_' + field, style[field])
+            st.checkbox(label, key='tt_style_' + field, on_change=_change, args=(field,))
+        st.caption('横幅いっぱいの表示では、写真の上下がトリミングされます。')
         st.caption('100%が従来のサイズです。長い文字は欄内に収まるよう自動縮小します。保存すると画像を更新します。複数部では全ての部に適用します。')
-        st.button('列幅・文字サイズを初期値に戻す', key='btn_tt_style_reset', on_click=_reset)
+        st.button('タイムテーブルの表示設定を初期値に戻す', key='btn_tt_style_reset', on_click=_reset)

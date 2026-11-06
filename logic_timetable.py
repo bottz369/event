@@ -109,7 +109,7 @@ def load_image(path_or_url):
 #   よって draw_one_row 側は無変更のままで出力が変わらない。差分は draft の
 #   DCT スケール由来のみ(scratch/parity_tt_downscale.py で知覚不能レベルを数値化)。
 # =========================================================
-def _load_and_fit_tt(url, target_w, target_h, filename=None):
+def _load_and_fit_tt(url, target_w, target_h, filename=None, photo_cover=False):
     """URL 取得 → JPEG draft デコード → 描画先サイズへ fit(worker スレッド内)。
 
     Image.draft は load() より前に呼ぶ必要がある。draft は要求サイズを下回らない
@@ -131,7 +131,7 @@ def _load_and_fit_tt(url, target_w, target_h, filename=None):
         except Exception:
             pass  # draft 非対応(PNG 等)/失敗時はフル復号にフォールバック
         im = im.convert("RGBA")
-        if filename:
+        if filename and not photo_cover:
             from services.face_framing import fit_timetable
             return fit_timetable(im, filename, (int(target_w), int(target_h)))
         # draw_one_row と完全に同じ引数で fit する(ここで縮めても結果は変わらない)。
@@ -149,7 +149,7 @@ def _load_and_fit_tt(url, target_w, target_h, filename=None):
 # =========================================================
 # Phase 3 P2: アー写画像並列取得ヘルパー (TT 用、Grid 側と同型)
 # =========================================================
-def _prefetch_tt_images(timetable_data, db, target_size=None, failures=None):
+def _prefetch_tt_images(timetable_data, db, target_size=None, failures=None, photo_cover=False):
     """timetable_data の全行をスキャンして name_str → PIL.Image の dict を返す。
     ThreadPoolExecutor で並列 HTTP 取得。出力画像 (タイムテーブル合成結果) は不変。
     HTTP 取得の wall-clock 時間を短縮するための取得フェーズのみ並列化。
@@ -197,7 +197,8 @@ def _prefetch_tt_images(timetable_data, db, target_size=None, failures=None):
             if target_size is not None:
                 _tw, _th = target_size
                 future_to_name = {
-                    executor.submit(_load_and_fit_tt, url, _tw, _th, name_to_filename.get(name)): name
+                    executor.submit(_load_and_fit_tt, url, _tw, _th, name_to_filename.get(name),
+                                    **({'photo_cover': True} if photo_cover else {})): name
                     for (name, url) in name_to_url.items()
                 }
             else:
@@ -352,7 +353,7 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
     draw_centered_text(draw, time_str, base_x + time_x, base_y, time_w, row_height, font_path, font_size_time, align="left")
     draw_centered_text(draw, name_str, base_x + artist_x, base_y, artist_w, row_height, font_path, font_size_artist, align="center")
     
-    goods_info = "-"
+    goods_info = "" if style['blank_goods'] else "-"
     if goods_time:
         if " / " in goods_time:
             g_times = goods_time.split(" / ")
@@ -425,7 +426,7 @@ def generate_timetable_image(timetable_data, font_path=None, columns=2, failures
         # 全行が同じ row_width / row_height で描かれるので、行ごとに目標が変わることはない。
         image_cache = _prefetch_tt_images(
             timetable_data, db, target_size=(int(single_col_width), int(row_height)),
-            failures=failures,
+            failures=failures, photo_cover=style['photo_cover'],
         )
 
         # --- 左列の描画 ---

@@ -175,3 +175,31 @@ def test_link_follows_only_on_width_change(
         f"🔗 ON で横幅を {new_w} にしたのに flyer_{prefix}_scale_h が追随していない "
         f"(実際: {at.session_state[f'flyer_{prefix}_scale_h']})"
     )
+
+
+def test_fractional_production_scales_survive_editor_open_and_sync(app_test,monkeypatch):
+    from tests.conftest import select_tab
+    from views.workspace import TAB_FLYER
+    from services import session_manager, project_service
+    at=app_test.run()
+    label=next(o for o in at.selectbox(key=SELECTOR_KEY).options
+               if o not in ('(選択してください)','➕ 新規プロジェクト作成'))
+    at.selectbox(key=SELECTOR_KEY).select(label).run()
+    for prefix in ('grid','tt'):
+        for axis in ('w','h'):
+            at.session_state[f'flyer_{prefix}_scale_{axis}']=92.5
+    select_tab(at,TAB_FLYER)
+    assert not at.exception
+    at.run()
+    assert not at.exception
+    for prefix in ('grid','tt'):
+        for axis in ('w','h'):
+            assert at.slider(key=f'flyer_{prefix}_scale_{axis}').value==92.5
+    def sync_without_saving():
+        session_manager.sync_session_to_draft()
+        return False
+    monkeypatch.setattr(project_service,'save_active_project',sync_without_saving)
+    at.button(key='btn_project_save').click().run()
+    assert not at.exception
+    for prefix in ('grid','tt'):
+        assert at.session_state['draft_project'].flyer_settings[f'{prefix}_scale_w']==92.5
