@@ -439,10 +439,12 @@ def resolve_font_path(font_path_input):
     
     return None
 
-def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_counts=None, is_brick_mode=True, alignment="center", failures=None):
+def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_counts=None, is_brick_mode=True, alignment="center", failures=None, photo_offsets=None):
     """
     grid画像を生成する
     """
+    from models.grid_photo import normalize_offsets
+    offsets = normalize_offsets(photo_offsets)
     target_artists = artists 
     total_images = len(target_artists)
     if total_images == 0: return None
@@ -568,6 +570,11 @@ def generate_grid_image(artists, image_dir_unused, font_path="keifont.ttf", row_
                     from services.face_framing import protect
                     crop_scale, crop_x, crop_y = protect(img, target_artist.image_filename,
                                                        (crop_scale, crop_x, crop_y))
+                    # Apply an explicit project adjustment after automatic framing;
+                    # keep cell geometry, shared artist crops and other images intact.
+                    placement = offsets.get(artist_name, {})
+                    if placement.get('image_filename') == target_artist.image_filename:
+                        crop_y += placement['y']
                     cropped = apply_manual_crop(img, crop_scale, crop_x, crop_y, TILE_WIDTH, TILE_HEIGHT)
                 else:
                     # C-6a: アー写が無い/引けない枠は黒プレースホルダ + 案内文。

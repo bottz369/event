@@ -55,7 +55,9 @@ def _part_grid(part, width, font_path, failures):
         image = generate_grid_image(artists, "", font_path=grid_font, row_counts=counts,
                                     is_brick_mode=layout["layout_mode"] == "レンガ (サイズ統一)",
                                     alignment={"左揃え": "left", "中央揃え": "center", "右揃え": "right"}.get(layout["alignment"], "left"),
-                                    failures=failures)
+                                    failures=failures,
+                                    **({'photo_offsets':part['grid_settings']['photo_offsets']}
+                                       if (part.get('grid_settings') or {}).get('photo_offsets') else {}))
     if image:
         image = image.convert("RGBA")
         target_width = width - 40 if part.get("grid_settings") else round((width - 40) * min(5, len(artists)) / 5)

@@ -14,16 +14,6 @@ def test_style_defaults_and_invalid_values_are_safe():
     assert normalize_style({'photo_cover':True,'blank_goods':True})['blank_goods'] is True
 
 
-def test_photo_positions_are_bounded_independent_and_ignore_invalid_values():
-    source = dict(photo_positions={'A': .35, 'B': 2, 'C': -1, 'D': float('nan'),
-                                  'E': float('inf'), 'F': True, '': .2, 'G': None})
-    style = normalize_style(source)
-    assert style['photo_positions'] == {'A': .35, 'B': 1., 'C': 0.}
-    style['photo_positions']['A'] = .9
-    assert source['photo_positions']['A'] == .35
-    assert normalize_style({'photo_positions': []}) == DEFAULTS
-
-
 @pytest.mark.parametrize('blank,expected', [(False,'-'),(True,'')])
 def test_absent_goods_can_stay_blank_without_hiding_real_goods(monkeypatch,blank,expected):
     import logic_timetable as logic
@@ -65,37 +55,6 @@ def test_cover_option_reaches_each_prefetched_photo(monkeypatch):
     cache=logic._prefetch_tt_images([['10:00','A','','']],db,target_size=(100,50),photo_cover=True)
     assert cache['A'].size==(100,50)
     load.assert_called_once_with('fixture',100,50,'artist.png',photo_cover=True)
-
-
-def test_vertical_cover_position_shows_upper_photo_without_narrowing_it(monkeypatch):
-    import io
-    import logic_timetable as logic
-    photo = Image.new('RGB', (800, 900))
-    draw = ImageDraw.Draw(photo)
-    for y in range(900): draw.line((0,y,799,y), fill=(y//4,0,0))
-    data=io.BytesIO();photo.save(data,'PNG')
-    monkeypatch.setattr(logic.requests,'get',lambda *a,**kw:Mock(status_code=200,content=data.getvalue()))
-    center=logic._load_and_fit_tt('fixture',800,150,photo_cover=True)
-    upper=logic._load_and_fit_tt('fixture',800,150,photo_cover=True,photo_y=.35)
-    photo_up=logic._load_and_fit_tt('fixture',800,150,photo_cover=True,photo_y=.55)
-    assert center.size==upper.size==(800,150)
-    assert upper.getpixel((400,75))[0] < center.getpixel((400,75))[0]
-    assert photo_up.getpixel((400,75))[0] > center.getpixel((400,75))[0]
-    assert upper.getchannel('A').getextrema()==(255,255)
-    assert upper.getpixel((0,75)) == upper.getpixel((799,75))
-
-
-def test_per_artist_position_does_not_move_other_timetable_photos(monkeypatch):
-    import database
-    import logic_timetable as logic
-    db=Mock();db.query.return_value.filter.return_value.first.return_value=Mock(image_filename='artist.png')
-    monkeypatch.setattr(database,'get_image_url',lambda _: 'fixture')
-    load=Mock(return_value=Image.new('RGBA',(100,50)))
-    monkeypatch.setattr(logic,'_load_and_fit_tt',load)
-    logic._prefetch_tt_images([['10:00','A','',''],['10:20','B','','']],db,
-        target_size=(100,50),photo_cover=True,photo_positions={'A':.35})
-    assert load.call_args_list[0].kwargs==dict(photo_cover=True,photo_y=.35)
-    assert load.call_args_list[1].kwargs==dict(photo_cover=True)
 
 
 @pytest.mark.parametrize('columns,expected', [(1,(2800,420,2060,700)),(2,(1740,348,1198,522))])
@@ -152,8 +111,7 @@ def test_style_controls_persist_across_tabs_and_save_to_settings(app_test,monkey
     at.selectbox(key='ws_project_selector_label').select(label).run()
     draft=at.session_state['draft_project']
     if multipart:
-        part_rows=[r.to_legacy_dict() for r in at.session_state['draft_rows'] if not r.is_special_row]
-        draft.settings[KEY]=dict(enabled=True,initialized=True,count=2,parts=[new_part(0,rows=part_rows),new_part(1)])
+        draft.settings[KEY]=dict(enabled=True,initialized=True,count=2,parts=[new_part(0),new_part(1)])
         at.session_state['draft_project']=draft
     select_tab(at,TAB_TT)
     at.slider(key='tt_style_artist_font').set_value(135).run()
@@ -161,8 +119,6 @@ def test_style_controls_persist_across_tabs_and_save_to_settings(app_test,monkey
     at.checkbox(key='tt_style_custom_widths').check().run()
     at.slider(key='tt_style_goods_width').set_value(40).run()
     at.checkbox(key='tt_style_photo_cover').check().run()
-    photo_name=at.selectbox(key='tt_style_photo_artist').value
-    at.slider(key='tt_style_photo_y_'+photo_name).set_value(35).run()
     at.checkbox(key='tt_style_blank_goods').check().run()
     assert not at.exception
     select_tab(at,TAB_GRID)
@@ -180,7 +136,6 @@ def test_style_controls_persist_across_tabs_and_save_to_settings(app_test,monkey
     style=at.session_state['draft_project'].settings['tt_style']
     assert style['artist_font']==135 and style['column_width']==90 and style['goods_width']==40
     assert style['photo_cover'] is True and style['blank_goods'] is True
-    assert style['photo_positions'][photo_name]==.65
     at.button(key='btn_tt_style_reset').click().run()
     assert not at.exception
     assert at.session_state['tt_style']==DEFAULTS

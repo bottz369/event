@@ -68,6 +68,8 @@ def regenerate_grid_preview():
 
     try:
         is_brick = (st.session_state.grid_layout_mode == "レンガ (サイズ統一)")
+        draft = session_manager.get_draft_project()
+        photo_offsets = (draft.grid_settings if draft else {}).get('photo_offsets')
         align_map = {"左揃え": "left", "中央揃え": "center", "右揃え": "right"}
         align_val = align_map.get(st.session_state.grid_alignment, "center")
         abs_font_path = os.path.join(
@@ -80,6 +82,7 @@ def regenerate_grid_preview():
             row_counts=parsed_counts or None,
             is_brick_mode=is_brick,
             alignment=align_val,
+            **({'photo_offsets': photo_offsets} if photo_offsets else {}),
         )
     except Exception as e:
         st.error(f"アー写グリッド画像の生成エラー: {e}")
@@ -98,6 +101,8 @@ def regenerate_grid_preview():
         "font": st.session_state.grid_font,
         "rows": st.session_state.grid_rows,
     }
+    if photo_offsets:
+        st.session_state.grid_last_generated_params['photo_offsets'] = photo_offsets
     return True
 
 
@@ -297,6 +302,10 @@ def render_grid_page():
                 "font": st.session_state.grid_font,
                 "rows": st.session_state.grid_rows
             }
+            draft = session_manager.get_draft_project()
+            photo_offsets = (draft.grid_settings if draft else {}).get('photo_offsets')
+            if photo_offsets:
+                current_params['photo_offsets'] = photo_offsets
 
             # 生成/保存ボタンはここには無い。保存はワークスペース唯一の
             # 「💾 プロジェクトを保存する」に集約され、プレビューはその保存

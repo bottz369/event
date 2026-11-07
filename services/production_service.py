@@ -197,7 +197,8 @@ def render_package(draft,rows,background=None,logo=None,template=None):
         if not grid_font or not tt_font:raise ValueError('テンプレートのフォントを準備できませんでした。')
         sources['grid']=generate_grid_image(artists,'',font_path=grid_font,row_counts=counts,
             is_brick_mode=project.grid_settings.get('layout_mode')=='レンガ (サイズ統一)',
-            alignment={'左揃え':'left','右揃え':'right'}.get(project.grid_settings.get('alignment'),'center'),failures=failures)
+            alignment={'左揃え':'left','右揃え':'right'}.get(project.grid_settings.get('alignment'),'center'),failures=failures,
+            **({'photo_offsets':project.grid_settings['photo_offsets']} if project.grid_settings.get('photo_offsets') else {}))
         tt_rows=build_tt_gen_list_from_rows(rows,project.open_time,project.start_time)
         sources['tt']=generate_timetable_image(tt_rows,font_path=tt_font,columns=project.settings.get('tt_columns',2),
             style=project.settings.get('tt_style'),failures=failures)

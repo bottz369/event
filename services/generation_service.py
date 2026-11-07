@@ -267,6 +267,7 @@ def _render_grid_image_for_project(
             is_brick_mode=is_brick,
             alignment=alignment,
             failures=failures,
+            **({'photo_offsets': grid['photo_offsets']} if grid.get('photo_offsets') else {}),
         )
         return img
 

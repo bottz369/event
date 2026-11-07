@@ -118,6 +118,38 @@ def test_grid_passes_protected_crop_to_existing_generator(monkeypatch,detector):
     assert result is not None and seen and ff.visible(detector.return_value,seen[0])
 
 
+def test_project_grid_offset_moves_only_matching_photo_after_face_guard(monkeypatch):
+    import logic_grid as grid
+    from models.artist import ArtistView
+    artists=[ArtistView(i,n,n+'.png',False,1.,0,0) for i,n in enumerate(['A','B'],1)]
+    monkeypatch.setattr(grid,'_fetch_grid_images_parallel',lambda *a,**kw:{i:Image.new('RGB',(800,600),'white') for i in (1,2)})
+    monkeypatch.setattr(ff,'protect',lambda *a,**kw:(1.,0,40))
+    original=grid.apply_manual_crop;seen=[]
+    def capture(im,scale,x,y,*args):
+        seen.append((scale,x,y));return original(im,scale,x,y,*args)
+    monkeypatch.setattr(grid,'apply_manual_crop',capture)
+    base=grid.generate_grid_image(artists,None,row_counts=[2])
+    assert [x[2] for x in seen]==[40,40]
+    seen.clear()
+    adjusted=grid.generate_grid_image(artists,None,row_counts=[2],photo_offsets={'A':{'image_filename':'A.png','y':-80}})
+    assert [x[2] for x in seen]==[-40,40]
+    assert base.size==adjusted.size
+    assert artists[0].crop_y==0
+    seen.clear()
+    grid.generate_grid_image([replace(artists[0],image_filename='replacement.png')],None,
+        photo_offsets={'A':{'image_filename':'A.png','y':-80}})
+    assert seen[0][2]==40
+
+
+def test_project_grid_offset_validation_does_not_mutate_saved_data():
+    from models.grid_photo import normalize_offsets
+    source={'A':{'image_filename':'a.png','y':-999},'B':{'image_filename':'b.png','y':float('nan')},
+            'C':{'image_filename':'c.png','y':True},'D':{'y':10}}
+    assert normalize_offsets(source)=={'A':{'image_filename':'a.png','y':-112}}
+    assert source['A']['y']==-999
+    assert normalize_offsets(None)=={}
+
+
 @pytest.mark.parametrize('kind',['create','restore','replace','rename'])
 def test_registration_and_replacement_saved_atomically_without_touching_name_only(monkeypatch,detector,kind):
     from services import artist_service as svc
