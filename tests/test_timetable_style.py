@@ -12,6 +12,39 @@ def test_style_defaults_and_invalid_values_are_safe():
     assert normalize_style({'custom_widths':'false'})['custom_widths'] is False
     assert normalize_style({'photo_cover':'true','blank_goods':1})['photo_cover'] is False
     assert normalize_style({'photo_cover':True,'blank_goods':True})['blank_goods'] is True
+    assert normalize_style({'goods_prefix':None})['goods_prefix'] == ''
+    assert normalize_style({'goods_prefix':' 特典会： '})['goods_prefix'] == '特典会：'
+
+
+def test_goods_prefix_labels_each_session_but_not_empty_vip_slots(monkeypatch):
+    import logic_timetable as logic
+    captured=[]
+    monkeypatch.setattr(logic,'draw_centered_text',lambda *a,**kw:captured.append(a[1]))
+    image=Image.new('RGBA',(1740,150))
+    for goods,place,expected in [
+        ('','',''),
+        ('11:00 - 12:00','','特典会：11:00 - 12:00'),
+        ('11:00 - 12:00 / 13:00 - 14:00','A / B','特典会：11:00 - 12:00 (A)\n特典会：13:00 - 14:00 (B)'),
+    ]:
+        logic.draw_one_row(ImageDraw.Draw(image),image,0,0,
+            ['10:25 - 10:30','終演後物販',goods,place],None,None,1740,140,2,
+            style={'goods_prefix':'特典会：','blank_goods':True})
+        assert captured[-1] == expected
+
+
+def test_empty_new_prefix_keeps_legacy_preview_current(monkeypatch):
+    from views import timetable
+    legacy={key:value for key,value in DEFAULTS.items() if key!='goods_prefix'}
+    rows=[['10:30 - 10:50','UK','11:00 - 12:00','']]
+    saved=dict(gen_list=rows,font='keifont.ttf',columns=2,style=legacy)
+    state=dict(tt_last_generated_params=saved,tt_font='keifont.ttf',tt_columns=2,
+               tt_style=normalize_style(legacy))
+    monkeypatch.setattr(timetable.st,'session_state',state)
+    monkeypatch.setattr(timetable,'build_gen_list_from_draft',lambda:rows)
+    assert not timetable.tt_preview_is_stale()
+    state['tt_style']['goods_prefix']='特典会：'
+    assert timetable.tt_preview_is_stale()
+    assert 'goods_prefix' not in saved['style']
 
 
 @pytest.mark.parametrize('blank,expected', [(False,'-'),(True,'')])
@@ -120,6 +153,7 @@ def test_style_controls_persist_across_tabs_and_save_to_settings(app_test,monkey
     at.slider(key='tt_style_goods_width').set_value(40).run()
     at.checkbox(key='tt_style_photo_cover').check().run()
     at.checkbox(key='tt_style_blank_goods').check().run()
+    at.text_input(key='tt_style_goods_prefix').set_value('特典会：').run()
     assert not at.exception
     select_tab(at,TAB_GRID)
     select_tab(at,TAB_TT)
@@ -127,6 +161,7 @@ def test_style_controls_persist_across_tabs_and_save_to_settings(app_test,monkey
     assert at.slider(key='tt_style_goods_width').value==40
     assert at.checkbox(key='tt_style_photo_cover').value is True
     assert at.checkbox(key='tt_style_blank_goods').value is True
+    assert at.text_input(key='tt_style_goods_prefix').value=='特典会：'
     def save_without_db():
         session_manager.sync_session_to_draft()
         return False  # Stop before image generation / actual persistence.
@@ -136,6 +171,7 @@ def test_style_controls_persist_across_tabs_and_save_to_settings(app_test,monkey
     style=at.session_state['draft_project'].settings['tt_style']
     assert style['artist_font']==135 and style['column_width']==90 and style['goods_width']==40
     assert style['photo_cover'] is True and style['blank_goods'] is True
+    assert style['goods_prefix']=='特典会：'
     at.button(key='btn_tt_style_reset').click().run()
     assert not at.exception
     assert at.session_state['tt_style']==DEFAULTS

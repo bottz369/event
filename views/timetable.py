@@ -288,11 +288,14 @@ def tt_preview_is_stale():
     last = st.session_state.get("tt_last_generated_params")
     if not last:
         return True
+    from models.timetable_style import normalize_style
+    last = dict(last)
+    last['style'] = normalize_style(last.get('style'))
     current = {
         "gen_list": build_gen_list_from_draft(),
         "font": st.session_state.get("tt_font"),
         "columns": st.session_state.get("tt_columns"),
-        "style": st.session_state.get("tt_style"),
+        "style": normalize_style(st.session_state.get("tt_style")),
     }
     return last != current
 

@@ -365,6 +365,8 @@ def draw_one_row(draw, canvas, base_x, base_y, row_data, font_path, db, row_widt
             goods_info = "\n".join(fmt)
         else:
             goods_info = f"{goods_time} ({goods_place})" if goods_place else goods_time
+        if style['goods_prefix']:
+            goods_info = '\n'.join(style['goods_prefix'] + line for line in goods_info.splitlines())
     draw_centered_text(draw, goods_info, base_x + goods_x, base_y, goods_w, row_height, font_path, font_size_goods, align="left")
 
 def generate_timetable_image(timetable_data, font_path=None, columns=2, failures=None, canvas_height=None, style=None):

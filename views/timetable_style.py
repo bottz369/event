@@ -37,6 +37,9 @@ def render():
         slider('アーティスト名の文字サイズ（%）', 'artist_font')
         slider('出演時間の文字サイズ（%）', 'time_font')
         slider('物販時間・場所の文字サイズ（%）', 'goods_font')
+        st.session_state.setdefault('tt_style_goods_prefix', style['goods_prefix'])
+        st.text_input('物販時間の前に付ける表記', key='tt_style_goods_prefix',
+                      on_change=_change, args=('goods_prefix',), max_chars=40)
         for label, field in [('写真を横幅いっぱいに表示する', 'photo_cover'),
                              ('物販の記載がない欄は空欄にする', 'blank_goods')]:
             st.session_state.setdefault('tt_style_' + field, style[field])
