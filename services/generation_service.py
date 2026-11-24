@@ -327,7 +327,8 @@ def _render_tt_image_for_project(
             tt_columns = 2
 
         gen_list = timetable_service.build_tt_gen_list_from_rows(
-            rows, draft.open_time, draft.start_time
+            rows, draft.open_time, draft.start_time,
+            stage_events=settings.get('tt_stage_events'),
         )
         if not gen_list:
             return None

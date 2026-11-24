@@ -199,7 +199,8 @@ def render_package(draft,rows,background=None,logo=None,template=None):
             is_brick_mode=project.grid_settings.get('layout_mode')=='レンガ (サイズ統一)',
             alignment={'左揃え':'left','右揃え':'right'}.get(project.grid_settings.get('alignment'),'center'),failures=failures,
             **({'photo_offsets':project.grid_settings['photo_offsets']} if project.grid_settings.get('photo_offsets') else {}))
-        tt_rows=build_tt_gen_list_from_rows(rows,project.open_time,project.start_time)
+        tt_rows=build_tt_gen_list_from_rows(rows,project.open_time,project.start_time,
+            stage_events=project.settings.get('tt_stage_events'))
         sources['tt']=generate_timetable_image(tt_rows,font_path=tt_font,columns=project.settings.get('tt_columns',2),
             style=project.settings.get('tt_style'),failures=failures)
     styles={e.short_key:e.default for e in FLYER_KEY_REGISTRY if e.persist}

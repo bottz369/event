@@ -302,7 +302,8 @@ def test_preview_inputs_match_db_and_api(
     draft = at.session_state["draft_project"]
     rows = timetable_service.get_rows_for_project(pid)
     api_gen_list = timetable_service.build_tt_gen_list_from_rows(
-        rows, draft.open_time, draft.start_time
+        rows, draft.open_time, draft.start_time,
+        stage_events=db_settings.get('tt_stage_events'),
     )
     assert web_gen_list == api_gen_list, (
         "web と API の gen_list が食い違う "

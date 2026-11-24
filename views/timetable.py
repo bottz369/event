@@ -16,6 +16,7 @@ from utils import safe_int, safe_str, get_duration_minutes, calculate_timetable_
 # Phase 2B-1b: save_active_project 経由に切替
 # Phase 2B-2-b: session_manager + 純粋変換器を追加 (draft_rows 一本化)
 from services import project_service, session_manager
+from services.timetable_stage_events import add_stage_events, KEY as STAGE_EVENTS_KEY
 from models.timetable import (
     PRE_GOODS_ARTIST_NAME,
     POST_GOODS_ARTIST_NAME,
@@ -274,7 +275,8 @@ def build_gen_list_from_draft():
         if is_hidden:
             continue
         gen_list.append([row["TIME_DISPLAY"], "comingsoon" if rows[idx - 1].is_comingsoon and not rows[idx - 1].is_special_row else row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
-    return gen_list
+    draft = session_manager.get_draft_project()
+    return add_stage_events(gen_list, draft.settings.get(STAGE_EVENTS_KEY) if draft else None)
 
 
 def tt_preview_is_stale():
@@ -883,6 +885,8 @@ def render_timetable_page():
                 
                 gen_list.append([row["TIME_DISPLAY"], "comingsoon" if bool(edited_df.iloc[edited_row_idx - 1].get("COMINGSOON", False)) and row["ARTIST"] not in ("開演前物販", "終演後物販") else row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
 
+            draft = session_manager.get_draft_project()
+            gen_list = add_stage_events(gen_list, draft.settings.get(STAGE_EVENTS_KEY) if draft else None)
             st.session_state.tt_gen_list = gen_list
             
             st.divider()

@@ -15,4 +15,5 @@ python3 -m pytest tests/test_smoke_apptest.py tests/test_tt_editor_repro.py test
 if [ -n "${BOT_TEST_PYTHON:-}" ]; then
   "$BOT_TEST_PYTHON" -m pytest tests/test_bot_free_flyer.py tests/test_bot_artist_crop.py tests/test_bot_comingsoon.py tests/test_bot_line.py tests/test_bot_flow.py tests/test_bot_intake.py tests/test_bot_api.py tests/test_bot_auto_production.py -q --disable-warnings
 fi
+python3 -m pytest tests/test_timetable_stage_events.py -q --disable-warnings
 echo "=== VERIFY_ALL_GREEN ==="

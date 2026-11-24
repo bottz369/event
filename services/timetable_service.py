@@ -29,7 +29,7 @@ def get_rows_for_project(project_id: int) -> List[TimetableRowDraft]:
 
 
 def build_tt_gen_list_from_rows(
-    rows: List[TimetableRowDraft], open_time: str, start_time: str
+    rows: List[TimetableRowDraft], open_time: str, start_time: str, stage_events=None
 ) -> List[list]:
     """draft_rows からタイムテーブル画像生成用の gen_list を組み立てる純関数。
 
@@ -75,4 +75,5 @@ def build_tt_gen_list_from_rows(
 
         gen_list.append([row["TIME_DISPLAY"], "comingsoon" if rows[row_idx - 1].is_comingsoon and not rows[row_idx - 1].is_special_row else row["ARTIST"], row["GOODS_DISPLAY"], row["PLACE"]])
 
-    return gen_list
+    from services.timetable_stage_events import add_stage_events
+    return add_stage_events(gen_list, stage_events)
